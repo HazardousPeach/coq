@@ -12,6 +12,7 @@ open Names
 open Tacexpr
 open Genarg
 open Constrexpr
+open Genintern
 open Tactypes
 
 (** Globalization of tactic expressions :
@@ -21,12 +22,11 @@ type glob_sign = Genintern.glob_sign = {
   ltacvars : Id.Set.t;
   genv : Environ.env;
   extra : Genintern.Store.t;
+  intern_sign : Genintern.intern_variable_status;
 }
 
-val fully_empty_glob_sign : glob_sign
-
 val make_empty_glob_sign : unit -> glob_sign
- (** same as [fully_empty_glob_sign], but with [Global.env()] as
+ (** build an empty [glob_sign] using [Global.env()] as
      environment *)
 
 (** Main globalization functions *)

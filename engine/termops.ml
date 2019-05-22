@@ -15,6 +15,7 @@ open Names
 open Nameops
 open Term
 open Constr
+open Context
 open Vars
 open Environ
 
@@ -24,97 +25,16 @@ module CompactedDecl = Context.Compacted.Declaration
 
 module Internal = struct
 
-(* Sorts and sort family *)
-
-let print_sort = function
-  | Set -> (str "Set")
-  | Prop -> (str "Prop")
-  | Type u -> (str "Type(" ++ Univ.Universe.pr u ++ str ")")
-
-let pr_sort_family = function
-  | InSet -> (str "Set")
-  | InProp -> (str "Prop")
-  | InType -> (str "Type")
-
-let pr_con sp = str(Constant.to_string sp)
-
-let pr_fix pr_constr ((t,i),(lna,tl,bl)) =
-  let fixl = Array.mapi (fun i na -> (na,t.(i),tl.(i),bl.(i))) lna in
-  hov 1
-      (str"fix " ++ int i ++ spc() ++  str"{" ++
-         v 0 (prlist_with_sep spc (fun (na,i,ty,bd) ->
-           Name.print na ++ str"/" ++ int i ++ str":" ++ pr_constr ty ++
-	   cut() ++ str":=" ++ pr_constr bd) (Array.to_list fixl)) ++
-         str"}")
-
-let pr_puniverses p u = 
-  if Univ.Instance.is_empty u then p 
-  else p ++ str"(*" ++ Univ.Instance.pr UnivNames.pr_with_global_universes u ++ str"*)"
-
-(* Minimalistic constr printer, typically for debugging *)
-
-let rec pr_constr c = match kind c with
-  | Rel n -> str "#"++int n
-  | Meta n -> str "Meta(" ++ int n ++ str ")"
-  | Var id -> Id.print id
-  | Sort s -> print_sort s
-  | Cast (c,_, t) -> hov 1
-      (str"(" ++ pr_constr c ++ cut() ++
-       str":" ++ pr_constr t ++ str")")
-  | Prod (Name(id),t,c) -> hov 1
-      (str"forall " ++ Id.print id ++ str":" ++ pr_constr t ++ str"," ++
-       spc() ++ pr_constr c)
-  | Prod (Anonymous,t,c) -> hov 0
-      (str"(" ++ pr_constr t ++ str " ->" ++ spc() ++
-       pr_constr c ++ str")")
-  | Lambda (na,t,c) -> hov 1
-      (str"fun " ++ Name.print na ++ str":" ++
-       pr_constr t ++ str" =>" ++ spc() ++ pr_constr c)
-  | LetIn (na,b,t,c) -> hov 0
-      (str"let " ++ Name.print na ++ str":=" ++ pr_constr b ++
-       str":" ++ brk(1,2) ++ pr_constr t ++ cut() ++
-       pr_constr c)
-  | App (c,l) ->  hov 1
-      (str"(" ++ pr_constr c ++ spc() ++
-       prlist_with_sep spc pr_constr (Array.to_list l) ++ str")")
-  | Evar (e,l) -> hov 1
-      (str"Evar#" ++ int (Evar.repr e) ++ str"{" ++
-       prlist_with_sep spc pr_constr (Array.to_list l) ++str"}")
-  | Const (c,u) -> str"Cst(" ++ pr_puniverses (pr_con c) u ++ str")"
-  | Ind ((sp,i),u) -> str"Ind(" ++ pr_puniverses (MutInd.print sp ++ str"," ++ int i) u ++ str")"
-  | Construct (((sp,i),j),u) ->
-      str"Constr(" ++ pr_puniverses (MutInd.print sp ++ str"," ++ int i ++ str"," ++ int j) u ++ str")"
-  | Proj (p,c) -> str"Proj(" ++ pr_con (Projection.constant p) ++ str"," ++ bool (Projection.unfolded p) ++ pr_constr c ++ str")"
-  | Case (ci,p,c,bl) -> v 0
-      (hv 0 (str"<"++pr_constr p++str">"++ cut() ++ str"Case " ++
-             pr_constr c ++ str"of") ++ cut() ++
-       prlist_with_sep (fun _ -> brk(1,2)) pr_constr (Array.to_list bl) ++
-      cut() ++ str"end")
-  | Fix f -> pr_fix pr_constr f
-  | CoFix(i,(lna,tl,bl)) ->
-      let fixl = Array.mapi (fun i na -> (na,tl.(i),bl.(i))) lna in
-      hov 1
-        (str"cofix " ++ int i ++ spc() ++  str"{" ++
-         v 0 (prlist_with_sep spc (fun (na,ty,bd) ->
-           Name.print na ++ str":" ++ pr_constr ty ++
-           cut() ++ str":=" ++ pr_constr bd) (Array.to_list fixl)) ++
-         str"}")
-
-let debug_print_constr c = pr_constr EConstr.Unsafe.(to_constr c)
-let debug_print_constr_env env sigma c = pr_constr EConstr.(to_constr sigma c)
+let debug_print_constr c = Constr.debug_print EConstr.Unsafe.(to_constr c)
+let debug_print_constr_env env sigma c = Constr.debug_print EConstr.(to_constr sigma c)
 let term_printer = ref debug_print_constr_env
 
-let print_constr_env env sigma t = !term_printer env sigma t
-let print_constr t =
-  let env = Global.env () in
-  let evd = Evd.from_env env in
-  !term_printer env evd t
-
+let print_constr_env env sigma t = !term_printer (env:env) sigma (t:Evd.econstr)
 let set_print_constr f = term_printer := f
 
 module EvMap = Evar.Map
 
-let pr_evar_suggested_name evk sigma =
+let evar_suggested_name evk sigma =
   let open Evd in
   let base_id evk' evi =
   match evar_ident evk' sigma with
@@ -143,7 +63,7 @@ let pr_existential_key sigma evk =
 let open Evd in
 match evar_ident evk sigma with
 | None ->
-  str "?" ++ Id.print (pr_evar_suggested_name evk sigma)
+  str "?" ++ Id.print (evar_suggested_name evk sigma)
 | Some id ->
   str "?" ++ Id.print id
 
@@ -164,10 +84,10 @@ let protect f x =
   try f x
   with e -> str "EXCEPTION: " ++ str (Printexc.to_string e)
 
-let print_kconstr a =
-  protect (fun c -> print_constr c) a
+let print_kconstr env sigma a =
+  protect (fun c -> print_constr_env env sigma c) a
 
-let pr_meta_map evd =
+let pr_meta_map env sigma =
   let open Evd in
   let print_constr = print_kconstr in
   let pr_name = function
@@ -177,25 +97,25 @@ let pr_meta_map evd =
     | (mv,Cltyp (na,b)) ->
       	hov 0
 	  (pr_meta mv ++ pr_name na ++ str " : " ++
-           print_constr b.rebus ++ fnl ())
+           print_constr env sigma b.rebus ++ fnl ())
     | (mv,Clval(na,(b,s),t)) ->
       	hov 0
 	  (pr_meta mv ++ pr_name na ++ str " := " ++
-           print_constr b.rebus ++
-	   str " : " ++ print_constr t.rebus ++
+           print_constr env sigma b.rebus ++
+           str " : " ++ print_constr env sigma t.rebus ++
 	   spc () ++ pr_instance_status s ++ fnl ())
   in
-  prlist pr_meta_binding (meta_list evd)
+  prlist pr_meta_binding (meta_list sigma)
 
-let pr_decl (decl,ok) =
+let pr_decl env sigma (decl,ok) =
   let open NamedDecl in
   let print_constr = print_kconstr in
   match decl with
-  | LocalAssum (id,_) -> if ok then Id.print id else (str "{" ++ Id.print id ++ str "}")
-  | LocalDef (id,c,_) -> str (if ok then "(" else "{") ++ Id.print id ++ str ":=" ++
-                           print_constr c ++ str (if ok then ")" else "}")
+  | LocalAssum ({binder_name=id},_) -> if ok then Id.print id else (str "{" ++ Id.print id ++ str "}")
+  | LocalDef ({binder_name=id},c,_) -> str (if ok then "(" else "{") ++ Id.print id ++ str ":=" ++
+                           print_constr env sigma c ++ str (if ok then ")" else "}")
 
-let pr_evar_source = function
+let pr_evar_source env sigma = function
   | Evar_kinds.NamedHole id -> Id.print id
   | Evar_kinds.QuestionMark _ -> str "underscore"
   | Evar_kinds.CasesType false -> str "pattern-matching return predicate"
@@ -208,11 +128,11 @@ let pr_evar_source = function
       let print_constr = print_kconstr in
       let id = Option.get ido in
       str "parameter " ++ Id.print id ++ spc () ++ str "of" ++
-      spc () ++ print_constr (EConstr.of_constr @@ printable_constr_of_global c)
+      spc () ++ print_constr env sigma (EConstr.of_constr @@ printable_constr_of_global c)
   | Evar_kinds.InternalHole -> str "internal placeholder"
   | Evar_kinds.TomatchTypeParameter (ind,n) ->
       let print_constr = print_kconstr in
-      pr_nth n ++ str " argument of type " ++ print_constr (EConstr.mkInd ind)
+      pr_nth n ++ str " argument of type " ++ print_constr env sigma (EConstr.mkInd ind)
   | Evar_kinds.GoalEvar -> str "goal evar"
   | Evar_kinds.ImpossibleCase -> str "type of impossible pattern-matching clause"
   | Evar_kinds.MatchingVar _ -> str "matching variable"
@@ -224,7 +144,7 @@ let pr_evar_source = function
      | Some Evar_kinds.Domain -> str "domain of "
      | Some Evar_kinds.Codomain -> str "codomain of ") ++ Evar.print evk
 
-let pr_evar_info evi =
+let pr_evar_info env sigma evi =
   let open Evd in
   let print_constr = print_kconstr in
   let phyps =
@@ -233,23 +153,23 @@ let pr_evar_info evi =
       | None -> List.map (fun c -> (c, true)) (evar_context evi)
       | Some filter -> List.combine (evar_context evi) filter
       in
-      prlist_with_sep spc pr_decl (List.rev decls)
+      prlist_with_sep spc (pr_decl env sigma) (List.rev decls)
     with Invalid_argument _ -> str "Ill-formed filtered context" in
-  let pty = print_constr evi.evar_concl in
+  let pty = print_constr env sigma evi.evar_concl in
   let pb =
     match evi.evar_body with
       | Evar_empty -> mt ()
-      | Evar_defined c -> spc() ++ str"=> "  ++ print_constr c
+      | Evar_defined c -> spc() ++ str"=> "  ++ print_constr env sigma c
   in
   let candidates =
     match evi.evar_body, evi.evar_candidates with
       | Evar_empty, Some l ->
            spc () ++ str "{" ++
-           prlist_with_sep (fun () -> str "|") print_constr l ++ str "}"
+           prlist_with_sep (fun () -> str "|") (print_constr env sigma) l ++ str "}"
       | _ ->
           mt ()
   in
-  let src = str "(" ++ pr_evar_source (snd evi.evar_source) ++ str ")" in
+  let src = str "(" ++ pr_evar_source env sigma (snd evi.evar_source) ++ str ")" in
   hov 2
     (str"["  ++ phyps ++ spc () ++ str"|- "  ++ pty ++ pb ++ str"]" ++
        candidates ++ spc() ++ src)
@@ -267,14 +187,14 @@ let compute_evar_dependency_graph sigma =
     in
     match evar_body evi with
     | Evar_empty -> acc
-    | Evar_defined c -> Evar.Set.fold fold_ev (evars_of_term (EConstr.Unsafe.to_constr c)) acc
+    | Evar_defined c -> Evar.Set.fold fold_ev (evars_of_term sigma c) acc
   in
   Evd.fold fold sigma EvMap.empty
 
 let evar_dependency_closure n sigma =
   let open Evd in
-  (** Create the DAG of depth [n] representing the recursive dependencies of
-      undefined evars. *)
+  (* Create the DAG of depth [n] representing the recursive dependencies of
+     undefined evars. *)
   let graph = compute_evar_dependency_graph sigma in
   let rec aux n curr accu =
     if Int.equal n 0 then Evar.Set.union curr accu
@@ -285,9 +205,9 @@ let evar_dependency_closure n sigma =
           Evar.Set.union deps accu
         with Not_found -> accu
       in
-      (** Consider only the newly added evars *)
+      (* Consider only the newly added evars *)
       let ncurr = Evar.Set.fold fold curr Evar.Set.empty in
-      (** Merge the others *)
+      (* Merge the others *)
       let accu = Evar.Set.union curr accu in
       aux (n - 1) ncurr accu
   in
@@ -304,8 +224,8 @@ let has_no_evar sigma =
   try let () = Evd.fold (fun _ _ () -> raise Exit) sigma () in true
   with Exit -> false
 
-let pr_evd_level evd = UState.pr_uctx_level (Evd.evar_universe_context evd)
-let reference_of_level evd l = UState.qualid_of_level (Evd.evar_universe_context evd) l
+let pr_evd_level sigma = UState.pr_uctx_level (Evd.evar_universe_context sigma)
+let reference_of_level sigma l = UState.qualid_of_level (Evd.evar_universe_context sigma) l
 
 let pr_evar_universe_context ctx =
   let open UState in
@@ -321,12 +241,12 @@ let pr_evar_universe_context ctx =
      str "WEAK CONSTRAINTS:"++brk(0,1)++
      h 0 (UState.pr_weak prl ctx) ++ fnl ())
 
-let print_env_short env =
+let print_env_short env sigma =
   let print_constr = print_kconstr in
   let pr_rel_decl = function
-    | RelDecl.LocalAssum (n,_) -> Name.print n
-    | RelDecl.LocalDef (n,b,_) -> str "(" ++ Name.print n ++ str " := "
-                                  ++ print_constr (EConstr.of_constr b) ++ str ")"
+    | RelDecl.LocalAssum (n,_) -> Name.print n.binder_name
+    | RelDecl.LocalDef (n,b,_) -> str "(" ++ Name.print n.binder_name ++ str " := "
+                                  ++ print_constr env sigma (EConstr.of_constr b) ++ str ")"
   in
   let pr_named_decl = NamedDecl.to_rel_decl %> pr_rel_decl in
   let nc = List.rev (named_context env) in
@@ -337,16 +257,16 @@ let print_env_short env =
 let pr_evar_constraints sigma pbs =
   let pr_evconstr (pbty, env, t1, t2) =
     let env =
-      (** We currently allow evar instances to refer to anonymous de
-          Bruijn indices, so we protect the error printing code in this
-          case by giving names to every de Bruijn variable in the
-          rel_context of the conversion problem. MS: we should rather
-          stop depending on anonymous variables, they can be used to
-          indicate independency. Also, this depends on a strategy for
-          naming/renaming. *)
+      (* We currently allow evar instances to refer to anonymous de
+         Bruijn indices, so we protect the error printing code in this
+         case by giving names to every de Bruijn variable in the
+         rel_context of the conversion problem. MS: we should rather
+         stop depending on anonymous variables, they can be used to
+         indicate independency. Also, this depends on a strategy for
+         naming/renaming. *)
       Namegen.make_all_name_different env sigma
     in
-    print_env_short env ++ spc () ++ str "|-" ++ spc () ++
+    print_env_short env sigma ++ spc () ++ str "|-" ++ spc () ++
       protect (print_constr_env env sigma) t1 ++ spc () ++
       str (match pbty with
             | Reduction.CONV -> "=="
@@ -355,7 +275,7 @@ let pr_evar_constraints sigma pbs =
   in
   prlist_with_sep fnl pr_evconstr pbs
 
-let pr_evar_map_gen with_univs pr_evars sigma =
+let pr_evar_map_gen with_univs pr_evars env sigma =
   let uvs = Evd.evar_universe_context sigma in
   let (_, conv_pbs) = Evd.extract_all_conv_pbs sigma in
   let evs = if has_no_evar sigma then mt () else pr_evars sigma ++ fnl ()
@@ -365,18 +285,30 @@ let pr_evar_map_gen with_univs pr_evars sigma =
     else
     str "CONSTRAINTS:" ++ brk (0, 1) ++
       pr_evar_constraints sigma conv_pbs ++ fnl ()
+  and typeclasses =
+    let evars = Evd.get_typeclass_evars sigma in
+    if Evar.Set.is_empty evars then mt ()
+    else
+      str "TYPECLASSES:" ++ brk (0, 1) ++
+      prlist_with_sep spc Evar.print (Evar.Set.elements evars) ++ fnl ()
+  and obligations =
+    let evars = Evd.get_obligation_evars sigma in
+    if Evar.Set.is_empty evars then mt ()
+    else
+      str "OBLIGATIONS:" ++ brk (0, 1) ++
+      prlist_with_sep spc Evar.print (Evar.Set.elements evars) ++ fnl ()
   and metas =
     if List.is_empty (Evd.meta_list sigma) then mt ()
     else
-      str "METAS:" ++ brk (0, 1) ++ pr_meta_map sigma
+      str "METAS:" ++ brk (0, 1) ++ pr_meta_map env sigma
   in
-  evs ++ svs ++ cstrs ++ metas
+  evs ++ svs ++ cstrs ++ typeclasses ++ obligations ++ metas
 
-let pr_evar_list sigma l =
+let pr_evar_list env sigma l =
   let open Evd in
   let pr (ev, evi) =
     h 0 (Evar.print ev ++
-      str "==" ++ pr_evar_info evi ++
+      str "==" ++ pr_evar_info env sigma evi ++
       (if evi.evar_body == Evar_empty
        then str " {" ++ pr_existential_key sigma ev ++ str "}"
        else mt ()))
@@ -399,18 +331,18 @@ let to_list d =
   Evd.fold fold_undef d ();
   !l
 
-let pr_evar_by_depth depth sigma = match depth with
+let pr_evar_by_depth depth env sigma = match depth with
 | None ->
   (* Print all evars *)
-  str"EVARS:" ++ brk(0,1) ++ pr_evar_list sigma (to_list sigma) ++ fnl()
+  str"EVARS:" ++ brk(0,1) ++ pr_evar_list env sigma (to_list sigma) ++ fnl()
 | Some n ->
   (* Print closure of undefined evars *)
   str"UNDEFINED EVARS:"++
   (if Int.equal n 0 then mt() else str" (+level "++int n++str" closure):")++
   brk(0,1)++
-  pr_evar_list sigma (evar_dependency_closure n sigma) ++ fnl()
+  pr_evar_list env sigma (evar_dependency_closure n sigma) ++ fnl()
 
-let pr_evar_by_filter filter sigma =
+let pr_evar_by_filter filter env sigma =
   let open Evd in
   let elts = Evd.fold (fun evk evi accu -> (evk, evi) :: accu) sigma [] in
   let elts = List.rev elts in
@@ -425,49 +357,49 @@ let pr_evar_by_filter filter sigma =
   let prdef =
     if List.is_empty defined then mt ()
     else str "DEFINED EVARS:" ++ brk (0, 1) ++
-      pr_evar_list sigma defined
+      pr_evar_list env sigma defined
   in
   let prundef =
     if List.is_empty undefined then mt ()
     else str "UNDEFINED EVARS:" ++ brk (0, 1) ++
-      pr_evar_list sigma undefined
+      pr_evar_list env sigma undefined
   in
   prdef ++ prundef
 
-let pr_evar_map ?(with_univs=true) depth sigma =
-  pr_evar_map_gen with_univs (fun sigma -> pr_evar_by_depth depth sigma) sigma
+let pr_evar_map ?(with_univs=true) depth env sigma =
+  pr_evar_map_gen with_univs (fun sigma -> pr_evar_by_depth depth env sigma) env sigma
 
-let pr_evar_map_filter ?(with_univs=true) filter sigma =
-  pr_evar_map_gen with_univs (fun sigma -> pr_evar_by_filter filter sigma) sigma
+let pr_evar_map_filter ?(with_univs=true) filter env sigma =
+  pr_evar_map_gen with_univs (fun sigma -> pr_evar_by_filter filter env sigma) env sigma
 
 let pr_metaset metas =
   str "[" ++ pr_sequence pr_meta (Evd.Metaset.elements metas) ++ str "]"
 
 let pr_var_decl env decl =
   let open NamedDecl in
-  let evd = Evd.from_env env in
+  let sigma = Evd.from_env env in
   let pbody = match decl with
     | LocalAssum _ ->  mt ()
     | LocalDef (_,c,_) ->
 	(* Force evaluation *)
 	let c = EConstr.of_constr c in
-        let pb = print_constr_env env evd c in
+        let pb = print_constr_env env sigma c in
 	  (str" := " ++ pb ++ cut () ) in
-  let pt = print_constr_env env evd (EConstr.of_constr (get_type decl)) in
+  let pt = print_constr_env env sigma (EConstr.of_constr (get_type decl)) in
   let ptyp = (str" : " ++ pt) in
     (Id.print (get_id decl) ++ hov 0 (pbody ++ ptyp))
 
 let pr_rel_decl env decl =
   let open RelDecl in
-  let evd = Evd.from_env env in
+  let sigma = Evd.from_env env in
   let pbody = match decl with
     | LocalAssum _ -> mt ()
     | LocalDef (_,c,_) ->
 	(* Force evaluation *)
 	let c = EConstr.of_constr c in
-        let pb = print_constr_env env evd c in
+        let pb = print_constr_env env sigma c in
 	  (str":=" ++ spc () ++ pb ++ spc ()) in
-  let ptyp = print_constr_env env evd (EConstr.of_constr (get_type decl)) in
+  let ptyp = print_constr_env env sigma (EConstr.of_constr (get_type decl)) in
     match get_name decl with
       | Anonymous -> hov 0 (str"<>" ++ spc () ++ pbody ++ str":" ++ spc () ++ ptyp)
       | Name id -> hov 0 (Id.print id ++ spc () ++ pbody ++ str":" ++ spc () ++ ptyp)
@@ -523,9 +455,10 @@ let push_named_rec_types (lna,typarray,_) env =
   let ctxt =
     Array.map2_i
       (fun i na t ->
-	 match na with
-	   | Name id -> LocalAssum (id, lift i t)
-	   | Anonymous -> anomaly (Pp.str "Fix declarations must be named."))
+         let id = map_annot (function
+             | Name id -> id
+             | Anonymous -> anomaly (Pp.str "Fix declarations must be named.")) na
+         in  LocalAssum (id, lift i t))
       lna typarray in
   Array.fold_left
     (fun e assum -> push_named assum e) env ctxt
@@ -533,14 +466,11 @@ let push_named_rec_types (lna,typarray,_) env =
 let lookup_rel_id id sign =
   let open RelDecl in
   let rec lookrec n = function
-    | [] ->
-        raise Not_found
-    | (LocalAssum (Anonymous, _) | LocalDef (Anonymous,_,_)) :: l ->
-        lookrec (n + 1) l
-    | LocalAssum (Name id', t) :: l  ->
-        if Names.Id.equal id' id then (n,None,t)  else lookrec (n + 1) l
-    | LocalDef (Name id', b, t) :: l  ->
-        if Names.Id.equal id' id then (n,Some b,t) else lookrec (n + 1) l
+    | [] -> raise Not_found
+    | decl :: l ->
+      if Names.Name.equal (Name id) (get_name decl)
+      then (n, get_value decl, get_type decl)
+      else lookrec (n+1) l
   in
   lookrec 1 sign
 
@@ -664,7 +594,7 @@ let map_constr_with_binders_left_to_right sigma g f l c =
   let open EConstr in
   match EConstr.kind sigma c with
   | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> c
+    | Construct _ | Int _) -> c
   | Cast (b,k,t) -> 
     let b' = f l b in 
     let t' = f l t in
@@ -745,7 +675,7 @@ let map_constr_with_full_binders_gen userview sigma g f l cstr =
   let open EConstr in
   match EConstr.kind sigma cstr with
   | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> cstr
+    | Construct _ | Int _) -> cstr
   | Cast (c,k, t) ->
       let c' = f l c in
       let t' = f l t in
@@ -785,18 +715,16 @@ let map_constr_with_full_binders_gen userview sigma g f l cstr =
       let bl' = Array.map (f l) bl in
       if p==p' && c==c' && Array.for_all2 (==) bl bl' then cstr else
         mkCase (ci, p', c', bl')
-  | Fix (ln,(lna,tl,bl)) ->
+  | Fix (ln,(lna,tl,bl as fx)) ->
       let tl' = Array.map (f l) tl in
-      let l' =
-        Array.fold_left2 (fun l na t -> g (RelDecl.LocalAssum (na, t)) l) l lna tl in
+      let l' = fold_rec_types g fx l in
       let bl' = Array.map (f l') bl in
       if Array.for_all2 (==) tl tl' && Array.for_all2 (==) bl bl'
       then cstr
       else mkFix (ln,(lna,tl',bl'))
-  | CoFix(ln,(lna,tl,bl)) ->
+  | CoFix(ln,(lna,tl,bl as fx)) ->
       let tl' = Array.map (f l) tl in
-      let l' =
-        Array.fold_left2 (fun l na t -> g (RelDecl.LocalAssum (na, t)) l) l lna tl in
+      let l' = fold_rec_types g fx l in
       let bl' = Array.map (f l') bl in
       if Array.for_all2 (==) tl tl' && Array.for_all2 (==) bl bl'
       then cstr
@@ -816,56 +744,17 @@ let map_constr_with_full_binders_user_view sigma g f =
    each binder traversal; it is not recursive *)
 
 let fold_constr_with_full_binders sigma g f n acc c =
-  let open RelDecl in
-  match EConstr.kind sigma c with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> acc
-  | Cast (c,_, t) -> f n (f n acc c) t
-  | Prod (na,t,c) -> f (g (LocalAssum (na, t)) n) (f n acc t) c
-  | Lambda (na,t,c) -> f (g (LocalAssum (na, t)) n) (f n acc t) c
-  | LetIn (na,b,t,c) -> f (g (LocalDef (na, b, t)) n) (f n (f n acc b) t) c
-  | App (c,l) -> Array.fold_left (f n) (f n acc c) l
-  | Proj (p,c) -> f n acc c
-  | Evar (_,l) -> Array.fold_left (f n) acc l
-  | Case (_,p,c,bl) -> Array.fold_left (f n) (f n (f n acc p) c) bl
-  | Fix (_,(lna,tl,bl)) ->
-      let n' = CArray.fold_left2 (fun c n t -> g (LocalAssum (n, t)) c) n lna tl in
-      let fd = Array.map2 (fun t b -> (t,b)) tl bl in
-      Array.fold_left (fun acc (t,b) -> f n' (f n acc t) b) acc fd
-  | CoFix (_,(lna,tl,bl)) ->
-      let n' = CArray.fold_left2 (fun c n t -> g (LocalAssum (n, t)) c) n lna tl in
-      let fd = Array.map2 (fun t b -> (t,b)) tl bl in
-      Array.fold_left (fun acc (t,b) -> f n' (f n acc t) b) acc fd
+  let open EConstr in
+  let f l acc c = f l acc (of_constr c) in
+  let g d l  = g (of_rel_decl d) l in
+  let c = Unsafe.to_constr (whd_evar sigma c) in
+  Constr.fold_with_full_binders g f n acc c
 
 let fold_constr_with_binders sigma g f n acc c =
-  fold_constr_with_full_binders sigma (fun _ x -> g x) f n acc c
-
-(* [iter_constr_with_full_binders g f acc c] iters [f acc] on the immediate
-   subterms of [c]; it carries an extra data [acc] which is processed by [g] at
-   each binder traversal; it is not recursive and the order with which
-   subterms are processed is not specified *)
-
-let iter_constr_with_full_binders sigma g f l c =
-  let open RelDecl in
-  match EConstr.kind sigma c with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> ()
-  | Cast (c,_, t) -> f l c; f l t
-  | Prod (na,t,c) -> f l t; f (g (LocalAssum (na,t)) l) c
-  | Lambda (na,t,c) -> f l t; f (g (LocalAssum (na,t)) l) c
-  | LetIn (na,b,t,c) -> f l b; f l t; f (g (LocalDef (na,b,t)) l) c
-  | App (c,args) -> f l c; Array.iter (f l) args
-  | Proj (p,c) -> f l c
-  | Evar (_,args) -> Array.iter (f l) args
-  | Case (_,p,c,bl) -> f l p; f l c; Array.iter (f l) bl
-  | Fix (_,(lna,tl,bl)) ->
-      let l' = Array.fold_left2 (fun l na t -> g (LocalAssum (na,t)) l) l lna tl in
-      Array.iter (f l) tl;
-      Array.iter (f l') bl
-  | CoFix (_,(lna,tl,bl)) ->
-      let l' = Array.fold_left2 (fun l na t -> g (LocalAssum (na,t)) l) l lna tl in
-      Array.iter (f l) tl;
-      Array.iter (f l') bl
+  let open EConstr in
+  let f l acc c = f l acc (of_constr c) in
+  let c = Unsafe.to_constr (whd_evar sigma c) in
+  Constr.fold_constr_with_binders g f n acc c
 
 (***************************)
 (* occurs check functions  *)
@@ -960,8 +849,6 @@ let collect_vars sigma c =
   | Var id -> Id.Set.add id vars
   | _ -> EConstr.fold sigma aux vars c in
   aux Id.Set.empty c
-
-let vars_of_global_reference = vars_of_global
 
 (* Tests whether [m] is a subterm of [t]:
    [m] is appropriately lifted through abstractions of [t] *)
@@ -1187,7 +1074,7 @@ let isGlobalRef sigma c =
   | Const _ | Ind _ | Construct _ | Var _ -> true
   | _ -> false
 
-let is_template_polymorphic env sigma f =
+let is_template_polymorphic_ind env sigma f =
   match EConstr.kind sigma f with
   | Ind (ind, u) ->
     if not (EConstr.EInstance.is_empty u) then false
@@ -1196,7 +1083,8 @@ let is_template_polymorphic env sigma f =
 
 let base_sort_cmp pb s0 s1 =
   match (s0,s1) with
-  | Prop, Prop | Set, Set | Type _, Type _ -> true
+  | SProp, SProp | Prop, Prop | Set, Set | Type _, Type _ -> true
+  | SProp, _ | _, SProp -> false
   | Prop, Set | Prop, Type _ | Set, Type _ -> pb == Reduction.CUMUL
   | Set, Prop | Type _, Prop | Type _, Set -> false
 
@@ -1450,7 +1338,7 @@ let compact_named_context sign =
 let clear_named_body id env =
   let open NamedDecl in
   let aux _ = function
-  | LocalDef (id',c,t) when Id.equal id id' -> push_named (LocalAssum (id,t))
+  | LocalDef (id',c,t) when Id.equal id id'.binder_name -> push_named (LocalAssum (id',t))
   | d -> push_named d in
   fold_named_context aux env ~init:(reset_context env)
 
@@ -1514,12 +1402,6 @@ let prod_applist_assum sigma n c l =
     | LetIn(_,b,_,c), _ -> app (n-1) (Vars.substl subst b::subst) c l
     | _ -> anomaly (Pp.str "Not enough prod/let's.") in
   app n [] c l
-
-(* Combinators on judgments *)
-
-let on_judgment f j = { uj_val = f j.uj_val; uj_type = f j.uj_type }
-let on_judgment_value f j = { j with uj_val = f j.uj_val }
-let on_judgment_type f j = { j with uj_type = f j.uj_type }
 
 (* Cut a context ctx in 2 parts (ctx1,ctx2) with ctx1 containing k non let-in
      variables skips let-in's; let-in's in the middle are put in ctx2 *)

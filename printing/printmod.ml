@@ -10,6 +10,7 @@
 
 open Util
 open Constr
+open Context
 open Pp
 open Names
 open Environ
@@ -41,7 +42,7 @@ type short = OnlyNames | WithContents
 
 let short = ref false
 
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "short module printing";
@@ -62,7 +63,7 @@ let keyword s = tag_keyword (str s)
 let get_new_id locals id =
   let rec get_id l id =
     let dir = DirPath.make [id] in
-      if not (Nametab.exists_module dir) then
+      if not (Nametab.exists_dir dir) then
 	id
       else
 	get_id (Id.Set.add id l) (Namegen.next_ident_away id l)
@@ -119,28 +120,23 @@ let print_mutual_inductive env mind mib udecl =
     | BiFinite -> "Variant"
     | CoFinite -> "CoInductive"
   in
-  let bl = UnivNames.universe_binders_with_opt_names (IndRef (mind, 0)) udecl in
+  let bl = UnivNames.universe_binders_with_opt_names
+      (Declareops.inductive_polymorphic_context mib) udecl
+  in
   let sigma = Evd.from_ctx (UState.of_binders bl) in
-  hov 0 (Printer.pr_polymorphic (Declareops.inductive_is_polymorphic mib) ++
-         Printer.pr_cumulative
-           (Declareops.inductive_is_polymorphic mib) 
-           (Declareops.inductive_is_cumulative mib) ++
-         def keyword ++ spc () ++
+  hov 0 (def keyword ++ spc () ++
          prlist_with_sep (fun () -> fnl () ++ str"  with ")
            (print_one_inductive env sigma mib) inds ++
-         match mib.mind_universes with
-         | Monomorphic_ind _ | Polymorphic_ind _ -> str ""
-         | Cumulative_ind cumi ->
-           Printer.pr_abstract_cumulativity_info sigma cumi)
+         Printer.pr_universes sigma ?variance:mib.mind_variance mib.mind_universes)
 
 let get_fields =
   let rec prodec_rec l subst c =
     match kind c with
     | Prod (na,t,c) ->
-        let id = match na with Name id -> id | Anonymous -> Id.of_string "_" in
+        let id = match na.binder_name with Name id -> id | Anonymous -> Id.of_string "_" in
         prodec_rec ((id,true,Vars.substl subst t)::l) (mkVar id::subst) c
     | LetIn (na,b,_,c) ->
-        let id = match na with Name id -> id | Anonymous -> Id.of_string "_" in
+        let id = match na.binder_name with Name id -> id | Anonymous -> Id.of_string "_" in
         prodec_rec ((id,false,Vars.substl subst b)::l) (mkVar id::subst) c
     | _               -> List.rev l
   in
@@ -157,7 +153,9 @@ let print_record env mind mib udecl =
   let cstrtype = hnf_prod_applist_assum env nparamdecls cstrtypes.(0) args in
   let fields = get_fields cstrtype in
   let envpar = push_rel_context params env in
-  let bl = UnivNames.universe_binders_with_opt_names (IndRef (mind,0)) udecl in
+  let bl = UnivNames.universe_binders_with_opt_names (Declareops.inductive_polymorphic_context mib)
+      udecl
+  in
   let sigma = Evd.from_ctx (UState.of_binders bl) in
   let keyword =
     let open Declarations in
@@ -168,10 +166,6 @@ let print_record env mind mib udecl =
   in
   hov 0 (
     hov 0 (
-      Printer.pr_polymorphic (Declareops.inductive_is_polymorphic mib) ++
-      Printer.pr_cumulative
-        (Declareops.inductive_is_polymorphic mib)
-        (Declareops.inductive_is_cumulative mib) ++
       def keyword ++ spc () ++ Id.print mip.mind_typename ++ brk(1,4) ++
       print_params env sigma params ++
       str ": " ++ Printer.pr_lconstr_env envpar sigma arity ++ brk(1,2) ++
@@ -182,10 +176,7 @@ let print_record env mind mib udecl =
         (fun (id,b,c) ->
           Id.print id ++ str (if b then " : " else " := ") ++
           Printer.pr_lconstr_env envpar sigma c) fields) ++ str" }" ++
-    match mib.mind_universes with
-    | Monomorphic_ind _ | Polymorphic_ind _ -> str ""
-    | Cumulative_ind cumi ->
-      Printer.pr_abstract_cumulativity_info sigma cumi
+    Printer.pr_universes sigma ?variance:mib.mind_variance mib.mind_universes
   )
 
 let pr_mutual_inductive_body env mind mib udecl =
@@ -223,7 +214,7 @@ let print_kn locals kn =
 let nametab_register_dir obj_mp =
   let id = mk_fake_top () in
   let obj_dir = DirPath.make [id] in
-  Nametab.push_dir (Nametab.Until 1) obj_dir (DirModule { obj_dir; obj_mp; obj_sec = DirPath.empty })
+  Nametab.(push_dir (Until 1) obj_dir (GlobDirRef.DirModule { obj_dir; obj_mp; obj_sec = DirPath.empty }))
 
 (** Nota: the [global_reference] we register in the nametab below
     might differ from internal ones, since we cannot recreate here
@@ -296,7 +287,7 @@ let print_body is_impl extent env mp (l,body) =
       (match extent with
          | OnlyNames -> mt ()
          | WithContents ->
-            let bl = UnivNames.universe_binders_with_opt_names (ConstRef (Constant.make2 mp l)) None in
+            let bl = UnivNames.universe_binders_with_opt_names ctx None in
             let sigma = Evd.from_ctx (UState.of_binders bl) in
 	    str " :" ++ spc () ++
             hov 0 (Printer.pr_ltype_env env sigma cb.const_type) ++
@@ -306,7 +297,7 @@ let print_body is_impl extent env mp (l,body) =
 		hov 2 (str ":= " ++
                        Printer.pr_lconstr_env env sigma (Mod_subst.force_constr l))
 	      | _ -> mt ()) ++ str "." ++
-            Printer.pr_abstract_universe_ctx sigma ctx)
+            Printer.pr_abstract_universe_ctx sigma ctx ?priv:cb.const_private_poly_univs)
     | SFBmind mib ->
       match extent with
       | WithContents ->
@@ -402,6 +393,7 @@ let rec printable_body dir =
   let dir = pop_dirpath dir in
     DirPath.is_empty dir ||
     try
+      let open Nametab.GlobDirRef in
       match Nametab.locate_dir (qualid_of_dirpath dir) with
 	  DirOpenModtype _ -> false
 	| DirModule _ | DirOpenModule _ -> printable_body dir

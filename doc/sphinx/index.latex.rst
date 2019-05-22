@@ -15,7 +15,9 @@ Introduction
    Company-Coq :cite:`Pit16`
    (see https://github.com/cpitclaudel/company-coq).
 
-.. include:: credits.rst
+.. include:: history.rst
+
+.. include:: changes.rst
 
 ------------
 The language
@@ -39,6 +41,7 @@ The proof engine
    proof-engine/proof-handling
    proof-engine/tactics
    proof-engine/ltac
+   proof-engine/ltac2
    proof-engine/detailed-tactic-examples
    proof-engine/ssreflect-proof-language
 
@@ -81,6 +84,7 @@ Addendum
    addendum/parallel-proof-processing
    addendum/miscellaneous-extensions
    addendum/universe-polymorphism
+   addendum/sprop
 
 .. toctree::
    zebibliography

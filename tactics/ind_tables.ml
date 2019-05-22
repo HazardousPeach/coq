@@ -59,12 +59,10 @@ let discharge_scheme (_,(kind,l)) =
   Some (kind, l)
 
 let inScheme : string * (inductive * Constant.t) array -> obj =
-  declare_object {(default_object "SCHEME") with
-                    cache_function = cache_scheme;
-                    load_function = (fun _ -> cache_scheme);
-                    subst_function = subst_scheme;
-		    classify_function = (fun obj -> Substitute obj);
-		    discharge_function = discharge_scheme}
+  declare_object @@ superglobal_object "SCHEME"
+    ~cache:cache_scheme
+    ~subst:(Some subst_scheme)
+    ~discharge:discharge_scheme
 
 (**********************************************************************)
 (* The table of scheme building functions *)
@@ -118,15 +116,11 @@ let compute_name internal id =
   | InternalTacticRequest ->
       Namegen.next_ident_away_from (add_prefix "internal_" id) is_visible_name
 
-let define internal id c p univs =
-  let fd = declare_constant ~internal in
+let define internal role id c poly univs =
   let id = compute_name internal id in
   let ctx = UState.minimize univs in
   let c = UnivSubst.nf_evars_and_universes_opt_subst (fun _ -> None) (UState.subst ctx) c in
-  let univs =
-    if p then Polymorphic_const_entry (UState.context ctx)
-    else Monomorphic_const_entry (UState.context_set ctx)
-  in
+  let univs = UState.univ_entry ~poly ctx in
   let entry = {
     const_entry_body =
       Future.from_val ((c,Univ.ContextSet.empty),
@@ -138,12 +132,12 @@ let define internal id c p univs =
     const_entry_inline_code = false;
     const_entry_feedback = None;
   } in
-  let kn = fd id (DefinitionEntry entry, Decl_kinds.IsDefinition Scheme) in
+  let kn, eff = declare_private_constant ~role ~internal id (DefinitionEntry entry, Decl_kinds.IsDefinition Scheme) in
   let () = match internal with
     | InternalTacticRequest -> ()
     | _-> definition_message id
   in
-  kn
+  kn, eff
 
 let define_individual_scheme_base kind suff f mode idopt (mind,i as ind) =
   let (c, ctx), eff = f mode ind in
@@ -151,10 +145,10 @@ let define_individual_scheme_base kind suff f mode idopt (mind,i as ind) =
   let id = match idopt with
     | Some id -> id
     | None -> add_suffix mib.mind_packets.(i).mind_typename suff in
-  let const = define mode id c (Declareops.inductive_is_polymorphic mib) ctx in
+  let role = Entries.Schema (ind, kind) in
+  let const, neff = define mode role id c (Declareops.inductive_is_polymorphic mib) ctx in
   declare_scheme kind [|ind,const|];
-  const, Safe_typing.concat_private
-     (Safe_typing.private_con_of_scheme ~kind (Global.safe_env()) [ind,const]) eff
+  const, Safe_typing.concat_private neff eff
 
 let define_individual_scheme kind mode names (mind,i as ind) =
   match Hashtbl.find scheme_object_table kind with
@@ -168,15 +162,15 @@ let define_mutual_scheme_base kind suff f mode names mind =
   let ids = Array.init (Array.length mib.mind_packets) (fun i ->
       try Int.List.assoc i names
       with Not_found -> add_suffix mib.mind_packets.(i).mind_typename suff) in
-  let consts = Array.map2 (fun id cl -> 
-     define mode id cl (Declareops.inductive_is_polymorphic mib) ctx) ids cl in
+  let fold i effs id cl =
+    let role = Entries.Schema ((mind, i), kind)in
+    let cst, neff = define mode role id cl (Declareops.inductive_is_polymorphic mib) ctx in
+    (Safe_typing.concat_private neff effs, cst)
+  in
+  let (eff, consts) = Array.fold_left2_map_i fold eff ids cl in
   let schemes = Array.mapi (fun i cst -> ((mind,i),cst)) consts in
   declare_scheme kind schemes;
-  consts,
-  Safe_typing.concat_private
-    (Safe_typing.private_con_of_scheme
-      ~kind (Global.safe_env()) (Array.to_list schemes))
-    eff 
+  consts, eff
 
 let define_mutual_scheme kind mode names mind =
   match Hashtbl.find scheme_object_table kind with
@@ -186,10 +180,7 @@ let define_mutual_scheme kind mode names mind =
 
 let find_scheme_on_env_too kind ind =
   let s = String.Map.find kind (Indmap.find ind !scheme_map) in
-  s, Safe_typing.concat_private
-      (Safe_typing.private_con_of_scheme
-            ~kind (Global.safe_env()) [ind, s])
-      Safe_typing.empty_private_constants
+  s, Safe_typing.empty_private_constants
 
 let find_scheme ?(mode=InternalTacticRequest) kind (mind,i as ind) =
   try find_scheme_on_env_too kind ind

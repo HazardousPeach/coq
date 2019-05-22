@@ -20,13 +20,13 @@ open Glob_term
     as well as non global expressions such as existential variables. *)
 
 type notation_constr =
-  (** Part common to [glob_constr] and [cases_pattern] *)
+  (* Part common to [glob_constr] and [cases_pattern] *)
   | NRef of GlobRef.t
   | NVar of Id.t
   | NApp of notation_constr * notation_constr list
   | NHole of Evar_kinds.t * Namegen.intro_pattern_naming_expr * Genarg.glob_generic_argument option
   | NList of Id.t * Id.t * notation_constr * notation_constr * (* associativity: *) bool
-  (** Part only in [glob_constr] *)
+  (* Part only in [glob_constr] *)
   | NLambda of Name.t * notation_constr * notation_constr
   | NProd of Name.t * notation_constr * notation_constr
   | NBinderList of Id.t * Id.t * notation_constr * notation_constr * (* associativity: *) bool
@@ -38,11 +38,12 @@ type notation_constr =
       notation_constr * notation_constr
   | NIf of notation_constr * (Name.t * notation_constr option) *
       notation_constr * notation_constr
-  | NRec of fix_kind * Id.t array *
+  | NRec of glob_fix_kind * Id.t array *
       (Name.t * notation_constr option * notation_constr) list array *
       notation_constr array * notation_constr array
   | NSort of glob_sort
   | NCast of notation_constr * notation_constr cast_type
+  | NInt of Uint63.t
 
 (** Note concerning NList: first constr is iterator, second is terminator;
     first id is where each argument of the list has to be substituted

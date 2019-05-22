@@ -28,7 +28,7 @@ from shutil import copyfile
 import sphinx
 
 # Increase recursion limit for sphinx
-sys.setrecursionlimit(1500)
+sys.setrecursionlimit(3000)
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -47,12 +47,13 @@ with open("refman-preamble.rst") as s:
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-#needs_sphinx = '1.0'
+needs_sphinx = '1.7.8'
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'sphinx.ext.ifconfig',
     'sphinx.ext.mathjax',
     'sphinx.ext.todo',
     'sphinxcontrib.bibtex',
@@ -61,7 +62,7 @@ extensions = [
 
 # Change this to "info" or "warning" to get notifications about undocumented Coq
 # objects (objects with no contents).
-report_undocumented_coq_objects = None
+report_undocumented_coq_objects = "warning"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -100,6 +101,7 @@ def copy_formatspecific_files(app):
 
 def setup(app):
     app.connect('builder-inited', copy_formatspecific_files)
+    app.add_config_value('coq_config', coq_config, 'env')
 
 # The master toctree document.
 # We create this file in `copy_master_doc` above.
@@ -142,12 +144,13 @@ exclude_patterns = [
     'introduction.rst',
     'refman-preamble.rst',
     'README.rst',
+    'README.gen.rst',
     'README.template.rst'
 ] + ["*.{}.rst".format(fmt) for fmt in SUPPORTED_FORMATS]
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
-#default_role = None
+default_role = 'literal'
 
 # Use the Coq domain
 primary_domain = 'coq'

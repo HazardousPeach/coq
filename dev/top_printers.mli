@@ -101,7 +101,7 @@ val ppdelta : Mod_subst.delta_resolver -> unit
 
 val pp_idpred : Names.Id.Pred.t -> unit
 val pp_cpred : Names.Cpred.t -> unit
-val pp_transparent_state : Names.transparent_state -> unit
+val pp_transparent_state : TransparentState.t -> unit
 
 val pp_stack_t : Constr.t Reductionops.Stack.t -> unit
 val pp_cst_stack_t : Reductionops.Cst_stack.t -> unit
@@ -120,9 +120,9 @@ val ppclenv : Clenv.clausenv -> unit
 
 val ppgoalgoal : Goal.goal -> unit
 
-val ppgoal : Proof_type.goal Evd.sigma -> unit
+val ppgoal : Goal.goal Evd.sigma -> unit
 (* also print evar map *)
-val ppgoalsigma : Proof_type.goal Evd.sigma -> unit
+val ppgoalsigma : Goal.goal Evd.sigma -> unit
 
 val pphintdb : Hints.Hint_db.t -> unit
 val ppproofview : Proofview.proofview -> unit
@@ -137,6 +137,7 @@ val prlev : Univ.Level.t -> Pp.t (* with global names (does this work?) *)
 val ppuniverse_set : Univ.LSet.t -> unit
 val ppuniverse_instance : Univ.Instance.t -> unit
 val ppuniverse_context : Univ.UContext.t -> unit
+val ppaucontext : Univ.AUContext.t -> unit
 val ppuniverse_context_set : Univ.ContextSet.t -> unit
 val ppuniverse_subst : Univ.universe_subst -> unit
 val ppuniverse_opt_subst : UnivSubst.universe_opt_subst -> unit
@@ -145,8 +146,6 @@ val ppevar_universe_context : UState.t -> unit
 val ppconstraints : Univ.Constraint.t -> unit
 val ppuniverseconstraints : UnivProblem.Set.t -> unit
 val ppuniverse_context_future : Univ.UContext.t Future.computation -> unit
-val ppcumulativity_info : Univ.CumulativityInfo.t -> unit
-val ppabstract_cumulativity_info : Univ.ACumulativityInfo.t -> unit
 val ppuniverses : UGraph.t -> unit
 
 val ppnamedcontextval : Environ.named_context_val -> unit
@@ -161,6 +160,7 @@ val ppobj : Libobject.obj -> unit
 val cast_kind_display : Constr.cast_kind -> string
 val constr_display : Constr.constr -> unit
 val print_pure_constr : Constr.types -> unit
+val print_pure_econstr : EConstr.types -> unit
 
 val pploc : Loc.t -> unit
 

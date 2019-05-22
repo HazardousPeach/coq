@@ -145,8 +145,6 @@ val tail_pac : pa_constructor -> pa_constructor
 
 val find : forest -> int -> int
 
-val find_pac : forest -> int -> pa_constructor -> int
-
 val find_oldest_pac : forest -> int -> pa_constructor -> int
 
 val term : forest -> int -> term
@@ -171,7 +169,7 @@ val find_instances : state -> (quant_eq * int array) list
 
 val execute : bool -> state -> explanation option
 
-val pr_idx_term : forest -> int -> Pp.t
+val pr_idx_term : Environ.env -> Evd.evar_map -> forest -> int -> Pp.t
 
 val empty_forest: unit -> forest
 
@@ -257,5 +255,3 @@ val find_contradiction : UF.t ->
   (Names.Id.t * (int * int)) list ->
   (Names.Id.t * (int * int))
 *)
-
-

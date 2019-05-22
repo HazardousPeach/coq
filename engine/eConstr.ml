@@ -48,9 +48,10 @@ type 'a puniverses = 'a * EInstance.t
 
 let in_punivs a = (a, EInstance.empty)
 
+let mkSProp = of_kind (Sort (ESorts.make Sorts.sprop))
 let mkProp = of_kind (Sort (ESorts.make Sorts.prop))
 let mkSet = of_kind (Sort (ESorts.make Sorts.set))
-let mkType u = of_kind (Sort (ESorts.make (Sorts.Type u)))
+let mkType u = of_kind (Sort (ESorts.make (Sorts.sort_of_univ u)))
 let mkRel n = of_kind (Rel n)
 let mkVar id = of_kind (Var id)
 let mkMeta n = of_kind (Meta n)
@@ -72,7 +73,9 @@ let mkCase (ci, c, r, p) = of_kind (Case (ci, c, r, p))
 let mkFix f = of_kind (Fix f)
 let mkCoFix f = of_kind (CoFix f)
 let mkProj (p, c) = of_kind (Proj (p, c))
-let mkArrow t1 t2 = of_kind (Prod (Anonymous, t1, t2))
+let mkArrow t1 r t2 = of_kind (Prod (make_annot Anonymous r, t1, t2))
+let mkArrowR t1 t2 = mkArrow t1 Sorts.Relevant t2
+let mkInt i = of_kind (Int i)
 
 let mkRef (gr,u) = let open GlobRef in match gr with
   | ConstRef c -> mkConstU (c,u)
@@ -80,7 +83,10 @@ let mkRef (gr,u) = let open GlobRef in match gr with
   | ConstructRef c -> mkConstructU (c,u)
   | VarRef x -> mkVar x
 
+let type1 = mkSort Sorts.type1
+
 let applist (f, arg) = mkApp (f, Array.of_list arg)
+let applistc f arg = mkApp (f, Array.of_list arg)
 
 let isRel sigma c = match kind sigma c with Rel _ -> true | _ -> false
 let isVar sigma c = match kind sigma c with Var _ -> true | _ -> false
@@ -99,6 +105,14 @@ let isFix sigma c = match kind sigma c with Fix _ -> true | _ -> false
 let isCoFix sigma c = match kind sigma c with CoFix _ -> true | _ -> false
 let isCase sigma c = match kind sigma c with Case _ -> true | _ -> false
 let isProj sigma c = match kind sigma c with Proj _ -> true | _ -> false
+
+let rec isType sigma c = match kind sigma c with
+  | Sort s -> (match ESorts.kind sigma s with
+      | Sorts.Type _ -> true
+      | _ -> false )
+  | Cast (c,_,_) -> isType sigma c
+  | _ -> false
+
 let isVarId sigma id c =
   match kind sigma c with Var id' -> Id.equal id id' | _ -> false
 let isRelN sigma n c =
@@ -288,6 +302,8 @@ let decompose_prod_n_assum sigma n c =
 
 let existential_type = Evd.existential_type
 
+let lift n c = of_constr (Vars.lift n (unsafe_to_constr c))
+
 let map_under_context f n c =
   let f c = unsafe_to_constr (f (of_constr c)) in
   of_constr (Constr.map_under_context f n (unsafe_to_constr c))
@@ -298,143 +314,27 @@ let map_return_predicate f ci p =
   let f c = unsafe_to_constr (f (of_constr c)) in
   of_constr (Constr.map_return_predicate f ci (unsafe_to_constr p))
 
-let map_gen userview sigma f c = match kind sigma c with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> c
-  | Cast (b,k,t) ->
-      let b' = f b in
-      let t' = f t in
-      if b'==b && t' == t then c
-      else mkCast (b', k, t')
-  | Prod (na,t,b) ->
-      let b' = f b in
-      let t' = f t in
-      if b'==b && t' == t then c
-      else mkProd (na, t', b')
-  | Lambda (na,t,b) ->
-      let b' = f b in
-      let t' = f t in
-      if b'==b && t' == t then c
-      else mkLambda (na, t', b')
-  | LetIn (na,b,t,k) ->
-      let b' = f b in
-      let t' = f t in
-      let k' = f k in
-      if b'==b && t' == t && k'==k then c
-      else mkLetIn (na, b', t', k')
-  | App (b,l) ->
-      let b' = f b in
-      let l' = Array.Smart.map f l in
-      if b'==b && l'==l then c
-      else mkApp (b', l')
-  | Proj (p,t) ->
-      let t' = f t in
-      if t' == t then c
-      else mkProj (p, t')
-  | Evar (e,l) ->
-      let l' = Array.Smart.map f l in
-      if l'==l then c
-      else mkEvar (e, l')
-  | Case (ci,p,b,bl) when userview ->
-      let b' = f b in
-      let p' = map_return_predicate f ci p in
-      let bl' = map_branches f ci bl in
-      if b'==b && p'==p && bl'==bl then c
-      else mkCase (ci, p', b', bl')
-  | Case (ci,p,b,bl) ->
-      let b' = f b in
-      let p' = f p in
-      let bl' = Array.Smart.map f bl in
-      if b'==b && p'==p && bl'==bl then c
-      else mkCase (ci, p', b', bl')
-  | Fix (ln,(lna,tl,bl)) ->
-      let tl' = Array.Smart.map f tl in
-      let bl' = Array.Smart.map f bl in
-      if tl'==tl && bl'==bl then c
-      else mkFix (ln,(lna,tl',bl'))
-  | CoFix(ln,(lna,tl,bl)) ->
-      let tl' = Array.Smart.map f tl in
-      let bl' = Array.Smart.map f bl in
-      if tl'==tl && bl'==bl then c
-      else mkCoFix (ln,(lna,tl',bl'))
+let map_user_view sigma f c =
+  let f c = unsafe_to_constr (f (of_constr c)) in
+  of_constr (Constr.map_user_view f (unsafe_to_constr (whd_evar sigma c)))
 
-let map_user_view = map_gen true
-let map = map_gen false
+let map sigma f c =
+  let f c = unsafe_to_constr (f (of_constr c)) in
+  of_constr (Constr.map f (unsafe_to_constr (whd_evar sigma c)))
 
-let map_with_binders sigma g f l c0 = match kind sigma c0 with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> c0
-  | Cast (c, k, t) ->
-    let c' = f l c in
-    let t' = f l t in
-    if c' == c && t' == t then c0
-    else mkCast (c', k, t')
-  | Prod (na, t, c) ->
-    let t' = f l t in
-    let c' = f (g l) c in
-    if t' == t && c' == c then c0
-    else mkProd (na, t', c')
-  | Lambda (na, t, c) ->
-    let t' = f l t in
-    let c' = f (g l) c in
-    if t' == t && c' == c then c0
-    else mkLambda (na, t', c')
-  | LetIn (na, b, t, c) ->
-    let b' = f l b in
-    let t' = f l t in
-    let c' = f (g l) c in
-    if b' == b && t' == t && c' == c then c0
-    else mkLetIn (na, b', t', c')
-  | App (c, al) ->
-    let c' = f l c in
-    let al' = Array.Fun1.Smart.map f l al in
-    if c' == c && al' == al then c0
-    else mkApp (c', al')
-  | Proj (p, t) ->
-    let t' = f l t in
-    if t' == t then c0
-    else mkProj (p, t')
-  | Evar (e, al) ->
-    let al' = Array.Fun1.Smart.map f l al in
-    if al' == al then c0
-    else mkEvar (e, al')
-  | Case (ci, p, c, bl) ->
-    let p' = f l p in
-    let c' = f l c in
-    let bl' = Array.Fun1.Smart.map f l bl in
-    if p' == p && c' == c && bl' == bl then c0
-    else mkCase (ci, p', c', bl')
-  | Fix (ln, (lna, tl, bl)) ->
-    let tl' = Array.Fun1.Smart.map f l tl in
-    let l' = iterate g (Array.length tl) l in
-    let bl' = Array.Fun1.Smart.map f l' bl in
-    if tl' == tl && bl' == bl then c0
-    else mkFix (ln,(lna,tl',bl'))
-  | CoFix(ln,(lna,tl,bl)) ->
-    let tl' = Array.Fun1.Smart.map f l tl in
-    let l' = iterate g (Array.length tl) l in
-    let bl' = Array.Fun1.Smart.map f l' bl in
-    mkCoFix (ln,(lna,tl',bl'))
+let map_with_binders sigma g f l c =
+  let f l c = unsafe_to_constr (f l (of_constr c)) in
+  of_constr (Constr.map_with_binders g f l (unsafe_to_constr (whd_evar sigma c)))
 
-let iter sigma f c = match kind sigma c with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> ()
-  | Cast (c,_,t) -> f c; f t
-  | Prod (_,t,c) -> f t; f c
-  | Lambda (_,t,c) -> f t; f c
-  | LetIn (_,b,t,c) -> f b; f t; f c
-  | App (c,l) -> f c; Array.iter f l
-  | Proj (p,c) -> f c
-  | Evar (_,l) -> Array.iter f l
-  | Case (_,p,c,bl) -> f p; f c; Array.iter f bl
-  | Fix (_,(_,tl,bl)) -> Array.iter f tl; Array.iter f bl
-  | CoFix (_,(_,tl,bl)) -> Array.iter f tl; Array.iter f bl
+let iter sigma f c =
+  let f c = f (of_constr c) in
+  Constr.iter f (unsafe_to_constr (whd_evar sigma c))
 
 let iter_with_full_binders sigma g f n c =
   let open Context.Rel.Declaration in
   match kind sigma c with
   | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> ()
+    | Construct _ | Int _) -> ()
   | Cast (c,_,t) -> f n c; f n t
   | Prod (na,t,c) -> f n t; f (g (LocalAssum (na, t)) n) c
   | Lambda (na,t,c) -> f n t; f (g (LocalAssum (na, t)) n) c
@@ -445,31 +345,20 @@ let iter_with_full_binders sigma g f n c =
   | Proj (p,c) -> f n c
   | Fix (_,(lna,tl,bl)) ->
     Array.iter (f n) tl;
-    let n' = Array.fold_left2 (fun n na t -> g (LocalAssum (na,t)) n) n lna tl in
+    let n' = Array.fold_left2_i (fun i n na t -> g (LocalAssum (na, lift i t)) n) n lna tl in
     Array.iter (f n') bl
   | CoFix (_,(lna,tl,bl)) ->
     Array.iter (f n) tl;
-    let n' = Array.fold_left2 (fun n na t -> g (LocalAssum (na,t)) n) n lna tl in
+    let n' = Array.fold_left2_i (fun i n na t -> g (LocalAssum (na,lift i t)) n) n lna tl in
     Array.iter (f n') bl
 
 let iter_with_binders sigma g f n c =
-  iter_with_full_binders sigma (fun _ acc -> g acc) f n c
+  let f l c = f l (of_constr c) in
+  Constr.iter_with_binders g f n (unsafe_to_constr (whd_evar sigma c))
 
-let fold sigma f acc c = match kind sigma c with
-  | (Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _
-    | Construct _) -> acc
-  | Cast (c,_,t) -> f (f acc c) t
-  | Prod (_,t,c) -> f (f acc t) c
-  | Lambda (_,t,c) -> f (f acc t) c
-  | LetIn (_,b,t,c) -> f (f (f acc b) t) c
-  | App (c,l) -> Array.fold_left f (f acc c) l
-  | Proj (p,c) -> f acc c
-  | Evar (_,l) -> Array.fold_left f acc l
-  | Case (_,p,c,bl) -> Array.fold_left f (f (f acc p) c) bl
-  | Fix (_,(lna,tl,bl)) ->
-    Array.fold_left2 (fun acc t b -> f (f acc t) b) acc tl bl
-  | CoFix (_,(lna,tl,bl)) ->
-    Array.fold_left2 (fun acc t b -> f (f acc t) b) acc tl bl
+let fold sigma f acc c =
+  let f acc c = f acc (of_constr c) in
+  Constr.fold f acc (unsafe_to_constr (whd_evar sigma c))
 
 let compare_gen k eq_inst eq_sort eq_constr nargs c1 c2 =
   (c1 == c2) || Constr.compare_head_gen_with k k eq_inst eq_sort eq_constr nargs c1 c2
@@ -520,25 +409,17 @@ let compare_cumulative_instances cv_pb nargs_ok variances u u' cstrs =
 
 let cmp_inductives cv_pb (mind,ind as spec) nargs u1 u2 cstrs =
   let open UnivProblem in
-  match mind.Declarations.mind_universes with
-  | Declarations.Monomorphic_ind _ ->
-    assert (Univ.Instance.length u1 = 0 && Univ.Instance.length u2 = 0);
-    cstrs
-  | Declarations.Polymorphic_ind _ ->
-     enforce_eq_instances_univs false u1 u2 cstrs
-  | Declarations.Cumulative_ind cumi ->
+  match mind.Declarations.mind_variance with
+  | None -> enforce_eq_instances_univs false u1 u2 cstrs
+  | Some variances ->
     let num_param_arity = Reduction.inductive_cumulativity_arguments spec in
-    let variances = Univ.ACumulativityInfo.variance cumi in
     compare_cumulative_instances cv_pb (Int.equal num_param_arity nargs) variances u1 u2 cstrs
 
 let cmp_constructors (mind, ind, cns as spec) nargs u1 u2 cstrs =
   let open UnivProblem in
-  match mind.Declarations.mind_universes with
-  | Declarations.Monomorphic_ind _ ->
-    cstrs
-  | Declarations.Polymorphic_ind _ ->
-    enforce_eq_instances_univs false u1 u2 cstrs
-  | Declarations.Cumulative_ind cumi ->
+  match mind.Declarations.mind_variance with
+  | None -> enforce_eq_instances_univs false u1 u2 cstrs
+  | Some _ ->
     let num_cnstr_args = Reduction.constructor_cumulativity_arguments spec in
     if not (Int.equal num_cnstr_args nargs)
     then enforce_eq_instances_univs false u1 u2 cstrs
@@ -704,7 +585,7 @@ let to_rel_decl = unsafe_to_rel_decl
 type substl = t list
 
 (** Operations that commute with evar-normalization *)
-let lift n c = of_constr (Vars.lift n (to_constr c))
+let lift = lift
 let liftn n m c = of_constr (Vars.liftn n m (to_constr c))
 
 let substnl subst n c = of_constr (Vars.substnl (cast_list unsafe_eq subst) n (to_constr c))
@@ -723,6 +604,7 @@ let subst_var subst c = of_constr (Vars.subst_var subst (to_constr c))
 
 let subst_univs_level_constr subst c =
   of_constr (Vars.subst_univs_level_constr subst (to_constr c))
+
 (** Operations that dot NOT commute with evar-normalization *)
 let noccurn sigma n term =
   let rec occur_rec n c = match kind sigma c with
@@ -787,9 +669,9 @@ let mkLambda_or_LetIn decl c =
   | LocalAssum (na,t) -> mkLambda (na, t, c)
   | LocalDef (na,b,t) -> mkLetIn (na, b, t, c)
 
-let mkNamedProd id typ c = mkProd (Name id, typ, Vars.subst_var id c)
-let mkNamedLambda id typ c = mkLambda (Name id, typ, Vars.subst_var id c)
-let mkNamedLetIn id c1 t c2 = mkLetIn (Name id, c1, t, Vars.subst_var id c2)
+let mkNamedProd id typ c = mkProd (map_annot Name.mk_name id, typ, Vars.subst_var id.binder_name c)
+let mkNamedLambda id typ c = mkLambda (map_annot Name.mk_name id, typ, Vars.subst_var id.binder_name c)
+let mkNamedLetIn id c1 t c2 = mkLetIn (map_annot Name.mk_name id, c1, t, Vars.subst_var id.binder_name c2)
 
 let mkNamedProd_or_LetIn decl c =
   let open Context.Named.Declaration in

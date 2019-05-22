@@ -13,6 +13,7 @@
 open Pp
 open Names
 open Constr
+open Context
 open Tacmach
 
 open Ssrmatching_plugin.Ssrmatching
@@ -49,13 +50,13 @@ let ssrsettac id ((_, (pat, pty)), (_, occ)) gl =
   let c = EConstr.of_constr c in
   let cl = EConstr.of_constr cl in
   if Termops.occur_existential sigma c then errorstrm(str"The pattern"++spc()++
-    pr_constr_pat (EConstr.Unsafe.to_constr c)++spc()++str"did not match and has holes."++spc()++
+    pr_econstr_pat env sigma c++spc()++str"did not match and has holes."++spc()++
     str"Did you mean pose?") else
   let c, (gl, cty) =  match EConstr.kind sigma c with
   | Cast(t, DEFAULTcast, ty) -> t, (gl, ty)
   | _ -> c, pfe_type_of gl c in
-  let cl' = EConstr.mkLetIn (Name id, c, cty, cl) in
-  Tacticals.tclTHEN (Proofview.V82.of_tactic (convert_concl cl')) (introid id) gl
+  let cl' = EConstr.mkLetIn (make_annot (Name id) Sorts.Relevant, c, cty, cl) in
+  Tacticals.tclTHEN (Proofview.V82.of_tactic (convert_concl ~check:true cl')) (introid id) gl
 
 open Util
 
@@ -66,14 +67,14 @@ open Ssripats
 
 let ssrhaveNOtcresolution = Summary.ref ~name:"SSR:havenotcresolution" false
 
-let _ =
-  Goptions.declare_bool_option
-    { Goptions.optname  = "have type classes";
-      Goptions.optkey   = ["SsrHave";"NoTCResolution"];
-      Goptions.optread  = (fun _ -> !ssrhaveNOtcresolution);
-      Goptions.optdepr  = false;
-      Goptions.optwrite = (fun b -> ssrhaveNOtcresolution := b);
-    }
+let () =
+  Goptions.(declare_bool_option
+    { optname  = "have type classes";
+      optkey   = ["SsrHave";"NoTCResolution"];
+      optread  = (fun _ -> !ssrhaveNOtcresolution);
+      optdepr  = false;
+      optwrite = (fun b -> ssrhaveNOtcresolution := b);
+    })
 
 
 open Constrexpr 
@@ -94,17 +95,23 @@ let basecuttac name c gl =
 let introstac ipats = Proofview.V82.of_tactic (tclIPAT ipats)
 
 let havetac ist
-  (transp,((((clr, pats), binders), simpl), (((fk, _), t), hint)))
+  (transp,((((clr, orig_pats), binders), simpl), (((fk, _), t), hint)))
   suff namefst gl 
 =
  let concl = pf_concl gl in
+ let pats = tclCompileIPats orig_pats in
+ let binders = tclCompileIPats binders in
+ let simpl = tclCompileIPats simpl in
  let skols, pats =
-   List.partition (function IPatAbstractVars _ -> true | _ -> false) pats in
+   List.partition (function IOpAbstractVars _ -> true | _ -> false) pats in
  let itac_mkabs = introstac skols in
- let itac_c = introstac (IPatClear clr :: pats) in
+ let itac_c, clr =
+   match clr with
+   | None -> introstac pats, []
+   | Some clr -> introstac (tclCompileIPats (IPatClear clr :: orig_pats)), clr in
  let itac, id, clr = introstac pats, Tacticals.tclIDTAC, old_cleartac clr in
  let binderstac n =
-   let rec aux = function 0 -> [] | n -> IPatAnon One :: aux (n-1) in
+   let rec aux = function 0 -> [] | n -> IOpInaccessible None :: aux (n-1) in
    Tacticals.tclTHEN (if binders <> [] then introstac (aux n) else Tacticals.tclIDTAC)
      (introstac binders) in
  let simpltac = introstac simpl in
@@ -154,13 +161,13 @@ let havetac ist
      let gl, ty = pfe_type_of gl t in
      let ctx, _ = EConstr.decompose_prod_n_assum (project gl) 1 ty in
      let assert_is_conv gl =
-       try Proofview.V82.of_tactic (convert_concl (EConstr.it_mkProd_or_LetIn concl ctx)) gl
+       try Proofview.V82.of_tactic (convert_concl ~check:true (EConstr.it_mkProd_or_LetIn concl ctx)) gl
        with _ -> errorstrm (str "Given proof term is not of type " ++
-         pr_econstr_env (pf_env gl) (project gl) (EConstr.mkArrow (EConstr.mkVar (Id.of_string "_")) concl)) in
+         pr_econstr_env (pf_env gl) (project gl) (EConstr.mkArrow (EConstr.mkVar (Id.of_string "_")) Sorts.Relevant concl)) in
      gl, ty, Tacticals.tclTHEN assert_is_conv (Proofview.V82.of_tactic (Tactics.apply t)), id, itac_c
    | FwdHave, false, false ->
      let skols = List.flatten (List.map (function
-       | IPatAbstractVars ids -> ids
+       | IOpAbstractVars ids -> ids
        | _ -> assert false) skols) in
      let skols_args =
        List.map (fun id -> Ssripats.Internal.examine_abstract (EConstr.mkVar id) gl) skols in
@@ -184,10 +191,10 @@ let havetac ist
             Proofview.V82.of_tactic (unfold [abstract; abstract_key]) gl))
    | _,true,true  ->
      let _, ty, uc = interp_ty gl fixtc cty in let gl = pf_merge_uc uc gl in
-     gl, EConstr.mkArrow ty concl, hint, itac, clr
+     gl, EConstr.mkArrow ty Sorts.Relevant concl, hint, itac, clr
    | _,false,true ->
      let _, ty, uc = interp_ty gl fixtc cty in let gl = pf_merge_uc uc gl in
-     gl, EConstr.mkArrow ty concl, hint, id, itac_c
+     gl, EConstr.mkArrow ty Sorts.Relevant concl, hint, id, itac_c
    | _, false, false -> 
      let n, cty, uc = interp_ty gl fixtc cty in let gl = pf_merge_uc uc gl in
      gl, cty, Tacticals.tclTHEN (binderstac n) hint, id, Tacticals.tclTHEN itac_c simpltac
@@ -203,10 +210,12 @@ let destProd_or_LetIn sigma c =
   | _ -> raise DestKO
 
 let wlogtac ist (((clr0, pats),_),_) (gens, ((_, ct))) hint suff ghave gl =
+  let clr0 = Option.default [] clr0 in
+  let pats = tclCompileIPats pats in
   let mkabs gen = abs_wgen false (fun x -> x) gen in
   let mkclr gen clrs = clr_of_wgen gen clrs in
   let mkpats = function
-  | _, Some ((x, _), _) -> fun pats -> IPatId (hoi_id x) :: pats
+  | _, Some ((x, _), _) -> fun pats -> IOpId (hoi_id x) :: pats
   | _ -> fun x -> x in
   let ct = match Ssrcommon.ssrterm_of_ast_closure_term ct with
   | (a, (b, Some ct)) ->
@@ -225,7 +234,7 @@ let wlogtac ist (((clr0, pats),_),_) (gens, ((_, ct))) hint suff ghave gl =
     let gens = List.filter (function _, Some _ -> true | _ -> false) gens in
     let concl = pf_concl gl in
     let c = EConstr.mkProp in
-    let c = if cut_implies_goal then EConstr.mkArrow c concl else c in
+    let c = if cut_implies_goal then EConstr.mkArrow c Sorts.Relevant concl else c in
     let gl, args, c = List.fold_right mkabs gens (gl,[],c) in
     let env, _ =
       List.fold_left (fun (env, c) _ ->
@@ -237,10 +246,10 @@ let wlogtac ist (((clr0, pats),_),_) (gens, ((_, ct))) hint suff ghave gl =
     let fake_gl = {Evd.it = k; Evd.sigma = sigma} in
     let _, ct, _, uc = pf_interp_ty ist fake_gl ct in
     let rec var2rel c g s = match EConstr.kind sigma c, g with
-      | Prod(Anonymous,_,c), [] -> EConstr.mkProd(Anonymous, EConstr.Vars.subst_vars s ct, c)
+      | Prod({binder_name=Anonymous} as x,_,c), [] -> EConstr.mkProd(x, EConstr.Vars.subst_vars s ct, c)
       | Sort _, [] -> EConstr.Vars.subst_vars s ct
-      | LetIn(Name id as n,b,ty,c), _::g -> EConstr.mkLetIn (n,b,ty,var2rel c g (id::s))
-      | Prod(Name id as n,ty,c), _::g -> EConstr.mkProd (n,ty,var2rel c g (id::s))
+      | LetIn({binder_name=Name id} as n,b,ty,c), _::g -> EConstr.mkLetIn (n,b,ty,var2rel c g (id::s))
+      | Prod({binder_name=Name id} as n,ty,c), _::g -> EConstr.mkProd (n,ty,var2rel c g (id::s))
       | _ -> CErrors.anomaly(str"SSR: wlog: var2rel: " ++ pr_econstr_env env sigma c) in
     let c = var2rel c gens [] in
     let rec pired c = function
@@ -265,7 +274,7 @@ let wlogtac ist (((clr0, pats),_),_) (gens, ((_, ct))) hint suff ghave gl =
       if gens = [] then errorstrm(str"gen have requires some generalizations");
       let clear0 = old_cleartac clr0 in
       let id, name_general_hyp, cleanup, pats = match id, pats with
-      | None, (IPatId id as ip)::pats -> Some id, tacipat [ip], clear0, pats
+      | None, (IOpId id as ip)::pats -> Some id, tacipat [ip], clear0, pats
       | None, _ -> None, Tacticals.tclIDTAC, clear0, pats
       | Some (Some id),_ -> Some id, introid id, clear0, pats
       | Some _,_ ->
@@ -289,6 +298,10 @@ let wlogtac ist (((clr0, pats),_),_) (gens, ((_, ct))) hint suff ghave gl =
 (** The "suffice" tactic *)
 
 let sufftac ist ((((clr, pats),binders),simpl), ((_, c), hint)) =
+  let clr = Option.default [] clr in
+  let pats = tclCompileIPats pats in
+  let binders = tclCompileIPats binders in
+  let simpl = tclCompileIPats simpl in
   let htac = Tacticals.tclTHEN (introstac pats) (hinttac ist true hint) in
   let c = match Ssrcommon.ssrterm_of_ast_closure_term c with
   | (a, (b, Some ct)) ->
@@ -306,3 +319,172 @@ let sufftac ist ((((clr, pats),binders),simpl), ((_, c), hint)) =
     let _,ty,_,uc = pf_interp_ty ist gl c in let gl = pf_merge_uc uc gl in
     basecuttac "ssr_suff" ty gl in
   Tacticals.tclTHENS ctac [htac; Tacticals.tclTHEN (old_cleartac clr) (introstac (binders@simpl))]
+
+open Proofview.Notations
+
+let is_app_evar sigma t =
+  match EConstr.kind sigma t with
+  | Constr.Evar _ -> true
+  | Constr.App(t,_) ->
+      begin match EConstr.kind sigma t with
+      | Constr.Evar _ -> true
+      | _ -> false end
+  | _ -> false
+
+let rec ncons n e = match n with
+  | 0 -> []
+  | n when n > 0 -> e :: ncons (n - 1) e
+  | _ -> failwith "ncons"
+
+let intro_lock ipats =
+  let hnf' = Proofview.numgoals >>= fun ng ->
+             Proofview.tclDISPATCH
+               (ncons (ng - 1) ssrsmovetac @ [Proofview.tclUNIT ()]) in
+  let rec lock_eq () : unit Proofview.tactic = Proofview.Goal.enter begin fun _ ->
+    Proofview.tclORELSE
+      (Ssripats.tclIPAT [Ssripats.IOpTemporay; Ssripats.IOpEqGen (lock_eq ())])
+      (fun _exn -> Proofview.Goal.enter begin fun gl ->
+        let c = Proofview.Goal.concl gl in
+        let sigma = Proofview.Goal.sigma gl in
+        let env = Proofview.Goal.env gl in
+        match EConstr.kind_of_type sigma c with
+        | Term.AtomicType(hd, args) when
+            Ssrcommon.is_const_ref sigma hd (Coqlib.lib_ref "core.iff.type") &&
+           Array.length args = 2 && is_app_evar sigma args.(1) ->
+           Tactics.New.refine ~typecheck:true (fun sigma ->
+               let sigma, under_iff =
+                 Ssrcommon.mkSsrConst "Under_iff" env sigma in
+               let sigma, under_from_iff =
+                 Ssrcommon.mkSsrConst "Under_iff_from_iff" env sigma in
+               let ty = EConstr.mkApp (under_iff,args) in
+               let sigma, t = Evarutil.new_evar env sigma ty in
+               sigma, EConstr.mkApp(under_from_iff,Array.append args [|t|]))
+        | _ ->
+        let t = Reductionops.whd_all env sigma c in
+        match EConstr.kind_of_type sigma t with
+        | Term.AtomicType(hd, args) when
+            Ssrcommon.is_ind_ref sigma hd (Coqlib.lib_ref "core.eq.type") &&
+            Array.length args = 3 && is_app_evar sigma args.(2) ->
+              Tactics.New.refine ~typecheck:true (fun sigma ->
+                let sigma, under =
+                  Ssrcommon.mkSsrConst "Under_eq" env sigma in
+                let sigma, under_from_eq =
+                  Ssrcommon.mkSsrConst "Under_eq_from_eq" env sigma in
+                let ty = EConstr.mkApp (under,args) in
+                let sigma, t = Evarutil.new_evar env sigma ty in
+                sigma, EConstr.mkApp(under_from_eq,Array.append args [|t|]))
+        | _ ->
+    ppdebug(lazy Pp.(str"under: stop:" ++ pr_econstr_env env sigma t));
+
+            Proofview.tclUNIT ()
+       end)
+    end
+  in
+  hnf' <*> Ssripats.tclIPATssr ipats <*> lock_eq ()
+
+let pretty_rename evar_map term varnames =
+  let rec aux term vars =
+    try
+      match vars with
+      | [] -> term
+      | Names.Name.Anonymous :: varnames ->
+          let name, types, body = EConstr.destLambda evar_map term in
+          let res = aux body varnames in
+          EConstr.mkLambda (name, types, res)
+      | Names.Name.Name _ as name :: varnames ->
+          let { Context.binder_relevance = r }, types, body =
+            EConstr.destLambda evar_map term in
+          let res = aux body varnames in
+          EConstr.mkLambda (Context.make_annot name r, types, res)
+    with DestKO -> term
+  in
+    aux term varnames
+
+let overtac = Proofview.V82.tactic (ssr_n_tac "over" ~-1)
+
+let check_numgoals ?(minus = 0) nh =
+  Proofview.numgoals >>= fun ng ->
+  if nh <> ng then
+    let errmsg =
+      str"Incorrect number of tactics" ++ spc() ++
+        str"(expected "++int (ng - minus)++str(String.plural ng " tactic") ++
+        str", was given "++ int (nh - minus)++str")."
+    in
+    CErrors.user_err errmsg
+  else
+    Proofview.tclUNIT ()
+
+let undertac ?(pad_intro = false) ist ipats ((dir,_),_ as rule) hint =
+
+  (* total number of implied hints *)
+  let nh = List.length (snd hint) + (if hint = nullhint then 2 else 1) in
+
+  let varnames =
+    let rec aux acc = function
+      | IPatId id :: rest -> aux (Names.Name.Name id :: acc) rest
+      | IPatClear _ :: rest -> aux acc rest
+      | IPatSimpl _ :: rest -> aux acc rest
+      | IPatAnon (One _ | Drop) :: rest ->
+          aux (Names.Name.Anonymous :: acc) rest
+      | _ -> List.rev acc in
+    aux [] @@ match ipats with
+              | None -> []
+              | Some (IPatCase(Regular (l :: _)) :: _) -> l
+              | Some l -> l in
+
+  (* If we find a "=> [|]" we add 1 | to get "=> [||]" for the extra
+   * goal (the one that is left once we run over) *)
+  let ipats =
+    match ipats with
+    | None -> [IPatNoop]
+    | Some l when pad_intro -> (* typically, ipats = Some [IPatAnon All] *)
+       let new_l = ncons (nh - 1) l in
+       [IPatCase(Regular (new_l @ [[]]))]
+    | Some (IPatCase(Regular []) :: _ as ipats) -> ipats
+    (* Erik: is the previous line correct/useful? *)
+    | Some (IPatCase(Regular l) :: rest) -> IPatCase(Regular(l @ [[]])) :: rest
+    | Some (IPatCase(Block _) :: _ as l) -> l
+    | Some l -> [IPatCase(Regular [l;[]])] in
+
+  let map_redex env evar_map ~before:_ ~after:t =
+    ppdebug(lazy Pp.(str"under vars: " ++ prlist Names.Name.print varnames));
+
+    let evar_map, ty = Typing.type_of env evar_map t in
+    let new_t = (* pretty-rename the bound variables *)
+      try begin match EConstr.destApp evar_map t with (f, ar) ->
+            let lam = Array.last ar in
+            ppdebug(lazy Pp.(str"under: mapping:" ++
+                             pr_econstr_env env evar_map lam));
+            let new_lam = pretty_rename evar_map lam varnames in
+            let new_ar, len1 = Array.copy ar, pred (Array.length ar) in
+            new_ar.(len1) <- new_lam;
+            EConstr.mkApp (f, new_ar)
+          end with
+      | DestKO ->
+        ppdebug(lazy Pp.(str"under: cannot pretty-rename bound variables with destApp"));
+        t
+    in
+    ppdebug(lazy Pp.(str"under: to:" ++ pr_econstr_env env evar_map new_t));
+    evar_map, new_t
+  in
+  let undertacs =
+    if hint = nohint then
+      Proofview.tclUNIT ()
+    else
+      let betaiota = Tactics.reduct_in_concl ~check:false (Reductionops.nf_betaiota, DEFAULTcast) in
+      (* Usefulness of check_numgoals: tclDISPATCH would be enough,
+         except for the error message w.r.t. the number of
+         provided/expected tactics, as the last one is implied *)
+      check_numgoals ~minus:1 nh <*>
+        Proofview.tclDISPATCH
+          ((List.map (function None -> overtac
+                             | Some e -> ssrevaltac ist e <*>
+                                           overtac)
+              (if hint = nullhint then [None] else snd hint))
+           @ [betaiota])
+  in
+  let rew =
+    Proofview.V82.tactic
+      (Ssrequality.ssrrewritetac ~under:true ~map_redex ist [rule])
+  in
+  rew <*> intro_lock ipats <*> undertacs

@@ -13,6 +13,7 @@ open Util
 open CErrors
 open Names
 open Constr
+open Context
 open Evd
 open EConstr
 open Vars
@@ -194,14 +195,14 @@ let write_warn_hint = function
 | "Strict" -> warn_hint := `STRICT
 | _ -> user_err Pp.(str "Only the following flags are accepted: Lax, Warn, Strict.")
 
-let _ =
-  Goptions.declare_string_option
-    { Goptions.optdepr  = false;
-      Goptions.optname  = "behavior of non-imported hints";
-      Goptions.optkey   = ["Loose"; "Hint"; "Behavior"];
-      Goptions.optread  = read_warn_hint;
-      Goptions.optwrite = write_warn_hint;
-    }
+let () =
+  Goptions.(declare_string_option
+    { optdepr  = false;
+      optname  = "behavior of non-imported hints";
+      optkey   = ["Loose"; "Hint"; "Behavior"];
+      optread  = read_warn_hint;
+      optwrite = write_warn_hint;
+    })
 
 let fresh_key =
   let id = Summary.ref ~name:"HINT-COUNTER" 0 in
@@ -210,9 +211,9 @@ let fresh_key =
     let lbl = Id.of_string ("_" ^ string_of_int cur) in
     let kn = Lib.make_kn lbl in
     let (mp, _) = KerName.repr kn in
-    (** We embed the full path of the kernel name in the label so that the
-        identifier should be unique. This ensures that including two modules
-        together won't confuse the corresponding labels. *)
+    (* We embed the full path of the kernel name in the label so that
+       the identifier should be unique. This ensures that including
+       two modules together won't confuse the corresponding labels. *)
     let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
       (ModPath.to_string mp) cur)
     in
@@ -288,11 +289,9 @@ let lookup_tacs sigma concl st se =
   let sl' = List.stable_sort pri_order_int l' in
   List.merge pri_order_int se.sentry_nopat sl'
 
-module Constr_map = Map.Make(GlobRef.Ordered)
-
-let is_transparent_gr (ids, csts) = function
-  | VarRef id -> Id.Pred.mem id ids
-  | ConstRef cst -> Cpred.mem cst csts
+let is_transparent_gr ts = function
+  | VarRef id -> TransparentState.is_transparent_variable ts id
+  | ConstRef cst -> TransparentState.is_transparent_constant ts cst
   | IndRef _ | ConstructRef _ -> false
 
 let strip_params env sigma c = 
@@ -497,7 +496,7 @@ type hint_db_name = string
 module Hint_db :
 sig
 type t
-val empty : ?name:hint_db_name -> transparent_state -> bool -> t
+val empty : ?name:hint_db_name -> TransparentState.t -> bool -> t
 val find : GlobRef.t -> t -> search_entry
 val map_none : secvars:Id.Pred.t -> t -> full_hint list
 val map_all : secvars:Id.Pred.t -> GlobRef.t -> t -> full_hint list
@@ -513,12 +512,14 @@ val remove_one : GlobRef.t -> t -> t
 val remove_list : GlobRef.t list -> t -> t
 val iter : (GlobRef.t option -> hint_mode array list -> full_hint list -> unit) -> t -> unit
 val use_dn : t -> bool
-val transparent_state : t -> transparent_state
-val set_transparent_state : t -> transparent_state -> t
+val transparent_state : t -> TransparentState.t
+val set_transparent_state : t -> TransparentState.t -> t
 val add_cut : hints_path -> t -> t
 val add_mode : GlobRef.t -> hint_mode array -> t -> t
 val cut : t -> hints_path
 val unfolds : t -> Id.Set.t * Cset.t
+val add_modes : hint_mode array list GlobRef.Map.t -> t -> t
+val modes : t -> hint_mode array list GlobRef.Map.t
 val fold : (GlobRef.t option -> hint_mode array list -> full_hint list -> 'a -> 'a) ->
   t -> 'a -> 'a
 
@@ -526,12 +527,12 @@ end =
 struct
 
   type t = {
-    hintdb_state : Names.transparent_state;
+    hintdb_state : TransparentState.t;
     hintdb_cut : hints_path;
     hintdb_unfolds : Id.Set.t * Cset.t;
     hintdb_max_id : int;
     use_dn : bool;
-    hintdb_map : search_entry Constr_map.t;
+    hintdb_map : search_entry GlobRef.Map.t;
     (* A list of unindexed entries starting with an unfoldable constant
        or with no associated pattern. *)
     hintdb_nopat : (GlobRef.t option * stored_data) list;
@@ -547,18 +548,18 @@ struct
 			  hintdb_unfolds = (Id.Set.empty, Cset.empty);
 			  hintdb_max_id = 0;
 			  use_dn = use_dn;
-			  hintdb_map = Constr_map.empty;
+                          hintdb_map = GlobRef.Map.empty;
 			  hintdb_nopat = [];
 			  hintdb_name = name; }
 
   let find key db =
-    try Constr_map.find key db.hintdb_map
+    try GlobRef.Map.find key db.hintdb_map
     with Not_found -> empty_se
  
   let realize_tac secvars (id,tac) =
     if Id.Pred.subset tac.secvars secvars then Some tac
     else
-      (** Warn about no longer typable hint? *)
+      (* Warn about no longer typable hint? *)
       None
 
   let head_evar sigma c =
@@ -601,7 +602,7 @@ struct
     let se = find k db in
     merge_entry secvars db se.sentry_nopat se.sentry_pat
 	
-  (** Precondition: concl has no existentials *)
+  (* Precondition: concl has no existentials *)
   let map_auto sigma ~secvars (k,args) concl db =
     let se = find k db in
     let st = if db.use_dn then  (Some db.hintdb_state) else None in
@@ -644,16 +645,16 @@ struct
       | None ->
           let is_present (_, (_, v')) = KerName.equal v.code.uid v'.code.uid in
 	  if not (List.exists is_present db.hintdb_nopat) then
-	    (** FIXME *)
+            (* FIXME *)
 	    { db with hintdb_nopat = (gr,idv) :: db.hintdb_nopat }
 	  else db
       | Some gr ->
 	  let oval = find gr db in
-	    { db with hintdb_map = Constr_map.add gr (add_tac pat idv dnst oval) db.hintdb_map }
+            { db with hintdb_map = GlobRef.Map.add gr (add_tac pat idv dnst oval) db.hintdb_map }
 
   let rebuild_db st' db =
     let db' =
-      { db with hintdb_map = Constr_map.map (rebuild_dn st') db.hintdb_map;
+      { db with hintdb_map = GlobRef.Map.map (rebuild_dn st') db.hintdb_map;
 	hintdb_state = st'; hintdb_nopat = [] }
     in
       List.fold_left (fun db (gr,(id,v)) -> addkv gr id v db) db' db.hintdb_nopat
@@ -663,10 +664,13 @@ struct
     let st',db,rebuild =
       match v.code.obj with
       | Unfold_nth egr ->
-	  let addunf (ids,csts) (ids',csts') =
+          let addunf ts (ids, csts) =
+            let open TransparentState in
 	    match egr with
-	    | EvalVarRef id -> (Id.Pred.add id ids, csts), (Id.Set.add id ids', csts')
-	    | EvalConstRef cst -> (ids, Cpred.add cst csts), (ids', Cset.add cst csts')
+            | EvalVarRef id ->
+              { ts with tr_var = Id.Pred.add id ts.tr_var }, (Id.Set.add id ids, csts)
+            | EvalConstRef cst ->
+              { ts with tr_cst = Cpred.add cst ts.tr_cst }, (ids, Cset.add cst csts)
 	  in 
 	  let state, unfs = addunf db.hintdb_state db.hintdb_unfolds in
 	    state, { db with hintdb_unfolds = unfs }, true
@@ -689,7 +693,7 @@ struct
   let remove_list grs db =
     let filter (_, h) =
       match h.name with PathHints [gr] -> not (List.mem_f GlobRef.equal gr grs) | _ -> true in
-    let hintmap = Constr_map.map (remove_he db.hintdb_state filter) db.hintdb_map in
+    let hintmap = GlobRef.Map.map (remove_he db.hintdb_state filter) db.hintdb_map in
     let hintnopat = List.filter (fun (ge, sd) -> filter sd) db.hintdb_nopat in
       { db with hintdb_map = hintmap; hintdb_nopat = hintnopat }
 
@@ -702,11 +706,11 @@ struct
   let iter f db =
     let iter_se k se = f (Some k) se.sentry_mode (get_entry se) in
     f None [] (List.map (fun x -> snd (snd x)) db.hintdb_nopat);
-    Constr_map.iter iter_se db.hintdb_map
+    GlobRef.Map.iter iter_se db.hintdb_map
 
   let fold f db accu =
     let accu = f None [] (List.map (fun x -> snd (snd x)) db.hintdb_nopat) accu in
-    Constr_map.fold (fun k se -> f (Some k) se.sentry_mode (get_entry se)) db.hintdb_map accu
+    GlobRef.Map.fold (fun k se -> f (Some k) se.sentry_mode (get_entry se)) db.hintdb_map accu
 
   let transparent_state db = db.hintdb_state
 
@@ -720,11 +724,20 @@ struct
   let add_mode gr m db =
     let se = find gr db in
     let se = { se with sentry_mode = m :: se.sentry_mode } in
-    { db with hintdb_map = Constr_map.add gr se db.hintdb_map }
+    { db with hintdb_map = GlobRef.Map.add gr se db.hintdb_map }
 
   let cut db = db.hintdb_cut
 
   let unfolds db = db.hintdb_unfolds
+
+  let add_modes modes db =
+    let f gr e me =
+      Some { e with sentry_mode = me.sentry_mode @ e.sentry_mode }
+    in
+    let mode_entries = GlobRef.Map.map (fun m -> { empty_se with sentry_mode = m }) modes in
+    { db with hintdb_map = GlobRef.Map.union f db.hintdb_map mode_entries }
+
+  let modes db = GlobRef.Map.map (fun se -> se.sentry_mode) db.hintdb_map
 
   let use_dn db = db.use_dn
 
@@ -734,17 +747,7 @@ module Hintdbmap = String.Map
 
 type hint_db = Hint_db.t
 
-(** Initially created hint databases, for typeclasses and rewrite *)
-
-let typeclasses_db = "typeclass_instances"
-let rewrite_db = "rewrite"
-
-let auto_init_db =
-  Hintdbmap.add typeclasses_db (Hint_db.empty full_transparent_state true)
-    (Hintdbmap.add rewrite_db (Hint_db.empty cst_full_transparent_state true)
-       Hintdbmap.empty)
-
-let searchtable = Summary.ref ~name:"searchtable" auto_init_db
+let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 let statustable = Summary.ref ~name:"statustable" KNmap.empty
 
 let searchtable_map name =
@@ -942,7 +945,7 @@ let make_extern pri pat tacast =
 
 let make_mode ref m = 
   let open Term in
-  let ty, _ = Global.type_of_global_in_context (Global.env ()) ref in
+  let ty, _ = Typeops.type_of_global_in_context (Global.env ()) ref in
   let ctx, t = decompose_prod ty in
   let n = List.length ctx in
   let m' = Array.of_list m in
@@ -977,7 +980,7 @@ let make_trivial env sigma poly ?(name=PathAny) r =
 
 let get_db dbname =
   try searchtable_map dbname
-  with Not_found -> Hint_db.empty ~name:dbname empty_transparent_state false
+  with Not_found -> Hint_db.empty ~name:dbname TransparentState.empty false
 
 let add_hint dbname hintlist =
   let check (_, h) =
@@ -995,18 +998,19 @@ let add_hint dbname hintlist =
     searchtable_add (dbname,db')
 
 let add_transparency dbname target b =
+  let open TransparentState in
   let db = get_db dbname in
-  let (ids, csts as st) = Hint_db.transparent_state db in
+  let st = Hint_db.transparent_state db in
   let st' =
     match target with
-    | HintsVariables -> (if b then Id.Pred.full else Id.Pred.empty), csts
-    | HintsConstants -> ids, if b then Cpred.full else Cpred.empty
+    | HintsVariables -> { st with tr_var = (if b then Id.Pred.full else Id.Pred.empty) }
+    | HintsConstants -> { st with tr_cst = (if b then Cpred.full else Cpred.empty) }
     | HintsReferences grs ->
-       List.fold_left (fun (ids, csts) gr ->
-       match gr with
-       | EvalConstRef c -> (ids, (if b then Cpred.add else Cpred.remove) c csts)
-       | EvalVarRef v -> (if b then Id.Pred.add else Id.Pred.remove) v ids, csts)
-                      st grs
+      List.fold_left (fun st gr ->
+        match gr with
+        | EvalConstRef c -> { st with tr_cst = (if b then Cpred.add else Cpred.remove) c st.tr_cst }
+        | EvalVarRef v -> { st with tr_var = (if b then Id.Pred.add else Id.Pred.remove) v st.tr_var })
+        st grs
   in searchtable_add (dbname, Hint_db.set_transparent_state db st')
 
 let remove_hint dbname grs =
@@ -1015,7 +1019,7 @@ let remove_hint dbname grs =
     searchtable_add (dbname, db')
 
 type hint_action =
-  | CreateDB of bool * transparent_state
+  | CreateDB of bool * TransparentState.t
   | AddTransparency of evaluable_global_reference hints_transparency_target * bool
   | AddHints of hint_entry list
   | RemoveHints of GlobRef.t list
@@ -1060,16 +1064,18 @@ let cache_autohint (kn, obj) =
 
 let subst_autohint (subst, obj) =
   let subst_key gr =
-    let (lab'', elab') = subst_global subst gr in
-    let elab' = EConstr.of_constr elab' in
-    let gr' =
-      (try head_constr_bound Evd.empty elab'
-       with Bound -> lab'')
-    in if gr' == gr then gr else gr'
+    let (gr', t) = subst_global subst gr in
+    match t with
+    | None -> gr'
+    | Some t ->
+      (try head_constr_bound Evd.empty (EConstr.of_constr t.Univ.univ_abstracted_value)
+       with Bound -> gr')
   in
   let subst_hint (k,data as hint) =
     let k' = Option.Smart.map subst_key k in
-    let pat' = Option.Smart.map (subst_pattern subst) data.pat in
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    let pat' = Option.Smart.map (subst_pattern env sigma subst) data.pat in
     let subst_mps subst c = EConstr.of_constr (subst_mps subst (EConstr.Unsafe.to_constr c)) in
     let code' = match data.code.obj with
       | Res_pf (c,t,ctx) ->
@@ -1272,7 +1278,7 @@ let prepare_hint check (poly,local) env init (sigma,c) =
       let id = next_ident_away_from default_prepare_hint_ident (fun id -> Id.Set.mem id !vars) in
       vars := Id.Set.add id !vars;
       subst := (evar,mkVar id)::!subst;
-      mkNamedLambda id t (iter (replace_term sigma evar (mkVar id) c)) in
+      mkNamedLambda (make_annot id Sorts.Relevant) t (iter (replace_term sigma evar (mkVar id) c)) in
   let c' = iter c in
     let env = Global.env () in
     let empty_sigma = Evd.from_env env in
@@ -1302,11 +1308,11 @@ let project_hint ~poly pri l2r r =
   let sigma, p = Evd.fresh_global env sigma p in
   let c = Reductionops.whd_beta sigma (mkApp (c, Context.Rel.to_extended_vect mkRel 0 sign)) in
   let c = it_mkLambda_or_LetIn
-    (mkApp (p,[|mkArrow a (lift 1 b);mkArrow b (lift 1 a);c|])) sign in
+    (mkApp (p,[|mkArrow a Sorts.Relevant (lift 1 b);mkArrow b Sorts.Relevant (lift 1 a);c|])) sign in
   let id =
     Nameops.add_suffix (Nametab.basename_of_global gr) ("_proj_" ^ (if l2r then "l2r" else "r2l"))
   in
-  let ctx = Evd.const_univ_entry ~poly sigma in
+  let ctx = Evd.univ_entry ~poly sigma in
   let c = EConstr.to_constr sigma c in
   let c = Declare.declare_definition ~internal:Declare.InternalTacticRequest id (c,ctx) in
   let info = {Typeclasses.hint_priority = pri; hint_pattern = None} in
@@ -1358,7 +1364,7 @@ let interp_hints poly =
         let ind = global_inductive_with_alias qid in
 	let mib,_ = Global.lookup_inductive ind in
         Dumpglob.dump_reference ?loc:qid.CAst.loc "<>" (string_of_qualid qid) "ind";
-          List.init (nconstructors ind) 
+          List.init (nconstructors env ind)
 	    (fun i -> let c = (ind,i+1) in
 		      let gr = ConstructRef c in
 			empty_hint_info, 
@@ -1373,10 +1379,10 @@ let interp_hints poly =
       let _, tacexp = Genintern.generic_intern env tacexp in
       HintsExternEntry ({ hint_priority = Some pri; hint_pattern = pat }, tacexp)
 
-let add_hints ~local dbnames0 h =
-  if String.List.mem "nocore" dbnames0 then
+let add_hints ~local dbnames h =
+  if String.List.mem "nocore" dbnames then
     user_err Pp.(str "The hint database \"nocore\" is meant to stay empty.");
-  let dbnames = if List.is_empty dbnames0 then ["core"] else dbnames0 in
+  assert (not (List.is_empty dbnames));
   let env = Global.env() in
   let sigma = Evd.from_env env in
   match h with
@@ -1394,7 +1400,7 @@ let expand_constructor_hints env sigma lems =
   List.map_append (fun (evd,lem) ->
     match EConstr.kind sigma lem with
     | Ind (ind,u) ->
-	List.init (nconstructors ind) 
+        List.init (nconstructors env ind)
 		  (fun i ->
 		   let ctx = Univ.ContextSet.diff (Evd.universe_context_set evd)
 						  (Evd.universe_context_set sigma) in
@@ -1453,7 +1459,7 @@ let pr_hint env sigma h = match h.obj with
   | Unfold_nth c ->
     str"unfold " ++  pr_evaluable_reference c
   | Extern tac ->
-    str "(*external*) " ++ Pputils.pr_glb_generic env tac
+    str "(*external*) " ++ Pputils.pr_glb_generic env sigma tac
 
 let pr_id_hint env sigma (id, v) =
   let pr_pat p = str", pattern " ++ pr_lconstr_pattern_env env sigma p in
@@ -1510,11 +1516,11 @@ let pr_hint_term env sigma cl =
     (str "No hint applicable for current goal")
 
 (* print all hints that apply to the concl of the current goal *)
-let pr_applicable_hint () =
+let pr_applicable_hint pf =
   let env = Global.env () in
-  let pts = Proof_global.give_me_the_proof () in
-  let glss,_,_,_,sigma = Proof.proof pts in
-  match glss with
+  let pts = Proof_global.give_me_the_proof pf in
+  let Proof.{goals;sigma} = Proof.data pts in
+  match goals with
   | [] -> CErrors.user_err Pp.(str "No focused goal.")
   | g::_ ->
     pr_hint_term env sigma (Goal.V82.concl sigma g)
@@ -1543,7 +1549,7 @@ let pr_hint_db_env env sigma db =
     in
     Hint_db.fold fold db (mt ())
   in
-  let (ids, csts) = Hint_db.transparent_state db in
+  let { TransparentState.tr_var = ids; tr_cst = csts } = Hint_db.transparent_state db in
   hov 0
     ((if Hint_db.use_dn db then str"Discriminated database"
       else str"Non-discriminated database")) ++ fnl () ++
@@ -1582,7 +1588,7 @@ let log_hint h =
   let store = get_extra_data sigma in
   match Store.get store hint_trace with
   | None ->
-    (** All calls to hint logging should be well-scoped *)
+    (* All calls to hint logging should be well-scoped *)
     assert false
   | Some trace ->
     let trace = KNmap.add h.uid h trace in

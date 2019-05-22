@@ -14,10 +14,9 @@ open Util
 open System
 open Names
 open Check
+open Environ
 
 let () = at_exit flush_all
-
-let pp_arrayi pp fmt a = Array.iteri (fun i x -> pp fmt (i,x)) a
 
 let fatal_error info anomaly =
   flush_all (); Format.eprintf "@[Fatal Error: @[%a@]@]@\n%!" Pp.pp_with info; flush_all ();
@@ -137,10 +136,18 @@ let init_load_path () =
 
 let set_debug () = Flags.debug := true
 
-let impredicative_set = ref Cic.PredicativeSet
-let set_impredicative_set () = impredicative_set := Cic.ImpredicativeSet
-let engage () = Safe_typing.set_engagement (!impredicative_set)
+let impredicative_set = ref Declarations.PredicativeSet
+let set_impredicative_set () = impredicative_set := Declarations.ImpredicativeSet
 
+let indices_matter = ref false
+
+let make_senv () =
+  let senv = Safe_typing.empty_environment in
+  let senv = Safe_typing.set_engagement !impredicative_set senv in
+  let senv = Safe_typing.set_indices_matter !indices_matter senv in
+  let senv = Safe_typing.set_VM false senv in
+  let senv = Safe_typing.set_allow_sprop true senv in (* be smarter later *)
+  Safe_typing.set_native_compiler false senv
 
 let admit_list = ref ([] : object_file list)
 let add_admit s =
@@ -158,8 +165,8 @@ let add_compile s =
     We no longer use [Arg.parse], in order to use share [Usage.print_usage]
     between coqtop and coqc. *)
 
-let compile_files () =
-  Check.recheck_library
+let compile_files senv =
+  Check.recheck_library senv
     ~norec:(List.rev !norec_list)
     ~admit:(List.rev !admit_list)
     ~check:(List.rev !compile_list)
@@ -183,9 +190,9 @@ let print_usage_channel co command =
 \n  -admit module          load module and dependencies without checking\
 \n  -norec module          check module but admit dependencies without checking\
 \n\
+\n  -coqlib dir            set coqchk's standard library location\
 \n  -where                 print coqchk's standard library location and exit\
 \n  -v                     print coqchk version and exit\
-\n  -boot                  boot mode\
 \n  -o, --output-context   print the list of assumptions\
 \n  -m, --memory           print the maximum heap size\
 \n  -silent                disable trace of constants being checked\
@@ -244,16 +251,13 @@ let explain_exn = function
       hov 0 (anomaly_string () ++ str "uncaught exception Invalid_argument " ++ guill s ++ report ())
   | Sys.Break ->
     hov 0 (fnl () ++ str "User interrupt.")
-  | Univ.AlreadyDeclared ->
-    hov 0 (str "Error: Multiply declared universe.")
-  | Univ.UniverseInconsistency (o,u,v) ->
-      let msg =
-	if !Flags.debug (*!Constrextern.print_universes*) then
-	  spc() ++ str "(cannot enforce" ++ spc() ++ Univ.pr_uni u ++ spc() ++
-          str (match o with Univ.Lt -> "<" | Univ.Le -> "<=" | Univ.Eq -> "=")
-	  ++ spc() ++ Univ.pr_uni v ++ str")"
-	else
-	  mt() in
+  | Univ.UniverseInconsistency i ->
+    let msg =
+      if !Flags.debug then
+        str "." ++ spc() ++
+          Univ.explain_universe_inconsistency Univ.Level.pr i
+      else
+        mt() in
       hov 0 (str "Error: Universe inconsistency" ++ msg ++ str ".")
   | TypeError(ctx,te) ->
       hov 0 (str "Type error: " ++
@@ -270,37 +274,42 @@ let explain_exn = function
       | IllFormedBranch _ -> str"IllFormedBranch"
       | Generalization _ -> str"Generalization"
       | ActualType _ -> str"ActualType"
-      | CantApplyBadType ((n,a,b),(hd,hdty),args) ->
-        (* This mix of printf / pp was here before... *)
-        let fmt = Format.std_formatter in
-        let open Format in
-        let open Print in
-        fprintf fmt "====== ill-typed term ====@\n";
-        fprintf fmt "@[<hov 2>application head=@ %a@]@\n" print_pure_constr hd;
-        fprintf fmt "@[<hov 2>head type=@ %a@]@\n" print_pure_constr hdty;
-        let pp_arg fmt (i,(t,ty)) = fprintf fmt "@[<hv>@[<1>arg %d=@ @[%a@]@]@,@[<1>type=@ @[%a@]@]@]@\n@," (i+1)
-            print_pure_constr t print_pure_constr ty
+      | IncorrectPrimitive _ -> str"IncorrectPrimitive"
+      | CantApplyBadType ((n,a,b),{uj_val = hd; uj_type = hdty},args) ->
+        let pp_arg i judge =
+          hv 1 (str"arg " ++ int (i+1) ++ str"= " ++
+                Constr.debug_print judge.uj_val ++
+                str ",type= " ++ Constr.debug_print judge.uj_type) ++ fnl ()
         in
-        fprintf fmt "arguments:@\n@[<hv>%a@]@\n" (pp_arrayi pp_arg) args;
-        fprintf fmt "====== type error ====@\n";
-        fprintf fmt "%a@\n" print_pure_constr b;
-        fprintf fmt "is not convertible with@\n";
-        fprintf fmt "%a@\n" print_pure_constr a;
-        fprintf fmt "====== universes ====@\n";
-        fprintf fmt "%a@\n%!" Pp.pp_with
-          (Univ.pr_universes
-             (ctx.Environ.env_stratification.Environ.env_universes));
+        Feedback.msg_notice (str"====== ill-typed term ====" ++ fnl () ++
+                       hov 2 (str"application head= " ++ Constr.debug_print hd) ++ fnl () ++
+                       hov 2 (str"head type= " ++ Constr.debug_print hdty) ++ fnl () ++
+                       str"arguments:" ++ fnl () ++ hv 1 (prvecti pp_arg args));
+        Feedback.msg_notice (str"====== type error ====@" ++ fnl () ++
+                             Constr.debug_print b ++ fnl () ++
+                             str"is not convertible with" ++ fnl () ++
+                             Constr.debug_print a ++ fnl ());
+        Feedback.msg_notice (str"====== universes ====" ++ fnl () ++
+                             (UGraph.pr_universes Univ.Level.pr
+                                (ctx.Environ.env_stratification.Environ.env_universes)));
         str "CantApplyBadType at argument " ++ int n
       | CantApplyNonFunctional _ -> str"CantApplyNonFunctional"
       | IllFormedRecBody _ -> str"IllFormedRecBody"
       | IllTypedRecBody _ -> str"IllTypedRecBody"
-      | UnsatisfiedConstraints _ -> str"UnsatisfiedConstraints"))
+      | UnsatisfiedConstraints _ -> str"UnsatisfiedConstraints"
+      | DisallowedSProp -> str"DisallowedSProp"
+      | BadRelevance -> str"BadRelevance"
+      | UndeclaredUniverse _ -> str"UndeclaredUniverse"))
 
-  | Indtypes.InductiveError e ->
+  | InductiveError e ->
       hov 0 (str "Error related to inductive types")
 (*      let ctx = Check.get_env() in
       hov 0
         (str "Error:" ++ spc () ++ Himsg.explain_inductive_error ctx e)*)
+
+  | CheckInductive.InductiveMismatch (mind,field) ->
+    hov 0 (MutInd.print mind ++ str ": field " ++ str field ++ str " is incorrect.")
+
   | Assert_failure (s,b,e) ->
       hov 0 (anomaly_string () ++ str "assert failure" ++ spc () ++
 	       (if s = "" then mt ()
@@ -319,6 +328,9 @@ let parse_args argv =
     | [] -> ()
     | "-impredicative-set" :: rem ->
       set_impredicative_set (); parse rem
+
+    | "-indices-matter" :: rem ->
+      indices_matter:=true; parse rem
 
     | "-coqlib" :: s :: rem ->
       if not (exists_dir s) then 
@@ -340,14 +352,13 @@ let parse_args argv =
     | "-debug" :: rem -> set_debug (); parse rem
 
     | "-where" :: _ ->
-        Envars.set_coqlib ~fail:(fun x -> CErrors.user_err Pp.(str x));
-        print_endline (Envars.coqlib ());
-        exit 0
+      Envars.set_coqlib ~fail:(fun x -> CErrors.user_err Pp.(str x));
+      print_endline (Envars.coqlib ());
+      exit 0
 
     | ("-?"|"-h"|"-H"|"-help"|"--help") :: _ -> usage ()
 
     | ("-v"|"--version") :: _ -> version ()
-    | "-boot" :: rem -> Flags.boot := true; parse rem
     | ("-m" | "--memory") :: rem -> Check_stat.memory_stat := true; parse rem
     | ("-o" | "--output-context") :: rem ->
         Check_stat.output_context := true; parse rem
@@ -368,35 +379,34 @@ let parse_args argv =
   parse (List.tl (Array.to_list argv))
 
 
-(* To prevent from doing the initialization twice *)
-let initialized = ref false
-
 (* XXX: At some point we need to either port the checker to use the
    feedback system or to remove its use completely. *)
 let init_with_argv argv =
-  if not !initialized then begin
-    initialized := true;
-    Sys.catch_break false; (* Ctrl-C is fatal during the initialisation *)
-    let _fhandle = Feedback.(add_feeder (console_feedback_listener Format.err_formatter)) in
-    try
-      parse_args argv;
-      if !Flags.debug then Printexc.record_backtrace true;
-      Envars.set_coqlib ~fail:(fun x -> CErrors.user_err Pp.(str x));
-      Flags.if_verbose print_header ();
-      init_load_path ();
-      engage ();
-    with e ->
-      fatal_error (str "Error during initialization :" ++ (explain_exn e)) (is_anomaly e)
-  end
+  Sys.catch_break false; (* Ctrl-C is fatal during the initialisation *)
+  let _fhandle = Feedback.(add_feeder (console_feedback_listener Format.err_formatter)) in
+  try
+    parse_args argv;
+    CWarnings.set_flags ("+"^Typeops.warn_bad_relevance_name);
+    if !Flags.debug then Printexc.record_backtrace true;
+    Envars.set_coqlib ~fail:(fun x -> CErrors.user_err Pp.(str x));
+    Flags.if_verbose print_header ();
+    init_load_path ();
+    make_senv ()
+  with e ->
+    fatal_error (str "Error during initialization :" ++ (explain_exn e)) (is_anomaly e)
 
 let init() = init_with_argv Sys.argv
 
-let run () =
+let run senv =
   try
-    compile_files ();
-    flush_all()
+    let senv = compile_files senv in
+    flush_all(); senv
   with e ->
     if !Flags.debug then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (is_anomaly e)
 
-let start () = init(); run(); Check_stat.stats(); exit 0
+let start () =
+  let senv = init() in
+  let senv = run senv in
+  Check_stat.stats (Safe_typing.env_of_safe_env senv);
+  exit 0

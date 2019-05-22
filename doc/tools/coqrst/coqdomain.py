@@ -30,7 +30,7 @@ from sphinx import addnodes
 from sphinx.roles import XRefRole
 from sphinx.errors import ExtensionError
 from sphinx.util.nodes import set_source_info, set_role_source_info, make_refnode
-from sphinx.util.logging import getLogger
+from sphinx.util.logging import getLogger, get_node_location
 from sphinx.directives import ObjectDescription
 from sphinx.domains import Domain, ObjType, Index
 from sphinx.domains.std import token_xrefs
@@ -38,15 +38,30 @@ from sphinx.ext import mathbase
 
 from . import coqdoc
 from .repl import ansicolors
-from .repl.coqtop import CoqTop
+from .repl.coqtop import CoqTop, CoqTopError
+from .notations.parsing import ParseError
 from .notations.sphinx import sphinxify
 from .notations.plain import stringify_with_ellipses
 
-def parse_notation(notation, source, line, rawtext=None):
+PARSE_ERROR = """Parse error in notation!
+Offending notation: {}
+Error message: {}"""
+
+def notation_to_sphinx(notation, source, line, rawtext=None):
     """Parse notation and wrap it in an inline node"""
-    node = nodes.inline(rawtext or notation, '', *sphinxify(notation), classes=['notation'])
-    node.source, node.line = source, line
-    return node
+    try:
+        node = nodes.inline(rawtext or notation, '', *sphinxify(notation), classes=['notation'])
+        node.source, node.line = source, line
+        return node
+    except ParseError as e:
+        raise ExtensionError(PARSE_ERROR.format(notation, e.msg)) from e
+
+def notation_to_string(notation):
+    """Parse notation and format it as a string with ellipses."""
+    try:
+        return stringify_with_ellipses(notation)
+    except ParseError as e:
+        raise ExtensionError(PARSE_ERROR.format(notation, e.msg)) from e
 
 def highlight_using_coqdoc(sentence):
     """Lex sentence using coqdoc, and yield inline nodes for each token"""
@@ -136,18 +151,11 @@ class CoqObject(ObjectDescription):
         self._render_signature(signature, signode)
         name = self._names.get(signature)
         if name is None:
-            name = self._name_from_signature(signature)
+            name = self._name_from_signature(signature) # pylint: disable=assignment-from-none
             # remove trailing ‘.’ found in commands, but not ‘...’ (ellipsis)
             if name is not None and name.endswith(".") and not name.endswith("..."):
                 name = name[:-1]
         return name
-
-    def _warn_if_duplicate_name(self, objects, name):
-        """Check that two objects in the same domain don't have the same name."""
-        if name in objects:
-            MSG = 'Duplicate object: {}; other is at {}'
-            msg = MSG.format(name, self.env.doc2path(objects[name][0]))
-            self.state_machine.reporter.warning(msg, line=self.lineno)
 
     def _warn_if_duplicate_name(self, objects, name):
         """Check that two objects in the same domain don't have the same name."""
@@ -198,20 +206,6 @@ class CoqObject(ObjectDescription):
             self._add_index_entry(name, target)
             return target
 
-    def _warn_if_undocumented(self):
-        document = self.state.document
-        config = document.settings.env.config
-        report = config.report_undocumented_coq_objects
-        if report and not self.content and "undocumented" not in self.options:
-            # This is annoyingly convoluted, but we don't want to raise warnings
-            # or interrupt the generation of the current node.  For more details
-            # see https://github.com/sphinx-doc/sphinx/issues/4976.
-            msg = 'No contents in directive {}'.format(self.name)
-            node = document.reporter.info(msg, line=self.lineno)
-            getLogger(__name__).info(node.astext())
-            if report == "warning":
-                raise self.warning(msg)
-
     def _prepare_names(self):
         sigs = self.get_signatures()
         names = self.options.get("name")
@@ -226,16 +220,35 @@ class CoqObject(ObjectDescription):
             self._names = dict(zip(sigs, names))
 
     def run(self):
-        self._warn_if_undocumented()
         self._prepare_names()
         return super().run()
 
-class PlainObject(CoqObject):
+class DocumentableObject(CoqObject):
+
+    def _warn_if_undocumented(self):
+        document = self.state.document
+        config = document.settings.env.config
+        report = config.report_undocumented_coq_objects
+        if report and not self.content and "undocumented" not in self.options:
+            # This is annoyingly convoluted, but we don't want to raise warnings
+            # or interrupt the generation of the current node.  For more details
+            # see https://github.com/sphinx-doc/sphinx/issues/4976.
+            msg = 'No contents in directive {}'.format(self.name)
+            node = document.reporter.info(msg, line=self.lineno)
+            getLogger(__name__).info(node.astext())
+            if report == "warning":
+                raise self.warning(msg)
+
+    def run(self):
+        self._warn_if_undocumented()
+        return super().run()
+
+class PlainObject(DocumentableObject):
     """A base class for objects whose signatures should be rendered literally."""
     def _render_signature(self, signature, signode):
         signode += addnodes.desc_name(signature, signature)
 
-class NotationObject(CoqObject):
+class NotationObject(DocumentableObject):
     """A base class for objects whose signatures should be rendered as nested boxes.
 
     Objects that inherit from this class can use the notation grammar (“{+ …}”,
@@ -243,7 +256,7 @@ class NotationObject(CoqObject):
     """
     def _render_signature(self, signature, signode):
         position = self.state_machine.get_source_and_line(self.lineno)
-        tacn_node = parse_notation(signature, *position)
+        tacn_node = notation_to_sphinx(signature, *position)
         signode += addnodes.desc_name(signature, '', tacn_node)
 
 class GallinaObject(PlainObject):
@@ -348,7 +361,7 @@ class OptionObject(NotationObject):
     annotation = "Option"
 
     def _name_from_signature(self, signature):
-        return stringify_with_ellipses(signature)
+        return notation_to_string(signature)
 
 
 class FlagObject(NotationObject):
@@ -367,7 +380,7 @@ class FlagObject(NotationObject):
     annotation = "Flag"
 
     def _name_from_signature(self, signature):
-        return stringify_with_ellipses(signature)
+        return notation_to_string(signature)
 
 
 class TableObject(NotationObject):
@@ -385,7 +398,7 @@ class TableObject(NotationObject):
     annotation = "Table"
 
     def _name_from_signature(self, signature):
-        return stringify_with_ellipses(signature)
+        return notation_to_string(signature)
 
 class ProductionObject(CoqObject):
     r"""A grammar production.
@@ -405,7 +418,7 @@ class ProductionObject(CoqObject):
     Example::
 
         .. prodn:: term += let: @pattern := @term in @term
-        .. prodn:: occ_switch ::= { {? + %| - } {* @num } }
+        .. prodn:: occ_switch ::= { {? {| + | - } } {* @num } }
 
     """
     subdomain = "prodn"
@@ -434,7 +447,7 @@ class ProductionObject(CoqObject):
         lhs_node = nodes.literal(lhs_op, lhs_op)
 
         position = self.state_machine.get_source_and_line(self.lineno)
-        rhs_node = parse_notation(rhs, *position)
+        rhs_node = notation_to_sphinx(rhs, *position)
         signode += addnodes.desc_name(signature, '', lhs_node, rhs_node)
 
         return ('token', lhs) if op == '::=' else None
@@ -477,7 +490,7 @@ class ExceptionObject(NotationObject):
 
     # Generate names automatically
     def _name_from_signature(self, signature):
-        return stringify_with_ellipses(signature)
+        return notation_to_string(signature)
 
 class WarningObject(NotationObject):
     """An warning raised by a Coq command or tactic..
@@ -499,7 +512,7 @@ class WarningObject(NotationObject):
 
     # Generate names automatically
     def _name_from_signature(self, signature):
-        return stringify_with_ellipses(signature)
+        return notation_to_string(signature)
 
 def NotationRole(role, rawtext, text, lineno, inliner, options={}, content=[]):
     #pylint: disable=unused-argument, dangerous-default-value
@@ -518,7 +531,7 @@ def NotationRole(role, rawtext, text, lineno, inliner, options={}, content=[]):
     """
     notation = utils.unescape(text, 1)
     position = inliner.reporter.get_source_and_line(lineno)
-    return [nodes.literal(rawtext, '', parse_notation(notation, *position, rawtext=rawtext))], []
+    return [nodes.literal(rawtext, '', notation_to_sphinx(notation, *position, rawtext=rawtext))], []
 
 def coq_code_role(role, rawtext, text, lineno, inliner, options={}, content=[]):
     #pylint: disable=dangerous-default-value
@@ -555,17 +568,17 @@ class CoqtopDirective(Directive):
 
     Example::
 
-       .. coqtop:: in reset undo
+       .. coqtop:: in reset
 
           Print nat.
           Definition a := 1.
 
     The blank line after the directive is required.  If you begin a proof,
-    include an ``Abort`` afterwards to reset coqtop for the next example.
+    use the ``abort`` option to reset coqtop for the next example.
 
     Here is a list of permissible options:
 
-    - Display options
+    - Display options (choose exactly one)
 
       - ``all``: Display input and output
       - ``in``: Display only input
@@ -575,16 +588,18 @@ class CoqtopDirective(Directive):
     - Behavior options
 
       - ``reset``: Send a ``Reset Initial`` command before running this block
-      - ``undo``: Send an ``Undo n`` (``n`` = number of sentences) command after
-        running all the commands in this block
+      - ``fail``: Don't die if a command fails, implies ``warn`` (so no need to put both)
+      - ``warn``: Don't die if a command emits a warning
+      - ``restart``: Send a ``Restart`` command before running this block (only works in proof mode)
+      - ``abort``: Send an ``Abort All`` command after running this block (leaves all pending proofs if any)
 
     ``coqtop``\ 's state is preserved across consecutive ``.. coqtop::`` blocks
     of the same document (``coqrst`` creates a single ``coqtop`` process per
     reST source file).  Use the ``reset`` option to reset Coq's state.
     """
     has_content = True
-    required_arguments = 0
-    optional_arguments = 1
+    required_arguments = 1
+    optional_arguments = 0
     final_argument_whitespace = True
     option_spec = { 'name': directives.unchanged }
     directive_name = "coqtop"
@@ -593,10 +608,8 @@ class CoqtopDirective(Directive):
         # Uses a ‘container’ instead of a ‘literal_block’ to disable
         # Pygments-based post-processing (we could also set rawsource to '')
         content = '\n'.join(self.content)
-        args = self.arguments[0].split() if self.arguments else ['in']
-        if 'all' in args:
-            args.extend(['in', 'out'])
-        node = nodes.container(content, coqtop_options = list(set(args)),
+        args = self.arguments[0].split()
+        node = nodes.container(content, coqtop_options = set(args),
                                classes=['coqtop', 'literal-block'])
         self.add_name(node)
         return [node]
@@ -823,22 +836,45 @@ class CoqtopBlocksTransform(Transform):
         return re.split(r"(?<=(?<!\.)\.)\s+", source)
 
     @staticmethod
-    def parse_options(options):
+    def parse_options(node):
         """Parse options according to the description in CoqtopDirective."""
-        opt_undo = 'undo' in options
+
+        options = node['coqtop_options']
+
+        # Behavior options
         opt_reset = 'reset' in options
-        opt_all, opt_none = 'all' in options, 'none' in options
-        opt_input, opt_output = opt_all or 'in' in options, opt_all or 'out' in options
+        opt_fail = 'fail' in options
+        opt_warn = 'warn' in options
+        opt_restart = 'restart' in options
+        opt_abort = 'abort' in options
+        options = options - {'reset', 'fail', 'warn', 'restart', 'abort'}
 
-        unexpected_options = list(set(options) - set(('reset', 'undo', 'all', 'none', 'in', 'out')))
+        unexpected_options = list(options - {'all', 'none', 'in', 'out'})
         if unexpected_options:
-            raise ValueError("Unexpected options for .. coqtop:: {}".format(unexpected_options))
-        elif (opt_input or opt_output) and opt_none:
-            raise ValueError("Inconsistent options for .. coqtop:: ‘none’ with ‘in’, ‘out’, or ‘all’")
-        elif opt_reset and opt_undo:
-            raise ValueError("Inconsistent options for .. coqtop:: ‘undo’ with ‘reset’")
+            loc = get_node_location(node)
+            raise ExtensionError("{}: Unexpected options for .. coqtop:: {}".format(loc,unexpected_options))
 
-        return opt_undo, opt_reset, opt_input and not opt_none, opt_output and not opt_none
+        # Display options
+        if len(options) != 1:
+            loc = get_node_location(node)
+            raise ExtensionError("{}: Exactly one display option must be passed to .. coqtop::".format(loc))
+
+        opt_all = 'all' in options
+        opt_none = 'none' in options
+        opt_input = 'in' in options
+        opt_output = 'out' in options
+
+        return {
+            'reset': opt_reset,
+            'fail': opt_fail,
+            # if errors are allowed, then warnings too
+            # and they should be displayed as warnings, not errors
+            'warn': opt_warn or opt_fail,
+            'restart': opt_restart,
+            'abort': opt_abort,
+            'input': opt_input or opt_all,
+            'output': opt_output or opt_all
+        }
 
     @staticmethod
     def block_classes(should_show, contents=None):
@@ -862,36 +898,63 @@ class CoqtopBlocksTransform(Transform):
                 blocks.append(re.sub("^", "    ", output, flags=re.MULTILINE) + "\n")
         return '\n'.join(blocks)
 
+    def add_coq_output_1(self, repl, node):
+        options = self.parse_options(node)
+
+        pairs = []
+
+        if options['restart']:
+            repl.sendone('Restart.')
+        if options['reset']:
+            repl.sendone('Reset Initial.')
+            repl.send_initial_options()
+        if options['fail']:
+            repl.sendone('Unset Coqtop Exit On Error.')
+        if options['warn']:
+            repl.sendone('Set Warnings "default".')
+        for sentence in self.split_sentences(node.rawsource):
+            pairs.append((sentence, repl.sendone(sentence)))
+        if options['abort']:
+            repl.sendone('Abort All.')
+        if options['fail']:
+            repl.sendone('Set Coqtop Exit On Error.')
+        if options['warn']:
+            repl.sendone('Set Warnings "+default".')
+
+        dli = nodes.definition_list_item()
+        for sentence, output in pairs:
+            # Use Coqdoc to highlight input
+            in_chunks = highlight_using_coqdoc(sentence)
+            dli += nodes.term(sentence, '', *in_chunks, classes=self.block_classes(options['input']))
+            # Parse ANSI sequences to highlight output
+            out_chunks = AnsiColorsParser().colorize_str(output)
+            dli += nodes.definition(output, *out_chunks, classes=self.block_classes(options['output'], output))
+        node.clear()
+        node.rawsource = self.make_rawsource(pairs, options['input'], options['output'])
+        node['classes'].extend(self.block_classes(options['input'] or options['output']))
+        node += nodes.inline('', '', classes=['coqtop-reset'] * options['reset'])
+        node += nodes.definition_list(node.rawsource, dli)
+
     def add_coqtop_output(self):
         """Add coqtop's responses to a Sphinx AST
 
         Finds nodes to process using is_coqtop_block."""
         with CoqTop(color=True) as repl:
+            repl.send_initial_options()
             for node in self.document.traverse(CoqtopBlocksTransform.is_coqtop_block):
-                options = node['coqtop_options']
-                opt_undo, opt_reset, opt_input, opt_output = self.parse_options(options)
-
-                if opt_reset:
-                    repl.sendone("Reset Initial.")
-                pairs = []
-                for sentence in self.split_sentences(node.rawsource):
-                    pairs.append((sentence, repl.sendone(sentence)))
-                if opt_undo:
-                    repl.sendone("Undo {}.".format(len(pairs)))
-
-                dli = nodes.definition_list_item()
-                for sentence, output in pairs:
-                    # Use Coqdoq to highlight input
-                    in_chunks = highlight_using_coqdoc(sentence)
-                    dli += nodes.term(sentence, '', *in_chunks, classes=self.block_classes(opt_input))
-                    # Parse ANSI sequences to highlight output
-                    out_chunks = AnsiColorsParser().colorize_str(output)
-                    dli += nodes.definition(output, *out_chunks, classes=self.block_classes(opt_output, output))
-                node.clear()
-                node.rawsource = self.make_rawsource(pairs, opt_input, opt_output)
-                node['classes'].extend(self.block_classes(opt_input or opt_output))
-                node += nodes.inline('', '', classes=['coqtop-reset'] * opt_reset)
-                node += nodes.definition_list(node.rawsource, dli)
+                try:
+                    self.add_coq_output_1(repl, node)
+                except CoqTopError as err:
+                    import textwrap
+                    MSG = ("{}: Error while sending the following to coqtop:\n{}" +
+                           "\n  coqtop output:\n{}" +
+                           "\n  Full error text:\n{}")
+                    indent = "    "
+                    loc = get_node_location(node)
+                    le = textwrap.indent(str(err.last_sentence), indent)
+                    bef = textwrap.indent(str(err.before), indent)
+                    fe = textwrap.indent(str(err.err), indent)
+                    raise ExtensionError(MSG.format(loc, le, bef, fe))
 
     @staticmethod
     def merge_coqtop_classes(kept_node, discarded_node):
@@ -1184,7 +1247,6 @@ def setup(app):
     app.connect('doctree-resolved', CoqtopBlocksTransform.merge_consecutive_coqtop_blocks)
 
     # Add extra styles
-    app.add_stylesheet("fonts.css")
     app.add_stylesheet("ansi.css")
     app.add_stylesheet("coqdoc.css")
     app.add_javascript("notations.js")

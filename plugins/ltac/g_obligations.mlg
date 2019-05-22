@@ -24,7 +24,7 @@ let (set_default_tactic, get_default_tactic, print_default_tactic) =
   Tactic_option.declare_tactic_option "Program tactic"
 
 let () =
-  (** Delay to recover the tactic imperatively *)
+  (* Delay to recover the tactic imperatively *)
   let tac = Proofview.tclBIND (Proofview.tclUNIT ()) begin fun () ->
     snd (get_default_tactic ())
   end in
@@ -45,7 +45,6 @@ let with_tac f tac =
  * Subtac. These entries are named Subtac.<foo>
  *)
 
-module Gram = Pcoq.Gram
 module Tactic = Pltac
 
 open Pcoq
@@ -81,25 +80,25 @@ GRAMMAR EXTEND Gram
 
 open Obligations
 
-let obligation obl tac = with_tac (fun t -> Obligations.obligation obl t) tac
-let next_obligation obl tac = with_tac (fun t -> Obligations.next_obligation obl t) tac
+let obligation ~pstate obl tac = Some (with_tac (fun t -> Obligations.obligation ~ontop:pstate obl t) tac)
+let next_obligation ~pstate obl tac = Some (with_tac (fun t -> Obligations.next_obligation ~ontop:pstate obl t) tac)
 
-let classify_obbl _ = Vernacexpr.(VtStartProof ("Classic",Doesn'tGuaranteeOpacity,[]), VtLater)
+let classify_obbl _ = Vernacextend.(VtStartProof (Doesn'tGuaranteeOpacity,[]), VtLater)
 
 }
 
 VERNAC COMMAND EXTEND Obligations CLASSIFIED BY { classify_obbl }
-| [ "Obligation" integer(num) "of" ident(name) ":" lglob(t) withtac(tac) ] ->
+| ![ proof ] [ "Obligation" integer(num) "of" ident(name) ":" lglob(t) withtac(tac) ] ->
     { obligation (num, Some name, Some t) tac }
-| [ "Obligation" integer(num) "of" ident(name) withtac(tac) ] ->
+| ![ proof ] [ "Obligation" integer(num) "of" ident(name) withtac(tac) ] ->
     { obligation (num, Some name, None) tac }
-| [ "Obligation" integer(num) ":" lglob(t) withtac(tac) ] ->
+| ![ proof ] [ "Obligation" integer(num) ":" lglob(t) withtac(tac) ] ->
     { obligation (num, None, Some t) tac }
-| [ "Obligation" integer(num) withtac(tac) ] ->
+| ![ proof ] [ "Obligation" integer(num) withtac(tac) ] ->
     { obligation (num, None, None) tac }
-| [ "Next" "Obligation" "of" ident(name) withtac(tac) ] ->
+| ![ proof ] [ "Next" "Obligation" "of" ident(name) withtac(tac) ] ->
     { next_obligation (Some name) tac }
-| [ "Next" "Obligation" withtac(tac) ] -> { next_obligation None tac }
+| ![ proof ] [ "Next" "Obligation" withtac(tac) ] -> { next_obligation None tac }
 END
 
 VERNAC COMMAND EXTEND Solve_Obligation CLASSIFIED AS SIDEFF
@@ -131,10 +130,9 @@ VERNAC COMMAND EXTEND Admit_Obligations CLASSIFIED AS SIDEFF
 END
 
 VERNAC COMMAND EXTEND Set_Solver CLASSIFIED AS SIDEFF
-| [ "Obligation" "Tactic" ":=" tactic(t) ] -> {
-        let open Vernacinterp in
+| #[ locality = Attributes.locality; ] [ "Obligation" "Tactic" ":=" tactic(t) ] -> {
         set_default_tactic
-          (Locality.make_section_locality atts.locality)
+          (Locality.make_section_locality locality)
           (Tacintern.glob_tactic t);
   }
 END
@@ -164,9 +162,9 @@ END
 
 (* Declare a printer for the content of Program tactics *)
 let () =
-  let printer _ _ _ = function
+  let printer env sigma _ _ _ = function
   | None -> mt ()
-  | Some tac -> str "with" ++ spc () ++ Pptactic.pr_raw_tactic tac
+  | Some tac -> str "with" ++ spc () ++ Pptactic.pr_raw_tactic env sigma tac
   in
   Pptactic.declare_extra_vernac_genarg_pprule wit_withtac printer
 

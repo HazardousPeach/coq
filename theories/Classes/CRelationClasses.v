@@ -177,6 +177,7 @@ Section Defs.
    a rewrite crelation. *)
     
   Global Instance equivalence_rewrite_crelation `(Equivalence eqA) : RewriteRelation eqA.
+  Defined.
 
   (** Leibniz equality. *)
   Section Leibniz.
@@ -195,7 +196,10 @@ End Defs.
 
 (** Default rewrite crelations handled by [setoid_rewrite]. *)
 Instance: RewriteRelation impl.
+Defined.
+
 Instance: RewriteRelation iff.
+Defined.
 
 (** Hints to drive the typeclass resolution avoiding loops
  due to the use of full unification. *)
@@ -299,7 +303,8 @@ Section Binary.
     fun R R' => forall x y, iffT (R x y) (R' x y).
 
   Global Instance: RewriteRelation relation_equivalence.
-  
+  Defined.
+
   Definition relation_conjunction (R : crelation A) (R' : crelation A) : crelation A :=
     fun x y => prod (R x y) (R' x y).
 
@@ -310,9 +315,11 @@ Section Binary.
 
   Global Instance relation_equivalence_equivalence :
     Equivalence relation_equivalence.
-  Proof. split; red; unfold relation_equivalence, iffT. firstorder. 
-    firstorder. 
-    intros. specialize (X x0 y0). specialize (X0 x0 y0). firstorder.
+  Proof.
+    split; red; unfold relation_equivalence, iffT.
+    - firstorder.
+    - firstorder.
+    - intros. specialize (X x0 y0). specialize (X0 x0 y0). firstorder.
   Qed.
     
   Global Instance relation_implication_preorder : PreOrder (@subrelation A).
@@ -337,8 +344,11 @@ Section Binary.
   Qed.
 
   Lemma PartialOrder_inverse `(PartialOrder eqA R) : PartialOrder eqA (flip R).
-  Proof. unfold flip; constructor; unfold flip. intros. apply H. apply symmetry. apply X.
-         unfold relation_conjunction. intros [H1 H2]. apply H. constructor; assumption. Qed.
+  Proof.
+    unfold flip; constructor; unfold flip.
+    - intros. apply H. apply symmetry. apply X.
+    - unfold relation_conjunction. intros [H1 H2]. apply H. constructor; assumption.
+  Qed.
 End Binary.
 
 Hint Extern 3 (PartialOrder (flip _)) => class_apply PartialOrder_inverse : typeclass_instances.

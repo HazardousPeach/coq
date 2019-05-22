@@ -13,11 +13,75 @@ open Ssrmatching_plugin
 open Util
 open Names
 open Constr
+open Context
 
 open Proofview
 open Proofview.Notations
 
 open Ssrast
+
+type ssriop =
+  | IOpId of Names.Id.t
+  | IOpDrop
+  | IOpTemporay
+  | IOpInaccessible of string option
+  | IOpInaccessibleAll
+  | IOpAbstractVars of Names.Id.t list
+  | IOpFastNondep
+
+  | IOpInj of ssriops list
+
+  | IOpDispatchBlock of id_block
+  | IOpDispatchBranches of ssriops list
+
+  | IOpCaseBlock of id_block
+  | IOpCaseBranches of ssriops list
+
+  | IOpRewrite of ssrocc * ssrdir
+  | IOpView of ssrclear option * ssrview (* extra clears to be performed *)
+
+  | IOpClear of ssrclear * ssrhyp option (* must clear, may clear *)
+  | IOpSimpl of ssrsimpl
+
+  | IOpEqGen of unit Proofview.tactic (* generation of eqn *)
+
+  | IOpNoop
+
+and ssriops = ssriop list
+
+let rec pr_ipatop = function
+  | IOpId id -> Names.Id.print id
+  | IOpDrop -> Pp.str "_"
+  | IOpTemporay -> Pp.str "+"
+  | IOpInaccessible None -> Pp.str "?"
+  | IOpInaccessible (Some s) -> Pp.str ("?«"^s^"»")
+  | IOpInaccessibleAll -> Pp.str "*"
+  | IOpAbstractVars l -> Pp.str ("[:"^String.concat " " (List.map Names.Id.to_string l)^"]")
+  | IOpFastNondep -> Pp.str ">"
+
+  | IOpInj l -> Pp.(str "[=" ++ ppl l ++ str "]")
+
+  | IOpDispatchBlock b -> Pp.(str"(" ++ Ssrprinters.pr_block b ++ str")")
+  | IOpDispatchBranches l -> Pp.(str "(" ++ ppl l ++ str ")")
+
+  | IOpCaseBlock b -> Pp.(str"[" ++ Ssrprinters.pr_block b ++ str"]")
+  | IOpCaseBranches l -> Pp.(str "[" ++ ppl l ++ str "]")
+
+  | IOpRewrite (occ,dir) -> Pp.(Ssrprinters.(pr_occ occ ++ pr_dir dir))
+  | IOpView (None,vs) -> Pp.(prlist_with_sep mt (fun c -> str "/" ++ Ssrprinters.pr_ast_closure_term c) vs)
+  | IOpView (Some cl,vs) -> Pp.(Ssrprinters.pr_clear Pp.spc cl ++ prlist_with_sep mt (fun c -> str "/" ++ Ssrprinters.pr_ast_closure_term c) vs)
+
+  | IOpClear (clmust,clmay) ->
+      Pp.(Ssrprinters.pr_clear spc clmust ++
+            match clmay with
+            | Some cl -> str "(try " ++ Ssrprinters.pr_clear spc [cl] ++ str")"
+            | None -> mt ())
+  | IOpSimpl s -> Ssrprinters.pr_simpl s
+
+  | IOpEqGen _ -> Pp.str "E:"
+  | IOpNoop -> Pp.str"-"
+and ppl x = Pp.(prlist_with_sep (fun () -> str"|") (prlist_with_sep spc pr_ipatop)) x
+
 
 module IpatMachine : sig
 
@@ -25,19 +89,36 @@ module IpatMachine : sig
    * after the first [..] block.  first_case_is_dispatch is the
    * ssr exception to elim: and case: *)
   val main : ?eqtac:unit tactic -> first_case_is_dispatch:bool ->
-        ssripats -> unit tactic
+        ssriops -> unit tactic
+
+  val tclCompileIPats : ssripats -> ssriops
+
+  val tclSEED_SUBGOALS : Names.Name.t list array -> unit tactic -> unit tactic
 
 end = struct (* {{{ *)
 
 module State : sig
+
+  type delayed_gen = {
+    tmp_id : Id.t;    (* Temporary name *)
+    orig_name : Name.t   (* Old name *)
+  }
 
   (* to_clear API *)
   val isCLR_PUSH    : Id.t -> unit tactic
   val isCLR_PUSHL   : Id.t list -> unit tactic
   val isCLR_CONSUME : unit tactic
 
+  (* to_generalize API *)
+  val isGEN_PUSH    : delayed_gen -> unit tactic
+  val isGEN_CONSUME : unit tactic
+
+  (* name_seed API *)
+  val isNSEED_SET : Names.Name.t list -> unit tactic
+  val isNSEED_CONSUME : (Names.Name.t list option -> unit tactic) -> unit tactic
+
   (* Some data may expire *)
-  val isTICK : ssripat -> unit tactic
+  val isTICK : ssriop -> unit tactic
 
   val isPRINT : Proofview.Goal.t -> Pp.t
 
@@ -48,10 +129,23 @@ type istate = {
   (* Delayed clear *)
   to_clear : Id.t list;
 
+  (* Temporary intros, to be generalized back *)
+  to_generalize : delayed_gen list;
+
+  (* The type of the inductive constructor corresponding to the current proof
+   * branch: name seeds are taken from that in an intro block *)
+  name_seed : Names.Name.t list option;
+
+}
+and delayed_gen = {
+  tmp_id : Id.t;    (* Temporary name *)
+  orig_name : Name.t   (* Old name *)
 }
 
 let empty_state = {
   to_clear = [];
+  to_generalize = [];
+  name_seed = None;
 }
 
 include Ssrcommon.MakeState(struct
@@ -59,36 +153,77 @@ include Ssrcommon.MakeState(struct
   let init = empty_state
 end)
 
+let print_name_seed env sigma = function
+  | None -> Pp.str "-"
+  | Some nl -> Pp.prlist Names.Name.print nl
+
+let print_delayed_gen { tmp_id; orig_name } =
+  Pp.(Id.print tmp_id ++ str"->" ++ Name.print orig_name)
+
 let isPRINT g =
+  let env, sigma = Goal.env g, Goal.sigma g in
   let state = get g in
   Pp.(str"{{ to_clear: " ++
         prlist_with_sep spc Id.print state.to_clear ++ spc () ++
-      str" }}")
+      str"to_generalize: " ++
+        prlist_with_sep spc print_delayed_gen state.to_generalize ++ spc () ++
+      str"name_seed: " ++ print_name_seed env sigma state.name_seed ++ str" }}")
 
 
 let isCLR_PUSH id =
-  tclGET (fun { to_clear = ids } ->
-  tclSET { to_clear = id :: ids })
+  tclGET (fun ({ to_clear = ids } as s) ->
+  tclSET { s with to_clear = id :: ids })
 
 let isCLR_PUSHL more_ids =
-  tclGET (fun { to_clear = ids } ->
-  tclSET { to_clear = more_ids @ ids })
+  tclGET (fun ({ to_clear = ids } as s) ->
+  tclSET { s with to_clear = more_ids @ ids })
 
 let isCLR_CONSUME =
-  tclGET (fun { to_clear = ids } ->
-  tclSET { to_clear = [] } <*>
+  tclGET (fun ({ to_clear = ids } as s) ->
+  tclSET { s with to_clear = [] } <*>
   Tactics.clear ids)
 
 
-let isTICK _ = tclUNIT ()
+let isGEN_PUSH dg =
+  tclGET (fun s ->
+  tclSET { s with to_generalize = dg :: s.to_generalize })
+
+(* generalize `id` as `new_name` *)
+let gen_astac id new_name =
+ let gen = ((None,Some(false,[])),Ssrmatching.cpattern_of_id id) in
+ V82.tactic (Ssrcommon.gentac gen)
+ <*> Ssrcommon.tclRENAME_HD_PROD new_name
+
+(* performs and resets all delayed generalizations *)
+let isGEN_CONSUME =
+  tclGET (fun ({ to_generalize = dgs } as s) ->
+  tclSET { s with to_generalize = [] } <*>
+  Tacticals.New.tclTHENLIST
+    (List.map (fun { tmp_id; orig_name } ->
+       gen_astac tmp_id orig_name) dgs) <*>
+  Tactics.clear (List.map (fun gen -> gen.tmp_id) dgs))
+
+
+let isNSEED_SET ty =
+  tclGET (fun s ->
+  tclSET { s with name_seed = Some ty })
+
+let isNSEED_CONSUME k =
+  tclGET (fun ({ name_seed = x } as s) ->
+  tclSET { s with name_seed = None } <*>
+  k x)
+
+let isTICK = function
+  | IOpSimpl _ | IOpClear _ -> tclUNIT ()
+  | _ -> tclGET (fun s -> tclSET { s with name_seed = None })
 
 end (* }}} *************************************************************** *)
 
 open State
 
-(** [=> *] ****************************************************************)
-(** [nb_assums] returns the number of dependent premises *)
-(** Warning: unlike [nb_deps_assums], it does not perform reduction *)
+(***[=> *] ****************************************************************)
+(** [nb_assums] returns the number of dependent premises
+    Warning: unlike [nb_deps_assums], it does not perform reduction *)
 let rec nb_assums cur env sigma t =
   match EConstr.kind sigma t with
   | Prod(name,ty,body) ->
@@ -105,18 +240,49 @@ let intro_anon_all = Goal.enter begin fun gl ->
   let sigma = Goal.sigma gl in
   let g = Goal.concl gl in
   let n = nb_assums env sigma g in
-  Tacticals.New.tclDO n Ssrcommon.tclINTRO_ANON
+  Tacticals.New.tclDO n (Ssrcommon.tclINTRO_ANON ())
+end
+
+(*** [=> >*] **************************************************************)
+(** [nb_deps_assums] returns the number of dependent premises *)
+let rec nb_deps_assums cur env sigma t =
+  let t' = Reductionops.whd_allnolet env sigma t in
+  match EConstr.kind sigma t' with
+  | Constr.Prod(name,ty,body) ->
+     if EConstr.Vars.noccurn sigma 1 body &&
+        not (Typeclasses.is_class_type sigma ty) then cur
+     else nb_deps_assums (cur+1) env sigma body
+  | Constr.LetIn(name,ty,t1,t2) ->
+     nb_deps_assums (cur+1) env sigma t2
+  | Constr.Cast(t,_,_) ->
+     nb_deps_assums cur env sigma t
+  | _ -> cur
+let nb_deps_assums = nb_deps_assums 0
+
+let intro_anon_deps = Goal.enter begin fun gl ->
+  let env = Goal.env gl in
+  let sigma = Goal.sigma gl in
+  let g = Goal.concl gl in
+  let n = nb_deps_assums env sigma g in
+  Tacticals.New.tclDO n (Ssrcommon.tclINTRO_ANON ())
 end
 
 (** [intro_drop] behaves like [intro_anon] but registers the id of the
     introduced assumption for a delayed clear. *)
 let intro_drop =
-  Ssrcommon.tclINTRO ~id:None
+  Ssrcommon.tclINTRO ~id:Ssrcommon.Anon
     ~conclusion:(fun ~orig_name:_ ~new_name -> isCLR_PUSH new_name)
+
+(** [intro_temp] behaves like [intro_anon] but registers the id of the
+    introduced assumption for a regeneralization. *)
+let intro_anon_temp =
+  Ssrcommon.tclINTRO ~id:Ssrcommon.Anon
+    ~conclusion:(fun ~orig_name ~new_name ->
+      isGEN_PUSH { tmp_id = new_name; orig_name })
 
 (** [intro_end] performs the actions that have been delayed. *)
 let intro_end =
-  Ssrcommon.tcl0G (isCLR_CONSUME)
+  Ssrcommon.tcl0G ~default:() (isCLR_CONSUME <*> isGEN_CONSUME)
 
 (** [=> _] *****************************************************************)
 let intro_clear ids =
@@ -137,7 +303,35 @@ let tacCHECK_HYPS_EXIST hyps = Goal.enter begin fun gl ->
   tclUNIT ()
 end
 
+let tacFILTER_HYP_EXIST hyps k = Goal.enter begin fun gl ->
+  let ctx = Goal.hyps gl in
+  k (Option.bind hyps (fun h ->
+      if Ssrcommon.test_hyp_exists ctx h &&
+         Ssrcommon.(not_section_id (hyp_id h)) then Some h else None))
+end
+
 (** [=> []] *****************************************************************)
+
+(* calls t1 then t2 on each subgoal passing to t2 the index of the current
+ * subgoal (starting from 0) as well as the number of subgoals *)
+let tclTHENin t1 t2 =
+  tclUNIT () >>= begin fun () -> let i = ref (-1) in
+  t1 <*> numgoals >>= fun n ->
+  Goal.enter begin fun g -> incr i; t2 !i n end
+end
+
+(* Attaches one element of `seeds` to each of the last k goals generated by
+`tac`, where k is the size of `seeds` *)
+let tclSEED_SUBGOALS seeds tac =
+  tclTHENin tac (fun i n ->
+          Ssrprinters.ppdebug (lazy Pp.(str"seeding"));
+      (* eg [case: (H _ : nat)] generates 3 goals:
+         - 1 for _
+         - 2 for the nat constructors *)
+    let extra_goals = n - Array.length seeds in
+    if i < extra_goals then tclUNIT ()
+    else isNSEED_SET seeds.(i - extra_goals))
+
 let tac_case t =
   Goal.enter begin fun _ ->
     Ssrcommon.tacTYPEOF t >>= fun ty ->
@@ -145,22 +339,50 @@ let tac_case t =
     if is_inj then
       V82.tactic ~nf_evars:false (Ssrelim.perform_injection t)
     else
-      Ssrelim.ssrscasetac t
+      Goal.enter begin fun g ->
+         (Ssrelim.casetac t (fun ?seed k ->
+           match seed with
+           | None -> k
+           | Some seed -> tclSEED_SUBGOALS seed k))
+      end
 end
 
-(** [=> [: id]] ************************************************************)
-[@@@ocaml.warning "-3"]
+(** [=> [^ seed ]] *********************************************************)
+let tac_intro_seed interp_ipats fix = Goal.enter begin fun gl ->
+  isNSEED_CONSUME begin fun seeds ->
+    let seeds =
+      Ssrcommon.option_assert_get seeds Pp.(str"tac_intro_seed: no seed") in
+    let ipats = List.map (function
+       | Anonymous ->
+           let s = match fix with
+             | Prefix id ->  Id.to_string id ^ "?"
+             | SuffixNum n -> "?" ^ string_of_int n
+             | SuffixId id -> "?" ^ Id.to_string id in
+           IOpInaccessible (Some s)
+       | Name id ->
+           let s = match fix with
+             | Prefix fix ->  Id.to_string fix ^ Id.to_string id
+             | SuffixNum n -> Id.to_string id ^ string_of_int n
+             | SuffixId fix -> Id.to_string id ^ Id.to_string fix in
+           IOpId (Id.of_string s)) seeds in
+    interp_ipats ipats
+end end
+
+(*** [=> [: id]] ************************************************************)
 let mk_abstract_id =
   let open Coqlib in
   let ssr_abstract_id = Summary.ref ~name:"SSR:abstractid" 0 in
-begin fun () ->
+begin fun env sigma ->
+  let sigma, zero = EConstr.fresh_global env sigma (lib_ref "num.nat.O") in
+  let sigma, succ = EConstr.fresh_global env sigma (lib_ref "num.nat.S") in
   let rec nat_of_n n =
-    if n = 0 then EConstr.mkConstruct path_of_O
-    else EConstr.mkApp (EConstr.mkConstruct path_of_S, [|nat_of_n (n-1)|]) in
-  incr ssr_abstract_id; nat_of_n !ssr_abstract_id
+    if n = 0 then zero
+    else EConstr.mkApp (succ, [|nat_of_n (n-1)|]) in
+  incr ssr_abstract_id;
+  sigma, nat_of_n !ssr_abstract_id
 end
 
-let tcltclMK_ABSTRACT_VAR id = Goal.enter begin fun gl ->
+let tclMK_ABSTRACT_VAR id = Goal.enter begin fun gl ->
   let env, concl = Goal.(env gl, concl gl) in
   let step = begin fun sigma ->
     let (sigma, (abstract_proof, abstract_ty)) =
@@ -169,17 +391,17 @@ let tcltclMK_ABSTRACT_VAR id = Goal.enter begin fun gl ->
       let (sigma, ablock) = Ssrcommon.mkSsrConst "abstract_lock" env sigma in
       let (sigma, lock) = Evarutil.new_evar env sigma ablock in
       let (sigma, abstract) = Ssrcommon.mkSsrConst "abstract" env sigma in
-      let abstract_ty =
-        EConstr.mkApp(abstract, [|ty;mk_abstract_id ();lock|]) in
+      let (sigma, abstract_id) = mk_abstract_id env sigma in
+      let abstract_ty = EConstr.mkApp(abstract, [|ty; abstract_id; lock|]) in
       let sigma, m = Evarutil.new_evar env sigma abstract_ty in
       sigma, (m, abstract_ty) in
     let sigma, kont =
-      let rd = Context.Rel.Declaration.LocalAssum (Name id, abstract_ty) in
+      let rd = Context.Rel.Declaration.LocalAssum (make_annot (Name id) Sorts.Relevant, abstract_ty) in
       let sigma, ev = Evarutil.new_evar (EConstr.push_rel rd env) sigma concl in
       sigma, ev
     in
     let term =
-      EConstr.(mkApp (mkLambda(Name id,abstract_ty,kont),[|abstract_proof|])) in
+      EConstr.(mkApp (mkLambda(make_annot (Name id) Sorts.Relevant,abstract_ty,kont),[|abstract_proof|])) in
     let sigma, _ = Typing.type_of env sigma term in
     sigma, term
   end in
@@ -189,12 +411,12 @@ end
 
 let tclMK_ABSTRACT_VARS ids =
   List.fold_right (fun id tac ->
-    Tacticals.New.tclTHENFIRST (tcltclMK_ABSTRACT_VAR id) tac) ids (tclUNIT ())
+    Tacticals.New.tclTHENFIRST (tclMK_ABSTRACT_VAR id) tac) ids (tclUNIT ())
 
 (* Debugging *)
 let tclLOG p t =
   tclUNIT () >>= begin fun () ->
-    Ssrprinters.ppdebug (lazy Pp.(str "exec: " ++ Ssrprinters.pr_ipat p));
+    Ssrprinters.ppdebug (lazy Pp.(str "exec: " ++ pr_ipatop p));
     tclUNIT ()
   end <*>
   Goal.enter begin fun g ->
@@ -205,119 +427,191 @@ let tclLOG p t =
   end
   <*>
     t p
-  <*>
+  >>= fun ret ->
   Goal.enter begin fun g ->
     Ssrprinters.ppdebug (lazy Pp.(str "done: " ++ isPRINT g));
     tclUNIT ()
   end
+  >>= fun () -> tclUNIT ret
 
-let rec ipat_tac1 ipat : unit tactic =
+let notTAC = tclUNIT false
+
+let duplicate_clear =
+  CWarnings.create ~name:"duplicate-clear" ~category:"ssr"
+    (fun id -> Pp.(str "Duplicate clear of " ++ Id.print id))
+
+(* returns true if it was a tactic (eg /ltac:tactic) *)
+let rec ipat_tac1 ipat : bool tactic =
   match ipat with
-  | IPatView (clear_if_id,l) ->
-      Ssrview.tclIPAT_VIEWS ~views:l ~clear_if_id
-        ~conclusion:(fun ~to_clear:clr -> intro_clear clr)
-  | IPatDispatch ipatss ->
-      tclEXTEND (List.map ipat_tac ipatss) (tclUNIT ()) []
+  | IOpView (glued_clear,l) ->
+      let clear_if_id, extra_clear =
+        match glued_clear with
+        | None -> false, []
+        | Some x -> true, List.map Ssrcommon.hyp_id x in
+      Ssrview.tclIPAT_VIEWS
+        ~views:l ~clear_if_id
+        ~conclusion:(fun ~to_clear:clr ->
+            let inter = CList.intersect Id.equal clr extra_clear in
+            List.iter duplicate_clear inter;
+            let cl = CList.union Id.equal clr extra_clear in
+            intro_clear cl)
 
-  | IPatId id -> Ssrcommon.tclINTRO_ID id
+  | IOpDispatchBranches ipatss ->
+      tclDISPATCH (List.map ipat_tac ipatss) <*> notTAC
+  | IOpDispatchBlock id_block ->
+      tac_intro_seed ipat_tac id_block <*> notTAC
+  | IOpCaseBlock id_block ->
+      Ssrcommon.tclWITHTOP tac_case <*> tac_intro_seed ipat_tac id_block <*> notTAC
 
-  | IPatCase ipatss ->
-     tclIORPAT (Ssrcommon.tclWITHTOP tac_case) ipatss
-  | IPatInj ipatss ->
+  | IOpCaseBranches ipatss ->
+     tclIORPAT (Ssrcommon.tclWITHTOP tac_case) ipatss <*> notTAC
+
+  | IOpId id -> Ssrcommon.tclINTRO_ID id <*> notTAC
+  | IOpFastNondep -> intro_anon_deps <*> notTAC
+  | IOpDrop -> intro_drop <*> notTAC
+  | IOpInaccessible seed -> Ssrcommon.tclINTRO_ANON ?seed () <*> notTAC
+  | IOpInaccessibleAll -> intro_anon_all <*> notTAC
+  | IOpTemporay -> intro_anon_temp <*> notTAC
+
+  | IOpSimpl Nop -> assert false
+
+  | IOpInj ipatss ->
      tclIORPAT (Ssrcommon.tclWITHTOP
        (fun t -> V82.tactic  ~nf_evars:false (Ssrelim.perform_injection t)))
        ipatss
+     <*> notTAC
 
-  | IPatAnon Drop -> intro_drop
-  | IPatAnon One -> Ssrcommon.tclINTRO_ANON
-  | IPatAnon All -> intro_anon_all
+  | IOpClear (must,may) ->
+      tacCHECK_HYPS_EXIST must <*>
+      tacFILTER_HYP_EXIST may (fun may ->
+        let must = List.map Ssrcommon.hyp_id must in
+        let cl = Option.fold_left (fun cls (SsrHyp(_,id)) ->
+          if CList.mem_f Id.equal id cls then begin
+            duplicate_clear id;
+            cls
+          end else id :: cls) must may in
+        intro_clear cl) <*>
+      notTAC
 
-  | IPatNoop -> tclUNIT ()
-  | IPatSimpl Nop -> tclUNIT ()
+  | IOpSimpl x ->
+      V82.tactic ~nf_evars:false (Ssrequality.simpltac x) <*> notTAC
 
-  | IPatClear ids ->
-      tacCHECK_HYPS_EXIST ids <*>
-      intro_clear (List.map Ssrcommon.hyp_id ids)
-
-  | IPatSimpl (Simpl n) ->
-       V82.tactic ~nf_evars:false (Ssrequality.simpltac (Simpl n))
-  | IPatSimpl (Cut n) ->
-       V82.tactic ~nf_evars:false (Ssrequality.simpltac (Cut n))
-  | IPatSimpl (SimplCut (n,m)) ->
-       V82.tactic ~nf_evars:false (Ssrequality.simpltac (SimplCut (n,m)))
-
-  | IPatRewrite (occ,dir) ->
+  | IOpRewrite (occ,dir) ->
      Ssrcommon.tclWITHTOP
-       (fun x -> V82.tactic  ~nf_evars:false (Ssrequality.ipat_rewrite occ dir x))
+       (fun x -> V82.tactic  ~nf_evars:false (Ssrequality.ipat_rewrite occ dir x)) <*> notTAC
 
-  | IPatAbstractVars ids -> tclMK_ABSTRACT_VARS ids
+  | IOpAbstractVars ids -> tclMK_ABSTRACT_VARS ids <*> notTAC
 
-  | IPatTac t -> t
+  | IOpEqGen t -> t <*> notTAC
+  | IOpNoop -> notTAC
 
 and ipat_tac pl : unit tactic =
   match pl with
   | [] -> tclUNIT ()
   | pat :: pl ->
-      Ssrcommon.tcl0G (tclLOG pat ipat_tac1) <*>
-      isTICK pat <*>
-      ipat_tac pl
+      Ssrcommon.tcl0G ~default:false (tclLOG pat ipat_tac1) >>= fun was_tac ->
+      isTICK pat (* drops expired seeds *) >>= fun () ->
+      if was_tac then (* exception *)
+        let ip_before, case, ip_after = split_at_first_case pl in
+        let case = ssr_exception true case in
+        let case = option_to_list case in
+        ipat_tac (ip_before @ case @ ip_after)
+      else ipat_tac pl
 
 and tclIORPAT tac = function
   | [[]] -> tac
   | p -> Tacticals.New.tclTHENS tac (List.map ipat_tac p)
 
-let split_at_first_case ipats =
+and ssr_exception is_on = function
+  | Some (IOpCaseBranches [[]]) when is_on -> Some IOpNoop
+  | Some (IOpCaseBranches l) when is_on ->
+      Some (IOpDispatchBranches l)
+  | Some (IOpCaseBlock s) when is_on ->
+      Some (IOpDispatchBlock s)
+  | x -> x
+
+and option_to_list = function None -> [] | Some x -> [x]
+
+and split_at_first_case ipats =
   let rec loop acc = function
-    | (IPatSimpl _ | IPatClear _) as x :: rest -> loop (x :: acc) rest
-    | IPatCase _ as x :: xs -> CList.rev acc, Some x, xs
+    | (IOpSimpl _ | IOpClear _) as x :: rest -> loop (x :: acc) rest
+    | (IOpCaseBlock _ | IOpCaseBranches _
+      | IOpDispatchBlock _ | IOpDispatchBranches _) as x :: xs ->
+      CList.rev acc, Some x, xs
     | pats -> CList.rev acc, None, pats
   in
     loop [] ipats
-
-let ssr_exception is_on = function
-  | Some (IPatCase l) when is_on -> Some (IPatDispatch l)
-  | x -> x
-
-let option_to_list = function None -> [] | Some x -> [x]
+;;
 
 (* Simple pass doing {x}/v ->  /v{x} *)
-let elaborate_ipats l =
+let tclCompileIPats l =
   let rec elab = function
-  | [] -> []
-  | (IPatClear _ as p1) :: (IPatView _ as p2) :: rest -> p2 :: p1 :: elab rest
-  | IPatDispatch p :: rest -> IPatDispatch (List.map elab p) :: elab rest
-  | IPatCase p :: rest -> IPatCase (List.map elab p) :: elab rest
-  | IPatInj p :: rest -> IPatInj (List.map elab p) :: elab rest
-  | (IPatTac _ | IPatId _ | IPatSimpl _ | IPatClear _ |
-     IPatAnon _ | IPatView _ | IPatNoop | IPatRewrite _ |
-     IPatAbstractVars _) as x :: rest -> x :: elab rest
-  in
-    elab l
 
-let main ?eqtac ~first_case_is_dispatch ipats =
-  let ipats = elaborate_ipats ipats in
-  let ip_before, case, ip_after = split_at_first_case ipats in
+  | (IPatClear cl) :: (IPatView v) :: rest ->
+      (IOpView(Some cl,v)) :: elab rest
+  | (IPatClear cl) :: (IPatId id) :: rest ->
+      (IOpClear (cl,Some (SsrHyp(None,id)))) :: IOpId id :: elab rest
+
+  (* boring code *)
+  | [] -> []
+
+  | IPatId id :: rest -> IOpId id :: elab rest
+  | IPatAnon (One hint) ::rest -> IOpInaccessible hint :: elab rest
+  | IPatAnon Drop :: rest -> IOpDrop :: elab rest
+  | IPatAnon All :: rest -> IOpInaccessibleAll :: elab rest
+  | IPatAnon Temporary :: rest -> IOpTemporay :: elab rest
+  | IPatAbstractVars vs :: rest -> IOpAbstractVars vs :: elab rest
+  | IPatFastNondep :: rest -> IOpFastNondep :: elab rest
+
+  | IPatInj pats :: rest -> IOpInj (List.map elab pats) :: elab rest
+  | IPatRewrite(occ,dir) :: rest -> IOpRewrite(occ,dir) :: elab rest
+  | IPatView vs :: rest -> IOpView (None,vs) :: elab rest
+  | IPatSimpl s :: rest -> IOpSimpl s :: elab rest
+  | IPatClear cl :: rest -> IOpClear (cl,None) :: elab rest
+
+  | IPatCase (Block seed) :: rest -> IOpCaseBlock seed :: elab rest
+  | IPatCase (Regular bs) :: rest -> IOpCaseBranches (List.map elab bs) :: elab rest
+  | IPatDispatch (Block seed) :: rest -> IOpDispatchBlock seed :: elab rest
+  | IPatDispatch (Regular bs) :: rest -> IOpDispatchBranches (List.map elab bs) :: elab rest
+  | IPatNoop :: rest -> IOpNoop :: elab rest
+
+  in
+  elab l
+;;
+let tclCompileIPats l =
+  Ssrprinters.ppdebug (lazy Pp.(str "tclCompileIPats input: " ++
+                                  prlist_with_sep spc Ssrprinters.pr_ipat l));
+  let ops = tclCompileIPats l in
+  Ssrprinters.ppdebug (lazy Pp.(str "tclCompileIPats output: " ++
+                                  prlist_with_sep spc pr_ipatop ops));
+  ops
+
+let main ?eqtac ~first_case_is_dispatch iops =
+  let ip_before, case, ip_after = split_at_first_case iops in
   let case = ssr_exception first_case_is_dispatch case in
   let case = option_to_list case in
-  let eqtac = option_to_list (Option.map (fun x -> IPatTac x) eqtac) in
-  Ssrcommon.tcl0G (ipat_tac (ip_before @ case @ eqtac @ ip_after) <*> intro_end)
+  let eqtac = option_to_list (Option.map (fun x -> IOpEqGen x) eqtac) in
+  let ipats = ip_before @ case @ eqtac @ ip_after in
+  Ssrcommon.tcl0G ~default:() (ipat_tac ipats <*> intro_end)
 
 end (* }}} *)
 
 let tclIPAT_EQ eqtac ip =
   Ssrprinters.ppdebug (lazy Pp.(str "ipat@run: " ++ Ssrprinters.pr_ipats ip));
-  IpatMachine.main ~eqtac ~first_case_is_dispatch:true ip
+  IpatMachine.(main ~eqtac ~first_case_is_dispatch:true (tclCompileIPats ip))
 
 let tclIPATssr ip =
   Ssrprinters.ppdebug (lazy Pp.(str "ipat@run: " ++ Ssrprinters.pr_ipats ip));
-  IpatMachine.main ~first_case_is_dispatch:true ip
+  IpatMachine.(main ~first_case_is_dispatch:true (tclCompileIPats ip))
+
+let tclCompileIPats = IpatMachine.tclCompileIPats
 
 (* Common code to handle generalization lists along with the defective case *)
 let with_defective maintac deps clr = Goal.enter begin fun g ->
   let sigma, concl = Goal.(sigma g, concl g) in
   let top_id =
     match EConstr.kind_of_type sigma concl with
-    | Term.ProdType (Name id, _, _)
+    | Term.ProdType ({binder_name=Name id}, _, _)
       when Ssrcommon.is_discharged_id id -> id
     | _ -> Ssrcommon.top_id in
   let top_gen = Ssrequality.mkclr clr, Ssrmatching.cpattern_of_id top_id in
@@ -341,7 +635,7 @@ let mkCoqRefl t c env sigma =
 
 (** Intro patterns processing for elim tactic, in particular when used in
     conjunction with equation generation as in [elim E: x] *)
-let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
+let elim_intro_tac ipats ?seed what eqid ssrelim is_rec clr =
   let intro_eq =
     match eqid with
     | Some (IPatId ipat) when not is_rec ->
@@ -353,7 +647,7 @@ let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
              | Term.AtomicType (hd, _) when Ssrcommon.is_protect hd env sigma ->
                 V82.tactic ~nf_evars:false Ssrcommon.unprotecttac <*>
                 Ssrcommon.tclINTRO_ID ipat
-             | _ -> Ssrcommon.tclINTRO_ANON <*> intro_eq ()
+             | _ -> Ssrcommon.tclINTRO_ANON () <*> intro_eq ()
              end
          |_ -> Ssrcommon.errorstrm (Pp.str "Too many names in intro pattern")
        end in
@@ -366,12 +660,9 @@ let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
            | _, `EConstr(_,_,t) when EConstr.isVar sigma t ->
               EConstr.destVar sigma t
            | _ -> Ssrcommon.mk_anon_id "K" (Tacmach.New.pf_ids_of_hyps g) in
-         let elim_name =
-           if Ssrcommon.is_name_in_ipats elim_name ipats then
-             Ssrcommon.mk_anon_id "K" (Tacmach.New.pf_ids_of_hyps g)
-           else elim_name
-         in
-         Ssrcommon.tclINTRO_ID elim_name
+         Tacticals.New.tclFIRST
+           [ Ssrcommon.tclINTRO_ID elim_name
+           ; Ssrcommon.tclINTRO_ANON ~seed:"K" ()]
        end in
        let rec gen_eq_tac () = Goal.enter begin fun g ->
          let sigma, env, concl = Goal.(sigma g, env g, concl g) in
@@ -386,7 +677,7 @@ let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
            | _ -> assert false in
          let case = args.(Array.length args-1) in
          if not(EConstr.Vars.closed0 sigma case)
-         then Ssrcommon.tclINTRO_ANON <*> gen_eq_tac ()
+         then Ssrcommon.tclINTRO_ANON () <*> gen_eq_tac ()
          else
            Ssrcommon.tacTYPEOF case >>= fun case_ty ->
            let open EConstr in
@@ -395,7 +686,7 @@ let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
            let name = Ssrcommon.mk_anon_id "K" (Tacmach.New.pf_ids_of_hyps g) in
 
            let new_concl =
-             mkProd (Name name, case_ty, mkArrow refl (Vars.lift 2 concl)) in
+             mkProd (make_annot (Name name) Sorts.Relevant, case_ty, mkArrow refl Sorts.Relevant (Vars.lift 2 concl)) in
            let erefl, sigma = mkCoqRefl case_ty case env sigma in
            Proofview.Unsafe.tclEVARS sigma <*>
            Tactics.apply_type ~typecheck:true new_concl [case;erefl]
@@ -404,13 +695,14 @@ let elim_intro_tac ipats ?ist what eqid ssrelim is_rec clr =
        intro_lhs <*>
        Ssrcommon.tclINTRO_ID ipat
     | _ -> tclUNIT () in
-  let unprot =
+  let unprotect =
     if eqid <> None && is_rec
     then V82.tactic ~nf_evars:false Ssrcommon.unprotecttac else tclUNIT () in
-  V82.of_tactic begin
-    V82.tactic ~nf_evars:false ssrelim <*>
-    tclIPAT_EQ (intro_eq <*> unprot) ipats
-  end
+  begin match seed with
+  | None -> ssrelim
+  | Some s -> IpatMachine.tclSEED_SUBGOALS s ssrelim end <*>
+  tclIPAT_EQ (intro_eq <*> unprotect) ipats
+;;
 
 let mkEq dir cl c t n env sigma =
   let open EConstr in
@@ -418,7 +710,7 @@ let mkEq dir cl c t n env sigma =
   eqargs.(Ssrequality.dir_org dir) <- mkRel n;
   let eq, sigma = mkCoqEq env sigma in
   let refl, sigma = mkCoqRefl t c env sigma in
-  mkArrow (mkApp (eq, eqargs)) (Vars.lift 1 cl), refl, sigma
+  mkArrow (mkApp (eq, eqargs)) Sorts.Relevant (Vars.lift 1 cl), refl, sigma
 
 (** in [tac/v: last gens..] the first (last to be run) generalization is
     "special" in that is it also the main argument of [tac] and is eventually
@@ -454,7 +746,7 @@ let tclLAST_GEN ~to_ind ((oclr, occ), t) conclusion = tclINDEPENDENTL begin
           Ssrcommon.errorstrm Pp.(str "@ can be used with let-ins only")
       | Context.Named.Declaration.LocalDef (name, b, ty) ->
           Unsafe.tclEVARS sigma <*>
-          tclUNIT (true, EConstr.mkLetIn (Name name,b,ty,cl), c, clr)
+          tclUNIT (true, EConstr.mkLetIn (map_annot Name.mk_name name,b,ty,cl), c, clr)
     else
       Unsafe.tclEVARS sigma <*>
       Ssrcommon.tacMKPROD c cl >>= fun ccl ->
@@ -468,7 +760,7 @@ let tclLAST_GEN ~to_ind ((oclr, occ), t) conclusion = tclINDEPENDENTL begin
       Unsafe.tclEVARS sigma <*>
       Ssrcommon.tacTYPEOF p >>= fun pty ->
       (* TODO: check bug: cl0 no lift? *)
-      let ccl = EConstr.mkProd (Ssrcommon.constr_name sigma c, pty, cl0) in
+      let ccl = EConstr.mkProd (make_annot (Ssrcommon.constr_name sigma c) Sorts.Relevant, pty, cl0) in
       tclUNIT (false, ccl, p, clr)
   else
     Ssrcommon.errorstrm Pp.(str "generalized term didn't match")
@@ -503,13 +795,11 @@ let ssrelimtac (view, (eqid, (dgens, ipats))) =
     | [v] ->
       Ssrcommon.tclINTERP_AST_CLOSURE_TERM_AS_CONSTR v >>= fun cs ->
       tclDISPATCH (List.map (fun elim ->
-        V82.tactic ~nf_evars:false
           (Ssrelim.ssrelim deps (`EGen gen) ~elim eqid (elim_intro_tac ipats)))
         cs)
     | [] ->
       tclINDEPENDENT
-        (V82.tactic ~nf_evars:false
-          (Ssrelim.ssrelim deps (`EGen gen) eqid (elim_intro_tac ipats)))
+          (Ssrelim.ssrelim deps (`EGen gen) eqid (elim_intro_tac ipats))
     | _ ->
       Ssrcommon.errorstrm
         Pp.(str "elim: only one elimination lemma can be provided")
@@ -532,9 +822,8 @@ let ssrcasetac (view, (eqid, (dgens, ipats))) =
             if view <> [] && eqid <> None && deps = []
             then [gen], [], None
             else deps, clear, occ in
-          V82.tactic ~nf_evars:false
-            (Ssrelim.ssrelim ~is_case:true deps (`EConstr (clear, occ, vc))
-              eqid (elim_intro_tac ipats))
+          Ssrelim.ssrelim ~is_case:true deps (`EConstr (clear, occ, vc))
+            eqid (elim_intro_tac ipats)
       in
       if view = [] then conclusion false c clear c
       else tacVIEW_THEN_GRAB ~simple_types:false view ~conclusion info)
@@ -553,20 +842,18 @@ let pushmoveeqtac cl c = Goal.enter begin fun g ->
   Tactics.apply_type ~typecheck:true (EConstr.mkProd (x, t, cl2)) [c; eqc]
 end
 
-let eqmovetac _ gen = Goal.enter begin fun g ->
-  Ssrcommon.tacSIGMA >>= fun gl ->
-  let cl, c, _, gl = Ssrcommon.pf_interp_gen gl false gen in
-  Unsafe.tclEVARS (Tacmach.project gl) <*>
-  pushmoveeqtac cl c
-end
+let eqmovetac _ gen =
+  Ssrcommon.pfLIFT (Ssrcommon.pf_interp_gen false gen) >>=
+  fun (cl, c, _) -> pushmoveeqtac cl c
+;;
 
 let rec eqmoveipats eqpat = function
-  | (IPatSimpl _ | IPatClear _ as ipat) :: ipats ->
+  | (IOpSimpl _ | IOpClear _ as ipat) :: ipats ->
        ipat :: eqmoveipats eqpat ipats
-  | (IPatAnon All :: _ | []) as ipats ->
-       IPatAnon One :: eqpat :: ipats
+  | (IOpInaccessibleAll :: _ | []) as ipats ->
+       IOpInaccessible None :: eqpat @ ipats
   | ipat :: ipats ->
-       ipat :: eqpat :: ipats
+       ipat :: eqpat @ ipats
 
 let ssrsmovetac = Goal.enter begin fun g ->
   let sigma, concl = Goal.(sigma g, concl g) in
@@ -576,7 +863,6 @@ let ssrsmovetac = Goal.enter begin fun g ->
 end
 
 let tclIPAT ip =
-  Ssrprinters.ppdebug (lazy Pp.(str "ipat@run: " ++ Ssrprinters.pr_ipats ip));
   IpatMachine.main ~first_case_is_dispatch:false ip
 
 let ssrmovetac = function
@@ -588,17 +874,17 @@ let ssrmovetac = function
      gentac <*>
      tclLAST_GEN ~to_ind:false lastgen
        (tacVIEW_THEN_GRAB view ~conclusion) <*>
-     tclIPAT (IPatClear clr :: ipats)
+     tclIPAT (IOpClear (clr,None) :: IpatMachine.tclCompileIPats ipats)
   | _::_ as view, (_, ({ gens = []; clr }, ipats)) ->
-     tclIPAT (IPatView (false,view) :: IPatClear clr :: ipats)
+      tclIPAT (IOpView (None,view) :: IOpClear (clr,None) :: IpatMachine.tclCompileIPats ipats)
   | _, (Some pat, (dgens, ipats)) ->
     let dgentac = with_dgens dgens eqmovetac in
-    dgentac <*> tclIPAT (eqmoveipats pat ipats)
+    dgentac <*> tclIPAT (eqmoveipats (IpatMachine.tclCompileIPats [pat]) (IpatMachine.tclCompileIPats ipats))
   | _, (_, ({ gens = (_ :: _ as gens); dgens = []; clr}, ipats)) ->
     let gentac = V82.tactic ~nf_evars:false (Ssrcommon.genstac (gens, clr)) in
-    gentac <*> tclIPAT ipats
+    gentac <*> tclIPAT (IpatMachine.tclCompileIPats ipats)
   | _, (_, ({ clr }, ipats)) ->
-    Tacticals.New.tclTHENLIST [ssrsmovetac; Tactics.clear (List.map Ssrcommon.hyp_id clr); tclIPAT ipats]
+    Tacticals.New.tclTHENLIST [ssrsmovetac; Tactics.clear (List.map Ssrcommon.hyp_id clr); tclIPAT (IpatMachine.tclCompileIPats ipats)]
 
 (** [abstract: absvar gens] **************************************************)
 let rec is_Evar_or_CastedMeta sigma x =
@@ -697,7 +983,7 @@ let ssrabstract dgens =
      let open Ssrmatching in
      let ipats = List.map (fun (_,cp) ->
        match id_of_pattern (interp_cpattern gl0 cp None) with
-       | None -> IPatAnon One
+       | None -> IPatAnon (One None)
        | Some id -> IPatId id)
        (List.tl gens) in
      conclusion ipats

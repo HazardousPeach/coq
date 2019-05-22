@@ -62,7 +62,10 @@ Class Measure {A B} (f : A -> B).
 (** Standard measures. *)
 
 Instance fst_measure : @Measure (A * B) A Fst.
+Defined.
+
 Instance snd_measure : @Measure (A * B) B Snd.
+Defined.
 
 (** We define a product relation over [A*B]: each components should
     satisfy the corresponding initial relation. *)
@@ -157,6 +160,6 @@ Section RelProd_Instances.
   Proof. unfold RelCompFun; firstorder. Qed.
 End RelProd_Instances.
 
-Hint Unfold RelProd RelCompFun.
-Hint Extern 2 (RelProd _ _ _ _) => split.
+Hint Unfold RelProd RelCompFun : core.
+Hint Extern 2 (RelProd _ _ _ _) => split : core.
 

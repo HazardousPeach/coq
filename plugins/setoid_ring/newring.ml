@@ -89,10 +89,10 @@ let protect_red map env sigma c0 =
   EConstr.of_constr (eval 0 c)
 
 let protect_tac map =
-  Tactics.reduct_option (protect_red map,DEFAULTcast) None
+  Tactics.reduct_option ~check:false (protect_red map,DEFAULTcast) None
 
 let protect_tac_in map id =
-  Tactics.reduct_option (protect_red map,DEFAULTcast) (Some(id, Locus.InHyp))
+  Tactics.reduct_option ~check:false (protect_red map,DEFAULTcast) (Some(id, Locus.InHyp))
 
 
 (****************************************************************************)
@@ -129,7 +129,7 @@ let closed_term_ast =
   fun l ->
   let l = List.map (fun gr -> ArgArg(Loc.tag gr)) l in
   TacFun([Name(Id.of_string"t")],
-  TacML(Loc.tag (tacname,
+  TacML(CAst.make (tacname,
   [TacGeneric (Genarg.in_gen (Genarg.glbwit Stdarg.wit_constr) (DAst.make @@ GVar(Id.of_string"t"),None));
    TacGeneric (Genarg.in_gen (Genarg.glbwit (Genarg.wit_list Stdarg.wit_ref)) l)])))
 (*
@@ -153,18 +153,18 @@ let decl_constant na univs c =
   let open Constr in
   let vars = CVars.universes_of_constr c in
   let univs = UState.restrict_universe_context univs vars in
-  let univs = Monomorphic_const_entry univs in
+  let univs = Monomorphic_entry univs in
   mkConst(declare_constant (Id.of_string na) 
             (DefinitionEntry (definition_entry ~opaque:true ~univs c),
 	     IsProof Lemma))
 
 (* Calling a global tactic *)
 let ltac_call tac (args:glob_tactic_arg list) =
-  TacArg(Loc.tag @@ TacCall (Loc.tag (ArgArg(Loc.tag @@ Lazy.force tac),args)))
+  TacArg(CAst.make @@ TacCall (CAst.make (ArgArg(Loc.tag @@ Lazy.force tac),args)))
 
 let dummy_goal env sigma =
   let (gl,_,sigma) = 
-    Goal.V82.mk_goal sigma (named_context_val env) EConstr.mkProp Evd.Store.empty in
+    Goal.V82.mk_goal sigma (named_context_val env) EConstr.mkProp in
   {Evd.it = gl; Evd.sigma = sigma}
 
 let constr_of evd v = match Value.to_constr v with
@@ -194,19 +194,19 @@ let exec_tactic env evd n f args =
   in
   let (_, args, lfun) = List.fold_right fold args (0, [], Id.Map.empty) in
   let ist = { (Tacinterp.default_ist ()) with Tacinterp.lfun = lfun; } in
-  (** Build the getter *)
+  (* Build the getter *)
   let lid = List.init n (fun i -> Id.of_string("x"^string_of_int i)) in
   let n = Genarg.in_gen (Genarg.glbwit Stdarg.wit_int) n in
-  let get_res = TacML (Loc.tag (get_res, [TacGeneric n])) in
+  let get_res = TacML (CAst.make (get_res, [TacGeneric n])) in
   let getter = Tacexp (TacFun (List.map (fun n -> Name n) lid, get_res)) in
-  (** Evaluate the whole result *)
+  (* Evaluate the whole result *)
   let gl = dummy_goal env evd in
   let gls = Proofview.V82.of_tactic (Tacinterp.eval_tactic_ist ist (ltac_call f (args@[getter]))) gl in
   let evd = Evd.minimize_universes (Refiner.project gls) in
   let nf c = constr_of evd c in
   Array.map nf !tactic_res, Evd.universe_context_set evd
 
-let gen_constant n = lazy (EConstr.of_constr (UnivGen.constr_of_global (Coqlib.lib_ref n)))
+let gen_constant n = lazy (EConstr.of_constr (UnivGen.constr_of_monomorphic_global (Coqlib.lib_ref n)))
 let gen_reference n = lazy (Coqlib.lib_ref n)
 
 let coq_mk_Setoid = gen_constant "plugins.setoid_ring.Build_Setoid_Theory"
@@ -251,7 +251,7 @@ let plugin_modules =
     ]
 
 let my_constant c =
-  lazy (EConstr.of_constr (UnivGen.constr_of_global @@ Coqlib.gen_reference_in_modules "Ring" plugin_modules c))
+  lazy (EConstr.of_constr (UnivGen.constr_of_monomorphic_global @@ Coqlib.gen_reference_in_modules "Ring" plugin_modules c))
     [@@ocaml.warning "-3"]
 let my_reference c =
   lazy (Coqlib.gen_reference_in_modules "Ring" plugin_modules c)
@@ -394,13 +394,9 @@ let subst_th (subst,th) =
 
 let theory_to_obj : ring_info -> obj =
   let cache_th (name,th) = add_entry name th in
-  declare_object
-    {(default_object "tactic-new-ring-theory") with
-      open_function = (fun i o -> if Int.equal i 1 then cache_th o);
-      cache_function = cache_th;
-      subst_function = subst_th;
-      classify_function = (fun x -> Substitute x)}
-
+  declare_object @@ global_object_nodischarge "tactic-new-ring-theory"
+    ~cache:cache_th
+    ~subst:(Some subst_th)
 
 let setoid_of_relation env evd a r =
   try
@@ -557,7 +553,7 @@ let interp_cst_tac env sigma rk kind (zero,one,add,mul,opp) cst_tac =
         closed_term_ast (List.map Smartlocate.global_with_alias lc)
     | None ->
         let t = ArgArg(Loc.tag @@ Lazy.force ltac_inv_morph_nothing) in
-              TacArg(Loc.tag (TacCall(Loc.tag (t,[]))))
+              TacArg(CAst.make (TacCall(CAst.make (t,[]))))
 
 let make_hyp env evd c =
   let t = Retyping.get_type_of env !evd c in
@@ -582,7 +578,7 @@ let interp_power env evdref pow =
   match pow with
   | None ->
       let t = ArgArg(Loc.tag (Lazy.force ltac_inv_morph_nothing)) in
-      (TacArg(Loc.tag (TacCall(Loc.tag (t,[])))), plapp evdref coq_None [|carrier|])
+      (TacArg(CAst.make (TacCall(CAst.make (t,[])))), plapp evdref coq_None [|carrier|])
   | Some (tac, spec) ->
       let tac =
         match tac with
@@ -891,17 +887,14 @@ let subst_th (subst,th) =
 
 let ftheory_to_obj : field_info -> obj =
   let cache_th (name,th) = add_field_entry name th in
-  declare_object
-    {(default_object "tactic-new-field-theory") with
-      open_function = (fun i o -> if Int.equal i 1 then cache_th o);
-      cache_function = cache_th;
-      subst_function = subst_th;
-      classify_function = (fun x -> Substitute x) }
+  declare_object @@ global_object_nodischarge "tactic-new-field-theory"
+    ~cache:cache_th
+    ~subst:(Some subst_th)
 
 let field_equality evd r inv req =
   match EConstr.kind !evd req with
     | App (f, [| _ |]) when eq_constr_nounivs !evd f (Lazy.force coq_eq) ->
-        let c = UnivGen.constr_of_global Coqlib.(lib_ref "core.eq.congr") in
+        let c = UnivGen.constr_of_monomorphic_global Coqlib.(lib_ref "core.eq.congr") in
         let c = EConstr.of_constr c in
         mkApp(c,[|r;r;inv|])
     | _ ->

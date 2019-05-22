@@ -3,7 +3,14 @@
  (public_name coq.plugins.numeral_notation)
  (synopsis "Coq numeral notation plugin")
  (modules g_numeral numeral)
- (libraries coq.plugins.ltac))
+ (libraries coq.vernac))
+
+(library
+ (name string_notation_plugin)
+ (public_name coq.plugins.string_notation)
+ (synopsis "Coq string notation plugin")
+ (modules g_string string_notation)
+ (libraries coq.vernac))
 
 (library
  (name r_syntax_plugin)
@@ -13,23 +20,8 @@
  (libraries coq.vernac))
 
 (library
- (name ascii_syntax_plugin)
- (public_name coq.plugins.ascii_syntax)
- (synopsis "Coq syntax plugin: ASCII")
- (modules ascii_syntax)
+ (name int63_syntax_plugin)
+ (public_name coq.plugins.int63_syntax)
+ (synopsis "Coq syntax plugin: int63")
+ (modules int63_syntax)
  (libraries coq.vernac))
-
-(library
- (name string_syntax_plugin)
- (public_name coq.plugins.string_syntax)
- (synopsis "Coq syntax plugin: strings")
- (modules string_syntax)
- (libraries coq.plugins.ascii_syntax))
-
-(library
- (name int31_syntax_plugin)
- (public_name coq.plugins.int31_syntax)
- (synopsis "Coq syntax plugin: int31")
- (modules int31_syntax)
- (libraries coq.vernac))
-

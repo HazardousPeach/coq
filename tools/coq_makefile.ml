@@ -123,9 +123,10 @@ let read_whole_file s =
 let quote s = if String.contains s ' ' || CString.is_empty s then "'" ^ s ^ "'" else s
 
 let generate_makefile oc conf_file local_file args project =
+  let coqlib = Envars.coqlib () in
   let makefile_template =
-    let template = "/tools/CoqMakefile.in" in
-    Envars.coqlib () ^ template in
+    let template = Filename.concat "tools" "CoqMakefile.in" in
+    Filename.concat coqlib template in
   let s = read_whole_file makefile_template in
   let s = List.fold_left
     (* We use global_substitute to avoid running into backslash issues due to \1 etc. *)
@@ -218,7 +219,7 @@ let generate_conf_coq_config oc =
 ;;
 
 let generate_conf_files oc
-  { v_files; mli_files; ml4_files; ml_files; mllib_files; mlpack_files; }
+  { v_files; mli_files; mlg_files; ml_files; mllib_files; mlpack_files; }
 =
   let module S = String in
   let map = map_sourced_list in
@@ -226,7 +227,7 @@ let generate_conf_files oc
   fprintf oc "COQMF_VFILES = %s\n"      (S.concat " " (map quote v_files));
   fprintf oc "COQMF_MLIFILES = %s\n"    (S.concat " " (map quote mli_files));
   fprintf oc "COQMF_MLFILES = %s\n"     (S.concat " " (map quote ml_files));
-  fprintf oc "COQMF_ML4FILES = %s\n"    (S.concat " " (map quote ml4_files));
+  fprintf oc "COQMF_MLGFILES = %s\n"    (S.concat " " (map quote mlg_files));
   fprintf oc "COQMF_MLPACKFILES = %s\n" (S.concat " " (map quote mlpack_files));
   fprintf oc "COQMF_MLLIBFILES = %s\n"  (S.concat " " (map quote mllib_files));
   let cmdline_vfiles = filter_cmdline v_files in
@@ -260,7 +261,7 @@ let generate_conf_doc oc { defs; q_includes; r_includes } =
          eprintf "Warning: in %s\n" destination;
          destination
       end else "$(INSTALLDEFAULTROOT)"
-    else String.concat "/" gcd in
+    else String.concat Filename.dir_sep gcd in
   Printf.fprintf oc "COQMF_INSTALLCOQDOCROOT = %s\n" (quote root)
 
 let generate_conf_defs oc { defs; extra_args } =
@@ -283,7 +284,7 @@ let generate_conf oc project args  =
 
 let ensure_root_dir
   ({ ml_includes; r_includes; q_includes;
-     v_files; ml_files; mli_files; ml4_files;
+     v_files; ml_files; mli_files; mlg_files;
      mllib_files; mlpack_files } as project)
   =
   let exists f = List.exists (forget_source > f) in
@@ -293,8 +294,8 @@ let ensure_root_dir
   || exists (fun ({ canonical_path = x },_) -> is_prefix x here) r_includes
   || exists (fun ({ canonical_path = x },_) -> is_prefix x here) q_includes
   || (not_tops v_files &&
-      not_tops mli_files && not_tops ml4_files && not_tops ml_files &&
-      not_tops mllib_files && not_tops mlpack_files)
+      not_tops mli_files && not_tops mlg_files &&
+      not_tops ml_files && not_tops mllib_files && not_tops mlpack_files)
   then
     project
   else
@@ -343,15 +344,13 @@ let chop_prefix p f =
   let len_f = String.length f in
   String.sub f len_p (len_f - len_p)
 
-let clean_path p =
-  Str.global_replace (Str.regexp_string "//") "/" p
-
 let destination_of { ml_includes; q_includes; r_includes; } file =
   let file_dir = CUnix.canonical_path_name (Filename.dirname file) in
   let includes = q_includes @ r_includes in
   let mk_destination logic canonical_path =
-    clean_path (physical_dir_of_logical_dir logic ^ "/" ^
-                chop_prefix canonical_path file_dir ^ "/") in
+    Filename.concat
+      (physical_dir_of_logical_dir logic)
+      (chop_prefix canonical_path file_dir) in
   let candidates =
     CList.map_filter (fun {thing={ canonical_path }, logic} ->
       if is_prefix canonical_path file_dir then
@@ -368,8 +367,9 @@ let destination_of { ml_includes; q_includes; r_includes; } file =
      with
         | [{thing={ canonical_path }, logic}], {thing={ canonical_path = p }} ->
             let destination =
-              clean_path (physical_dir_of_logical_dir logic ^ "/" ^
-                          chop_prefix p file_dir ^ "/") in
+              Filename.concat
+                (physical_dir_of_logical_dir logic)
+                (chop_prefix p file_dir) in
             Printf.printf "%s" (quote destination)
         | _ -> () (* skip *)
         | exception Not_found -> () (* skip *)
@@ -395,8 +395,9 @@ let _ =
     | "-destination-of" :: tgt :: rest -> Some tgt, rest
     | _ -> None, args in
 
-  let project = 
-    try cmdline_args_to_project ~curdir:Filename.current_dir_name args
+  let project =
+    let warning_fn x = Format.eprintf "%s@\n%!" x in
+    try cmdline_args_to_project ~warning_fn ~curdir:Filename.current_dir_name args
     with Parsing_error s -> prerr_endline s; usage_coq_makefile () in
 
   if only_destination <> None then begin
@@ -423,7 +424,7 @@ let _ =
   end;
 
   let project = ensure_root_dir project in
-  
+
   if project.install_kind <> (Some CoqProject_file.NoInstall) then begin
     warn_install_at_root_directory project;
   end;
@@ -431,7 +432,7 @@ let _ =
   check_overlapping_include project;
 
   Envars.set_coqlib ~fail:(fun x -> Printf.eprintf "Error: %s\n" x; exit 1);
-  
+
   let ocm = Option.cata open_out stdout project.makefile in
   generate_makefile ocm conf_file local_file (prog :: args) project;
   close_out ocm;

@@ -20,12 +20,12 @@ open Vernacprop
    Use the module Coqtoplevel, which catches these exceptions
    (the exceptions are explained only at the toplevel). *)
 
-let checknav_simple {CAst.loc;v=cmd} =
+let checknav_simple ({ CAst.loc; _ } as cmd) =
   if is_navigation_vernac cmd && not (is_reset cmd) then
     CErrors.user_err ?loc (str "Navigation commands forbidden in files.")
 
-let checknav_deep {CAst.loc;v=ast} =
-  if is_deep_navigation_vernac ast then
+let checknav_deep ({ CAst.loc; _ } as cmd) =
+  if is_deep_navigation_vernac cmd then
     CErrors.user_err ?loc (str "Navigation commands forbidden in nested commands.")
 
 (* Echo from a buffer based on position.
@@ -36,34 +36,6 @@ let vernac_echo ?loc in_chan = let open Loc in
       seek_in in_chan loc.bp;
       Feedback.msg_notice @@ str @@ really_input_string in_chan len
     ) loc
-
-(* For coqtop -time, we display the position in the file,
-   and a glimpse of the executed command *)
-
-let pp_cmd_header {CAst.loc;v=com} =
-  let shorten s =
-    if Unicode.utf8_length s > 33 then (Unicode.utf8_sub s 0 30) ^ "..." else s
-  in
-  let noblank s = String.map (fun c ->
-      match c with
-	| ' ' | '\n' | '\t' | '\r' -> '~'
-	| x -> x
-      ) s
-  in
-  let (start,stop) = Option.cata Loc.unloc (0,0) loc in
-  let safe_pr_vernac x =
-    try Ppvernac.pr_vernac x
-    with e -> str (Printexc.to_string e) in
-  let cmd = noblank (shorten (string_of_ppcmds (safe_pr_vernac com)))
-  in str "Chars " ++ int start ++ str " - " ++ int stop ++
-     str " [" ++ str cmd ++ str "] "
-
-(* This is a special case where we assume we are in console batch mode
-   and take control of the console.
- *)
-let print_cmd_header com =
-  Pp.pp_with !Topfmt.std_ft (pp_cmd_header com);
-  Format.pp_print_flush !Topfmt.std_ft ()
 
 (* Reenable when we get back to feedback printing *)
 (* let is_end_of_input any = match any with *)
@@ -88,7 +60,6 @@ let interp_vernac ~check ~interactive ~state ({CAst.loc;_} as com) =
          due to the way it prints. *)
       let com = if state.time
         then begin
-          print_cmd_header com;
           CAst.make ?loc @@ VernacTime(state.time,com)
         end else com in
       let doc, nsid, ntip = Stm.add ~doc:state.doc ~ontop:state.sid (not !Flags.quiet) com in
@@ -97,11 +68,9 @@ let interp_vernac ~check ~interactive ~state ({CAst.loc;_} as com) =
       if ntip <> `NewTip then
         anomaly (str "vernac.ml: We got an unfocus operation on the toplevel!");
 
-      (* Due to bug #5363 we cannot use observe here as we should,
-         it otherwise reveals bugs *)
-      (* Stm.observe nsid; *)
-      let ndoc = if check then Stm.finish ~doc else doc in
-      let new_proof = Proof_global.give_me_the_proof_opt () in
+      (* Force the command  *)
+      let ndoc = if check then Stm.observe ~doc nsid else doc in
+      let new_proof = Vernacstate.Proof_global.give_me_the_proof_opt () [@ocaml.warning "-3"] in
       { state with doc = ndoc; sid = nsid; proof = new_proof; }
     with reraise ->
       (* XXX: In non-interactive mode edit_at seems to do very weird
@@ -121,51 +90,36 @@ let load_vernac_core ~echo ~check ~interactive ~state file =
   let in_echo = if echo then Some (open_utf8_file_in file) else None in
   let input_cleanup () = close_in in_chan; Option.iter close_in in_echo in
 
-  let in_pa   = Pcoq.Parsable.make ~file:(Loc.InFile file) (Stream.of_channel in_chan) in
-  let rstate  = ref state in
-  (* For beautify, list of parsed sids *)
-  let rids    = ref [] in
+  let in_pa =
+    Pcoq.Parsable.make ~loc:(Loc.initial (Loc.InFile file))
+      (Stream.of_channel in_chan) in
   let open State in
-  try
-    (* we go out of the following infinite loop when a End_of_input is
-     * raised, which means that we raised the end of the file being loaded *)
-    while true do
-      let { CAst.loc; _ } as ast =
-          Stm.parse_sentence ~doc:!rstate.doc !rstate.sid in_pa
-        (* If an error in parsing occurs, we propagate the exception
-           so the caller of load_vernac will take care of it. However,
-           in the future it could be possible that we want to handle
-           all the errors as feedback events, thus in this case we
-           should relay the exception here for convenience. A
-           possibility is shown below, however we may want to refactor
-           this code:
 
-        try Stm.parse_sentence !rsid in_pa
-        with
-        | any when not is_end_of_input any ->
-          let (e, info) = CErrors.push any in
-          let loc = Loc.get_loc info in
-          let msg = CErrors.iprint (e, info) in
-          Feedback.msg_error ?loc msg;
-          iraise (e, info)
-       *)
-      in
-      (* Printing of vernacs *)
-      Option.iter (vernac_echo ?loc) in_echo;
+  (* ids = For beautify, list of parsed sids *)
+  let rec loop state ids =
+    match
+      Stm.parse_sentence
+        ~doc:state.doc ~entry:Pvernac.main_entry state.sid in_pa
+    with
+    | None ->
+      input_cleanup ();
+      state, ids, Pcoq.Parsable.comment_state in_pa
+    | Some ast ->
+      (* Printing of AST for -compile-verbose *)
+      Option.iter (vernac_echo ?loc:ast.CAst.loc) in_echo;
 
       checknav_simple ast;
-      let state = Flags.silently (interp_vernac ~check ~interactive ~state:!rstate) ast in
-      rids := state.sid :: !rids;
-      rstate := state;
-    done;
-    input_cleanup ();
-    !rstate, !rids, Pcoq.Parsable.comment_state in_pa
+
+      let state =
+        Flags.silently (interp_vernac ~check ~interactive ~state) ast in
+
+      loop state (state.sid :: ids)
+  in
+  try loop state []
   with any ->   (* whatever the exception *)
     let (e, info) = CErrors.push any in
     input_cleanup ();
-    match e with
-    | Stm.End_of_input -> !rstate, !rids, Pcoq.Parsable.comment_state in_pa
-    | reraise -> iraise (e, info)
+    iraise (e, info)
 
 let process_expr ~state loc_ast =
   checknav_deep loc_ast;
@@ -209,10 +163,7 @@ let beautify_pass ~doc ~comments ~ids ~filename =
      set the comments, then we call print. This has to be done for
      each file. *)
   Pputils.beautify_comments := comments;
-  List.iter (fun id ->
-      Option.iter (fun (loc,ast) ->
-          pr_new_syntax ?loc ft_beautify (Some ast))
-        (Stm.get_ast ~doc id)) ids;
+  List.iter (fun id -> pr_new_syntax ft_beautify (Stm.get_ast ~doc id)) ids;
 
   (* Is this called so comments at EOF are printed? *)
   pr_new_syntax ~loc:(Loc.make_loc (max_int,max_int)) ft_beautify None;

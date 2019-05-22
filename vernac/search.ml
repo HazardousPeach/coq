@@ -18,7 +18,6 @@ open Environ
 open Pattern
 open Libnames
 open Globnames
-open Nametab
 
 module NamedDecl = Context.Named.Declaration
 
@@ -60,11 +59,16 @@ let iter_constructors indsp u fn env nconstr =
 let iter_named_context_name_type f =
   List.iter (fun decl -> f (NamedDecl.get_id decl) (NamedDecl.get_type decl))
 
+let get_current_or_goal_context ?pstate glnum =
+  match pstate with
+  | None -> let env = Global.env () in Evd.(from_env env, env)
+  | Some p -> Pfedit.get_goal_context p glnum
+
 (* General search over hypothesis of a goal *)
-let iter_hypothesis glnum (fn : GlobRef.t -> env -> constr -> unit) =
+let iter_hypothesis ?pstate glnum (fn : GlobRef.t -> env -> constr -> unit) =
   let env = Global.env () in
   let iter_hyp idh typ = fn (VarRef idh) env typ in
-  let evmap,e = Pfedit.get_goal_context glnum in
+  let evmap,e = get_current_or_goal_context ?pstate glnum in
   let pfctxt = named_context e in
   iter_named_context_name_type iter_hyp pfctxt
 
@@ -80,7 +84,7 @@ let iter_declarations (fn : GlobRef.t -> env -> constr -> unit) =
   | "CONSTANT" ->
     let cst = Global.constant_of_delta_kn kn in
     let gr = ConstRef cst in
-    let (typ, _) = Global.type_of_global_in_context (Global.env ()) gr in
+    let (typ, _) = Typeops.type_of_global_in_context (Global.env ()) gr in
       fn gr env typ
   | "INDUCTIVE" ->
     let mind = Global.mind_of_delta_kn kn in
@@ -100,10 +104,10 @@ let iter_declarations (fn : GlobRef.t -> env -> constr -> unit) =
   try Declaremods.iter_all_segments iter_obj
   with Not_found -> ()
 
-let generic_search glnumopt fn =
+let generic_search ?pstate glnumopt fn =
   (match glnumopt with
   | None -> ()
-  | Some glnum ->  iter_hypothesis glnum fn);
+  | Some glnum -> iter_hypothesis ?pstate glnum fn);
   iter_declarations fn
 
 (** This module defines a preference on constrs in the form of a
@@ -173,8 +177,8 @@ let prioritize_search seq fn =
 
 (** Filters *)
 
-(** This function tries to see whether the conclusion matches a pattern. *)
-(** FIXME: this is quite dummy, we may find a more efficient algorithm. *)
+(** This function tries to see whether the conclusion matches a pattern.
+    FIXME: this is quite dummy, we may find a more efficient algorithm. *)
 let rec pattern_filter pat ref env sigma typ =
   let typ = Termops.strip_outer_cast sigma typ in
   if Constr_matching.is_matching env sigma pat typ then true
@@ -192,7 +196,7 @@ let rec head_filter pat ref env sigma typ =
   | _ -> false
 
 let full_name_of_reference ref =
-  let (dir,id) = repr_path (path_of_global ref) in
+  let (dir,id) = repr_path (Nametab.path_of_global ref) in
   DirPath.to_string dir ^ "." ^ Id.to_string id
 
 (** Whether a reference is blacklisted *)
@@ -204,14 +208,14 @@ let blacklist_filter_aux () =
   List.for_all is_not_bl l
 
 let module_filter (mods, outside) ref env typ =
-  let sp = path_of_global ref in
+  let sp = Nametab.path_of_global ref in
   let sl = dirpath sp in
   let is_outside md = not (is_dirpath_prefix_of md sl) in
   let is_inside md = is_dirpath_prefix_of md sl in
   if outside then List.for_all is_outside mods
   else List.is_empty mods || List.exists is_inside mods
 
-let name_of_reference ref = Id.to_string (basename_of_global ref)
+let name_of_reference ref = Id.to_string (Nametab.basename_of_global ref)
 
 let search_about_filter query gr env typ = match query with
 | GlobSearchSubPattern pat ->
@@ -222,7 +226,7 @@ let search_about_filter query gr env typ = match query with
 
 (** SearchPattern *)
 
-let search_pattern gopt pat mods pr_search =
+let search_pattern ?pstate gopt pat mods pr_search =
   let blacklist_filter = blacklist_filter_aux () in
   let filter ref env typ =
     module_filter mods ref env typ &&
@@ -232,7 +236,7 @@ let search_pattern gopt pat mods pr_search =
   let iter ref env typ =
     if filter ref env typ then pr_search ref env typ
   in
-  generic_search gopt iter
+  generic_search ?pstate gopt iter
 
 (** SearchRewrite *)
 
@@ -244,7 +248,7 @@ let rewrite_pat1 pat =
 let rewrite_pat2 pat =
   PApp (PRef (eq ()), [| PMeta None; PMeta None; pat |])
 
-let search_rewrite gopt pat mods pr_search =
+let search_rewrite ?pstate gopt pat mods pr_search =
   let pat1 = rewrite_pat1 pat in
   let pat2 = rewrite_pat2 pat in
   let blacklist_filter = blacklist_filter_aux () in
@@ -257,11 +261,11 @@ let search_rewrite gopt pat mods pr_search =
   let iter ref env typ =
     if filter ref env typ then pr_search ref env typ
   in
-  generic_search gopt iter
+  generic_search ?pstate gopt iter
 
 (** Search *)
 
-let search_by_head gopt pat mods pr_search =
+let search_by_head ?pstate gopt pat mods pr_search =
   let blacklist_filter = blacklist_filter_aux () in
   let filter ref env typ =
     module_filter mods ref env typ &&
@@ -271,11 +275,11 @@ let search_by_head gopt pat mods pr_search =
   let iter ref env typ =
     if filter ref env typ then pr_search ref env typ
   in
-  generic_search gopt iter
+  generic_search ?pstate gopt iter
 
 (** SearchAbout *)
 
-let search_about gopt items mods pr_search =
+let search_about ?pstate gopt items mods pr_search =
   let blacklist_filter = blacklist_filter_aux () in
   let filter ref env typ =
     let eqb b1 b2 = if b1 then b2 else not b2 in
@@ -287,7 +291,7 @@ let search_about gopt items mods pr_search =
   let iter ref env typ =
     if filter ref env typ then pr_search ref env typ
   in
-  generic_search gopt iter
+  generic_search ?pstate gopt iter
 
 type search_constraint =
   | Name_Pattern of Str.regexp
@@ -302,7 +306,7 @@ type 'a coq_object = {
   coq_object_object : 'a;
 }
 
-let interface_search =
+let interface_search ?pstate =
   let rec extract_flags name tpe subtpe mods blacklist = function
   | [] -> (name, tpe, subtpe, mods, blacklist)
   | (Name_Pattern regexp, b) :: l ->
@@ -372,7 +376,7 @@ let interface_search =
   let iter ref env typ =
     if filter_function ref env typ then print_function ref env typ
   in
-  let () = generic_search glnum iter in
+  let () = generic_search ?pstate glnum iter in
   !ans
 
 let blacklist_filter ref env typ =

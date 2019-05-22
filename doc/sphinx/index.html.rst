@@ -23,7 +23,8 @@ Contents
    :caption: Preamble
 
    self
-   credits
+   history
+   changes
 
 .. toctree::
    :caption: The language
@@ -41,6 +42,7 @@ Contents
    proof-engine/proof-handling
    proof-engine/tactics
    proof-engine/ltac
+   proof-engine/ltac2
    proof-engine/detailed-tactic-examples
    proof-engine/ssreflect-proof-language
 
@@ -74,6 +76,7 @@ Contents
    addendum/parallel-proof-processing
    addendum/miscellaneous-extensions
    addendum/universe-polymorphism
+   addendum/sprop
 
 .. toctree::
    :caption: Reference

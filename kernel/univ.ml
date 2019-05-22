@@ -36,10 +36,27 @@ open Util
 module RawLevel =
 struct
   open Names
+
+  module UGlobal = struct
+    type t = DirPath.t * int
+
+    let make dp i = (DirPath.hcons dp,i)
+
+    let equal (d, i) (d', i') = DirPath.equal d d' && Int.equal i i'
+
+    let hash (d,i) = Hashset.Combine.combine i (DirPath.hash d)
+
+    let compare (d, i) (d', i') =
+      let c = Int.compare i i' in
+      if Int.equal c 0 then DirPath.compare d d'
+      else c
+  end
+
   type t =
+    | SProp
     | Prop
     | Set
-    | Level of int * DirPath.t
+    | Level of UGlobal.t
     | Var of int
 
   (* Hash-consing *)
@@ -47,22 +64,25 @@ struct
   let equal x y =
     x == y ||
       match x, y with
+      | SProp, SProp -> true
       | Prop, Prop -> true
       | Set, Set -> true
-      | Level (n,d), Level (n',d') ->
-        Int.equal n n' && DirPath.equal d d'
+      | Level l, Level l' -> UGlobal.equal l l'
       | Var n, Var n' -> Int.equal n n'
       | _ -> false
 
   let compare u v =
     match u, v with
+    | SProp, SProp -> 0
+    | SProp, _ -> -1
+    | _, SProp -> 1
     | Prop,Prop -> 0
     | Prop, _ -> -1
     | _, Prop -> 1
     | Set, Set -> 0
     | Set, _ -> -1
     | _, Set -> 1
-    | Level (i1, dp1), Level (i2, dp2) ->
+    | Level (dp1, i1), Level (dp2, i2) ->
       if i1 < i2 then -1
       else if i1 > i2 then 1
       else DirPath.compare dp1 dp2
@@ -73,6 +93,7 @@ struct
   let hequal x y =
     x == y ||
       match x, y with
+      | SProp, SProp -> true
       | Prop, Prop -> true
       | Set, Set -> true
       | Level (n,d), Level (n',d') ->
@@ -81,31 +102,34 @@ struct
       | _ -> false
 
   let hcons = function
+    | SProp as x -> x
     | Prop as x -> x
     | Set as x -> x
-    | Level (n,d) as x -> 
+    | Level (d,n) as x ->
       let d' = Names.DirPath.hcons d in
-        if d' == d then x else Level (n,d')
+        if d' == d then x else Level (d',n)
     | Var _n as x -> x
 
   open Hashset.Combine
 
   let hash = function
-    | Prop -> combinesmall 1 0
-    | Set -> combinesmall 1 1
+    | SProp -> combinesmall 1 0
+    | Prop -> combinesmall 1 1
+    | Set -> combinesmall 1 2
     | Var n -> combinesmall 2 n
-    | Level (n, d) -> combinesmall 3 (combine n (Names.DirPath.hash d))
+    | Level (d, n) -> combinesmall 3 (combine n (Names.DirPath.hash d))
 
 end
 
 module Level = struct
 
-  open Names
+  module UGlobal = RawLevel.UGlobal
 
   type raw_level = RawLevel.t =
+  | SProp
   | Prop
   | Set
-  | Level of int * DirPath.t
+  | Level of UGlobal.t
   | Var of int
 
   (** Embed levels with their hash value *)
@@ -140,11 +164,13 @@ module Level = struct
 
   let set = make Set
   let prop = make Prop
+  let sprop = make SProp
 
   let is_small x = 
     match data x with
     | Level _ -> false
     | Var _ -> false
+    | SProp -> true
     | Prop -> true
     | Set -> true
  
@@ -158,21 +184,28 @@ module Level = struct
     | Set -> true
     | _ -> false
 
+  let is_sprop x =
+    match data x with
+    | SProp -> true
+    | _ -> false
+
   let compare u v =
     if u == v then 0
     else RawLevel.compare (data u) (data v)
 	    
   let to_string x = 
     match data x with
+    | SProp -> "SProp"
     | Prop -> "Prop"
     | Set -> "Set"
-    | Level (n,d) -> Names.DirPath.to_string d^"."^string_of_int n
+    | Level (d,n) -> Names.DirPath.to_string d^"."^string_of_int n
     | Var n -> "Var(" ^ string_of_int n ^ ")"
 
   let pr u = str (to_string u)
 
   let apart u v =
     match data u, data v with
+    | SProp, _ | _, SProp
     | Prop, Set | Set, Prop -> true
     | _ -> false
 
@@ -185,11 +218,11 @@ module Level = struct
     match data u with
     | Var n -> Some n | _ -> None
 
-  let make m n = make (Level (n, Names.DirPath.hcons m))
+  let make qid = make (Level qid)
 
   let name u =
     match data u with
-    | Level (n, d) -> Some (d, n)
+    | Level (d, n) -> Some (d, n)
     | _ -> None
 end
 
@@ -198,18 +231,15 @@ module LMap = struct
   module M = HMap.Make (Level)
   include M
 
-  let union l r = 
-    merge (fun _k l r ->
-      match l, r with
-      | Some _, _ -> l
-      | _, _ -> r) l r
+  let lunion l r =
+    union (fun _k l _r -> Some l) l r
 
-  let subst_union l r = 
-    merge (fun _k l r ->
+  let subst_union l r =
+    union (fun _k l r ->
       match l, r with
-      | Some (Some _), _ -> l
-      | Some None, None -> l
-      | _, _ -> r) l r
+      | Some _, _ -> Some l
+      | None, None -> Some l
+      | _, _ -> Some r) l r
 
   let diff ext orig =
     fold (fun u v acc -> 
@@ -293,6 +323,7 @@ struct
 	  if Int.equal n n' then Level.compare x x'
 	  else n - n'
 
+    let sprop = hcons (Level.sprop, 0)
     let prop = hcons (Level.prop, 0)
     let set = hcons (Level.set, 0)
     let type1 = hcons (Level.set, 1)
@@ -311,16 +342,16 @@ struct
       let cmp = Level.compare u v in
 	if Int.equal cmp 0 then n <= n'
 	else if n <= n' then 
-	  (Level.is_prop u && Level.is_small v)
+          (Level.is_prop u && not (Level.is_sprop v))
 	else false
 
     let successor (u,n) =
-      if Level.is_prop u then type1
+      if Level.is_small u then type1
       else (u, n + 1)
 
     let addn k (u,n as x) = 
       if k = 0 then x 
-      else if Level.is_prop u then
+      else if Level.is_small u then
 	(Level.set,n+k)
       else (u,n+k)
 
@@ -338,13 +369,16 @@ struct
        left expression is "smaller" than the right one in both cases. *)
     let super (u,n) (v,n') =
       let cmp = Level.compare u v in
-	if Int.equal cmp 0 then SuperSame (n < n')
+        if Int.equal cmp 0 then SuperSame (n < n')
 	else
           let open RawLevel in
           match Level.data u, n, Level.data v, n' with
-          | Prop, _, Prop, _ -> SuperSame (n < n')
-          | Prop, 0, _, _ -> SuperSame true
-          | _, _, Prop, 0 -> SuperSame false
+          | SProp, _, SProp, _ | Prop, _, Prop, _ -> SuperSame (n < n')
+          | SProp, 0, Prop, 0 -> SuperSame true
+          | Prop, 0, SProp, 0 -> SuperSame false
+          | (SProp | Prop), 0, _, _ -> SuperSame true
+          | _, _, (SProp | Prop), 0 -> SuperSame false
+
           | _, _, _, _ -> SuperDiff cmp
 
     let to_string (v, n) =
@@ -430,6 +464,8 @@ struct
     | [l] -> Expr.is_small l
     | _ -> false
 
+  let sprop = tip Expr.sprop
+
   (* The lower predicative level of the hierarchy that contains (impredicative)
      Prop and singleton inductive types *)
   let type0m = tip Expr.prop
@@ -439,8 +475,9 @@ struct
 
   (* When typing [Prop] and [Set], there is no constraint on the level,
      hence the definition of [type1_univ], the type of [Prop] *)    
-  let type1 = tip (Expr.successor Expr.set)
+  let type1 = tip Expr.type1
 
+  let is_sprop x = equal sprop x
   let is_type0m x = equal type0m x
   let is_type0 x = equal type0 x
 
@@ -518,9 +555,9 @@ open Universe
 let universe_level = Universe.level
 
 
-type constraint_type = Lt | Le | Eq
+type constraint_type = AcyclicGraph.constraint_type = Lt | Le | Eq
 
-type explanation = (constraint_type * universe) list
+type explanation = (constraint_type * Level.t) list
 
 let constraint_type_ord c1 c2 = match c1, c2 with
 | Lt, Lt -> 0
@@ -570,9 +607,9 @@ struct
   include S
 
   let pr prl c =
-    fold (fun (u1,op,u2) pp_std ->
-      pp_std ++ prl u1 ++ pr_constraint_type op ++
-	prl u2 ++ fnl () )  c (str "")
+    v 0 (prlist_with_sep spc (fun (u1,op,u2) ->
+      hov 0 (prl u1 ++ pr_constraint_type op ++ prl u2))
+       (elements c))
 
 end
 
@@ -641,7 +678,7 @@ let enforce_eq u v c =
 let constraint_add_leq v u c =
   (* We just discard trivial constraints like u<=u *)
   if Expr.equal v u then c
-  else 
+  else
     match v, u with
     | (x,n), (y,m) -> 
     let j = m - n in
@@ -664,7 +701,12 @@ let check_univ_leq u v =
   Universe.for_all (fun u -> check_univ_leq_one u v) u
 
 let enforce_leq u v c =
-  List.fold_left (fun c v -> (List.fold_left (fun c u -> constraint_add_leq u v c) c u)) c v
+  match is_sprop u, is_sprop v with
+  | true, true -> c
+  | true, false | false, true ->
+    raise (UniverseInconsistency (Le, u, v, None))
+  | false, false ->
+    List.fold_left (fun c v -> (List.fold_left (fun c u -> constraint_add_leq u v c) c u)) c v
 
 let enforce_leq u v c =
   if check_univ_leq u v then c
@@ -830,7 +872,7 @@ struct
     else Array.append x y
 
   let of_array a =
-    assert(Array.for_all (fun x -> not (Level.is_prop x)) a);
+    assert(Array.for_all (fun x -> not (Level.is_prop x || Level.is_sprop x)) a);
     a
 
   let to_array a = a
@@ -937,65 +979,42 @@ let hcons_universe_context = UContext.hcons
 
 module AUContext =
 struct
-  include UContext
+  type t = Names.Name.t array constrained
 
   let repr (inst, cst) =
-    (Array.mapi (fun i _l -> Level.var i) inst, cst)
+    (Array.init (Array.length inst) (fun i -> Level.var i), cst)
 
-  let pr f ?variance ctx = pr f ?variance (repr ctx)
+  let pr f ?variance ctx = UContext.pr f ?variance (repr ctx)
 
   let instantiate inst (u, cst) =
     assert (Array.length u = Array.length inst);
     subst_instance_constraints inst cst
 
+  let names (nas, _) = nas
+
+  let hcons (univs, cst) =
+    (Array.map Names.Name.hcons univs, hcons_constraints cst)
+
+  let empty = ([||], Constraint.empty)
+
+  let is_empty (nas, cst) = Array.is_empty nas && Constraint.is_empty cst
+
+  let union (nas, cst) (nas', cst') = (Array.append nas nas', Constraint.union cst cst')
+
+  let size (nas, _) = Array.length nas
+
 end
+
+type 'a univ_abstracted = {
+  univ_abstracted_value : 'a;
+  univ_abstracted_binder : AUContext.t;
+}
+
+let map_univ_abstracted f {univ_abstracted_value;univ_abstracted_binder} =
+  let univ_abstracted_value = f univ_abstracted_value in
+  {univ_abstracted_value;univ_abstracted_binder}
 
 let hcons_abstract_universe_context = AUContext.hcons
-
-(** Universe info for cumulative inductive types: A context of
-   universe levels with universe constraints, representing local
-   universe variables and constraints, together with an array of
-   Variance.t.
-
-    This data structure maintains the invariant that the variance
-   array has the same length as the universe instance. *)
-module CumulativityInfo =
-struct
-  type t = universe_context * Variance.t array
-
-  let make x =
-    if (Instance.length (UContext.instance (fst x))) =
-       (Array.length (snd x)) then x
-    else anomaly (Pp.str "Invalid subtyping information encountered!")
-
-  let empty = (UContext.empty, [||])
-  let is_empty (univs, variance) = UContext.is_empty univs && Array.is_empty variance
-
-  let pr prl (univs, variance) =
-    UContext.pr prl ~variance univs
-
-  let hcons (univs, variance) = (* should variance be hconsed? *)
-    (UContext.hcons univs, variance)
-
-  let univ_context (univs, _subtypcst) = univs
-  let variance (_univs, variance) = variance
-
-  (** This function takes a universe context representing constraints
-     of an inductive and produces a CumulativityInfo.t with the
-     trivial subtyping relation. *)
-  let from_universe_context univs =
-    (univs, Array.init (UContext.size univs) (fun _ -> Variance.Invariant))
-
-  let leq_constraints (_,variance) u u' csts = Variance.leq_constraints variance u u' csts
-  let eq_constraints (_,variance) u u' csts = Variance.eq_constraints variance u u' csts
-
-end
-
-let hcons_cumulativity_info = CumulativityInfo.hcons
-
-module ACumulativityInfo = CumulativityInfo
-
-let hcons_abstract_cumulativity_info = ACumulativityInfo.hcons
 
 (** A set of universes with universe constraints.
     We linearize the set to a list after typechecking. 
@@ -1145,20 +1164,17 @@ let make_inverse_instance_subst i =
       LMap.empty arr
 
 let make_abstract_instance (ctx, _) = 
-  Array.mapi (fun i _l -> Level.var i) ctx
+  Array.init (Array.length ctx) (fun i -> Level.var i)
 
-let abstract_universes ctx =
+let abstract_universes nas ctx =
   let instance = UContext.instance ctx in
+  let () = assert (Int.equal (Array.length nas) (Instance.length instance)) in
   let subst = make_instance_subst instance in
   let cstrs = subst_univs_level_constraints subst 
       (UContext.constraints ctx)
   in
-  let ctx = UContext.make (instance, cstrs) in
+  let ctx = (nas, cstrs) in
   instance, ctx
-
-let abstract_cumulativity_info (univs, variance) =
-  let subst, univs = abstract_universes univs in
-  subst, (univs, variance)
 
 let rec compact_univ s vars i u =
   match u with
@@ -1180,11 +1196,7 @@ let pr_constraints prl = Constraint.pr prl
 
 let pr_universe_context = UContext.pr
 
-let pr_cumulativity_info = CumulativityInfo.pr
-
 let pr_abstract_universe_context = AUContext.pr
-
-let pr_abstract_cumulativity_info = ACumulativityInfo.pr
 
 let pr_universe_context_set = ContextSet.pr
 
@@ -1214,7 +1226,7 @@ let hcons_universe_context_set (v, c) =
 
 let hcons_univ x = Universe.hcons x
 
-let explain_universe_inconsistency prl (o,u,v,p) =
+let explain_universe_inconsistency prl (o,u,v,p : univ_inconsistency) =
   let pr_uni = Universe.pr_with prl in
   let pr_rel = function
     | Eq -> str"=" | Lt -> str"<" | Le -> str"<=" 
@@ -1226,9 +1238,9 @@ let explain_universe_inconsistency prl (o,u,v,p) =
       if p = [] then mt ()
       else
         str " because" ++ spc() ++ pr_uni v ++
-	prlist (fun (r,v) -> spc() ++ pr_rel r ++ str" " ++ pr_uni v)
+        prlist (fun (r,v) -> spc() ++ pr_rel r ++ str" " ++ prl v)
           p ++
-	(if Universe.equal (snd (List.last p)) u then mt() else
+        (if Universe.equal (Universe.make (snd (List.last p))) u then mt() else
            (spc() ++ str "= " ++ pr_uni u))
   in
     str "Cannot enforce" ++ spc() ++ pr_uni u ++ spc() ++

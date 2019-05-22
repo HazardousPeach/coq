@@ -4,6 +4,7 @@
 
 (**********************************)
 
+
 (** This file should be run via: ocaml configure.ml <opts>
     You could also use our wrapper ./configure <opts> *)
 
@@ -16,9 +17,10 @@ let coq_macos_version = "8.9.90" (** "[...] should be a string comprised of
 three non-negative, period-separated integers [...]" *)
 let vo_magic = 8991
 let state_magic = 58991
+let is_a_released_version = false
 let distributed_exec =
   ["coqtop.opt"; "coqidetop.opt"; "coqqueryworker.opt"; "coqproofworker.opt"; "coqtacticworker.opt";
-   "coqc";"coqchk";"coqdoc";"coqworkmgr";"coq_makefile";"coq-tex";"coqwc";"csdpcert";"coqdep"]
+   "coqc.opt";"coqchk";"coqdoc";"coqworkmgr";"coq_makefile";"coq-tex";"coqwc";"csdpcert";"coqdep"]
 
 let verbose = ref false (* for debugging this script *)
 
@@ -149,7 +151,11 @@ let numeric_prefix_list s =
   let max = String.length s in
   let i = ref 0 in
   while !i < max && isnum s.[!i] do incr i done;
-  string_split '.' (String.sub s 0 !i)
+  match string_split '.' (String.sub s 0 !i) with
+  | [v] -> [v;"0";"0"]
+  | [v1;v2] -> [v1;v2;"0"]
+  | [v1;v2;""] -> [v1;v2;"0"] (* e.g. because it ends with ".beta" *)
+  | v -> v
 
 (** Combined existence and directory tests *)
 
@@ -188,34 +194,6 @@ let which prog =
 let program_in_path prog =
   try let _ = which prog in true with Not_found -> false
 
-(** Choose a command among a list of candidates
-    (command name, mandatory arguments, arguments for this test).
-    Chooses the first one whose execution outputs a non-empty (first) line.
-    Dies with message [msg] if none is found. *)
-
-let select_command msg candidates =
-  let rec search = function
-    | [] -> die msg
-    | (p, x, y) :: tl ->
-      if fst (tryrun p (x @ y)) <> ""
-      then List.fold_left (Printf.sprintf "%s %s") p x
-      else search tl
-  in search candidates
-
-(** As per bug #4828, ocamlfind on Windows/Cygwin barfs if you pass it
-    a quoted path to camlp5o via -pp.  So we only quote camlp5o on not
-    Windows, and warn on Windows if the path contains spaces *)
-let contains_suspicious_characters str =
-  List.fold_left (fun b ch -> String.contains str ch || b) false [' '; '\t']
-
-let win_aware_quote_executable str =
-  if not (os_type_win32 || os_type_cygwin) then
-    sprintf "%S" str
-  else
-    let _ = if contains_suspicious_characters str then
-      warn "The string %S contains suspicious characters; ocamlfind might fail" str in
-    Str.global_replace (Str.regexp "\\\\") "/" str
-
 (** * Date *)
 
 (** The short one is displayed when starting coqtop,
@@ -253,8 +231,6 @@ type preferences = {
   docdir : string option;
   coqdocdir : string option;
   ocamlfindcmd : string option;
-  lablgtkdir : string option;
-  camlp5dir : string option;
   arch : string option;
   natdynlink : bool;
   coqide : ide option;
@@ -291,8 +267,6 @@ let default = {
   docdir = None;
   coqdocdir = None;
   ocamlfindcmd = None;
-  lablgtkdir = None;
-  camlp5dir = None;
   arch = None;
   natdynlink = true;
   coqide = None;
@@ -397,10 +371,6 @@ let args_options = Arg.align [
     "<dir> Where to install Coqdoc style files";
   "-ocamlfind", arg_string_option (fun p ocamlfindcmd -> { p with ocamlfindcmd }),
     "<dir> Specifies the ocamlfind command to use";
-  "-lablgtkdir", arg_string_option (fun p lablgtkdir -> { p with lablgtkdir }),
-    "<dir> Specifies the path to the Lablgtk library";
-  "-camlp5dir", arg_string_option (fun p camlp5dir -> { p with camlp5dir }),
-    "<dir> Specifies where is the Camlp5 library and tells to use it";
   "-flambda-opts", arg_string_list ' ' (fun p flambda_flags -> { p with flambda_flags }),
     "<flags> Specifies additional flags to be passed to the flambda optimizing compiler";
   "-arch", arg_string_option (fun p arch -> { p with arch }),
@@ -580,8 +550,6 @@ let camlbin, caml_version, camllib, findlib_version =
       then reset_caml_top camlexec (camlbin / "ocaml") in
     camlbin, caml_version, camllib, findlib_version
 
-let camlp5compat = "-loc loc"
-
 (** Caml version as a list of string, e.g. ["4";"00";"1"] *)
 
 let caml_version_list = numeric_prefix_list caml_version
@@ -643,10 +611,9 @@ let camltag = match caml_version_list with
     44: "open" shadowing already defined identifier: too common, especially when some are aliases
     45: "open" shadowing a label or constructor: see 44
     48: implicit elimination of optional arguments: too common
-    50: unexpected documentation comment: too common and annoying to avoid
     58: "no cmx file was found in path": See https://github.com/ocaml/num/issues/9
 *)
-let coq_warnings = "-w +a-4-9-27-41-42-44-45-48-50-58"
+let coq_warnings = "-w +a-4-9-27-41-42-44-45-48-58"
 let coq_warn_error =
     if !prefs.warn_error
     then "-warn-error +a"
@@ -660,75 +627,11 @@ let caml_flags =
 let coq_caml_flags =
   coq_warn_error
 
-(** * Camlp5 configuration *)
-
-(* Convention: we use camldir as a prioritary location for camlp5, if given *)
-(* i.e., in the case of camlp5, we search for a copy of camlp5o which *)
-(* answers the right camlp5 lib dir *)
-
-let strip_slash dir =
-  let n = String.length dir in
-  if n>0 && dir.[n - 1] = '/' then String.sub dir 0 (n-1) else dir
-
-let which_camlp5o_for camlp5lib =
-  let camlp5o = Filename.concat camlbin "camlp5o" in
-  let camlp5lib = strip_slash camlp5lib in
-  if fst (tryrun camlp5o ["-where"]) = camlp5lib then camlp5o else
-  let camlp5o = which "camlp5o" in
-  if fst (tryrun camlp5o ["-where"]) = camlp5lib then camlp5o else
-  die ("Error: cannot find Camlp5 binaries corresponding to Camlp5 library " ^ camlp5lib)
-
-let which_camlp5 base =
-  let file = Filename.concat camlbin base in
-  if is_executable file then file else which base
-
-(* TODO: camlp5dir should rather be the *binary* location, just as camldir *)
-(* TODO: remove the late attempts at finding gramlib.cma *)
-
-let check_camlp5 testcma = match !prefs.camlp5dir with
-  | Some dir ->
-    if Sys.file_exists (dir/testcma) then
-      let camlp5o =
-        try which_camlp5o_for dir
-        with Not_found -> die "Error: cannot find Camlp5 binaries in path.\n" in
-      dir, camlp5o
-    else
-      let msg =
-        sprintf "Cannot find camlp5 libraries in '%s' (%s not found)."
-          dir testcma
-      in die msg
-  | None ->
-    try
-      let camlp5o = which_camlp5 "camlp5o" in
-      let dir,_ = tryrun camlp5o ["-where"] in
-      dir, camlp5o
-    with Not_found ->
-      die "No Camlp5 installation found."
-
-let check_camlp5_version camlp5o =
-  let version_line, _ = run ~err:StdOut camlp5o ["-v"] in
-  let version = List.nth (string_split ' ' version_line) 2 in
-  match numeric_prefix_list version with
-  | major::minor::_ when s2i major > 6 || (s2i major, s2i minor) >= (6,6) ->
-    cprintf "You have Camlp5 %s. Good!" version; version
-  | _ -> die "Error: unsupported Camlp5 (version < 6.06 or unrecognized).\n"
-
-let config_camlp5 () =
-    let camlp5mod = "gramlib" in
-    let camlp5libdir, camlp5o = check_camlp5 (camlp5mod^".cma") in
-    let camlp5_version = check_camlp5_version camlp5o in
-    camlp5o, Filename.dirname camlp5o, camlp5libdir, camlp5mod, camlp5_version
-
-let camlp5o, camlp5bindir, fullcamlp5libdir,
-    camlp5mod, camlp5_version = config_camlp5 ()
-
 let shorten_camllib s =
   if starts_with s (camllib^"/") then
     let l = String.length camllib + 1 in
     "+" ^ String.sub s l (String.length s - l)
   else s
-
-let camlp5libdir = shorten_camllib fullcamlp5libdir
 
 (** * Native compiler *)
 
@@ -737,9 +640,6 @@ let msg_byteonly =
 
 let msg_no_ocamlopt () =
   warn "Cannot find the OCaml native-code compiler.\n%s" msg_byteonly
-
-let msg_no_camlp5_cmxa () =
-  warn "Cannot find the native-code library of camlp5.\n%s" msg_byteonly
 
 let msg_no_dynlink_cmxa () =
   warn "Cannot find native-code dynlink library.\n%s" msg_byteonly;
@@ -751,8 +651,6 @@ let check_native () =
   let () = if !prefs.byteonly then raise Not_found in
   let version, _ = tryrun camlexec.find ["opt";"-version"] in
   if version = "" then let () = msg_no_ocamlopt () in raise Not_found
-  else if not (Sys.file_exists (fullcamlp5libdir/camlp5mod^".cmxa"))
-  then let () = msg_no_camlp5_cmxa () in raise Not_found
   else if fst (tryrun camlexec.find ["query";"dynlink"]) = ""
   then let () = msg_no_dynlink_cmxa () in raise Not_found
   else
@@ -770,7 +668,6 @@ let hasnatdynlink = !prefs.natdynlink && best_compiler = "opt"
 
 let natdynlinkflag =
   if hasnatdynlink then "true" else "false"
-
 
 (** * OS dependent libraries *)
 
@@ -801,75 +698,31 @@ let check_for_numlib () =
 let numlib =
   check_for_numlib ()
 
-(** * lablgtk2 and CoqIDE *)
+(** * lablgtk3 and CoqIDE *)
 
-type source = Manual | OCamlFind | Stdlib
-
-let get_source = function
-| Manual -> "manually provided"
-| OCamlFind -> "via ocamlfind"
-| Stdlib -> "in OCaml library"
-
-(** Is some location a suitable LablGtk2 installation ? *)
-
-let check_lablgtkdir ?(fatal=false) src dir =
-  let yell msg = if fatal then die msg else (warn "%s" msg; false) in
-  let msg = get_source src in
-  if not (dir_exists dir) then
-    yell (sprintf "No such directory '%s' (%s)." dir msg)
-  else if not (Sys.file_exists (dir/"gSourceView2.cmi")) then
-    yell (sprintf "Incomplete LablGtk2 (%s): no %s/gSourceView2.cmi." msg dir)
-  else if not (Sys.file_exists (dir/"glib.mli")) then
-    yell (sprintf "Incomplete LablGtk2 (%s): no %s/glib.mli." msg dir)
-  else true
-
-(** Detect and/or verify the Lablgtk2 location *)
+(** Detect and/or verify the Lablgtk3 location *)
 
 let get_lablgtkdir () =
-  match !prefs.lablgtkdir with
-  | Some dir ->
-    let msg = Manual in
-    if check_lablgtkdir ~fatal:true msg dir then dir, msg
-    else "", msg
-  | None ->
-    let msg = OCamlFind in
-    let d1,_ = tryrun camlexec.find ["query";"lablgtk2.sourceview2"] in
-    if d1 <> "" && check_lablgtkdir msg d1 then d1, msg
-    else
-      (* In debian wheezy, ocamlfind knows only of lablgtk2 *)
-      let d2,_ = tryrun camlexec.find ["query";"lablgtk2"] in
-      if d2 <> "" && d2 <> d1 && check_lablgtkdir msg d2 then d2, msg
-      else
-        let msg = Stdlib in
-        let d3 = camllib^"/lablgtk2" in
-        if check_lablgtkdir msg d3 then d3, msg
-        else "", msg
+  tryrun camlexec.find ["query";"lablgtk3-sourceview3"]
 
 (** Detect and/or verify the Lablgtk2 version *)
 
-let check_lablgtk_version src dir = match src with
-| Manual | Stdlib ->
-  warn "Could not check the version of lablgtk2.\nMake sure your version is at least 2.18.3.";
-  (true, "an unknown version")
-| OCamlFind ->
-  let v, _ = tryrun camlexec.find ["query"; "-format"; "%v"; "lablgtk2"] in
-  try
-    let vi = List.map s2i (numeric_prefix_list v) in
-    if vi < [2; 16; 0] then
+let check_lablgtk_version () =
+  let v, _ = tryrun camlexec.find ["query"; "-format"; "%v"; "lablgtk3"] in
+  (true, v)
+
+(* ejgallego: we wait to do version checks until an official release is out *)
+(*  try
+    let vi = numeric_prefix_list v in
+    (* Temporary hack *)
+    if vi = ["3";"0";"beta3"] then (false, v) else
+    let vi = List.map s2i vi in
+    if vi < [3; 0; 0] then
       (false, v)
-    else if vi < [2; 18; 3] then
-      begin
-        (* Version 2.18.3 is known to report incorrectly as 2.18.0, and Launchpad packages report as version 2.16.0 due to a misconfigured META file; see https://bugs.launchpad.net/ubuntu/+source/lablgtk2/+bug/1577236 *)
-        warn "Your installed lablgtk reports as %s.\n\
-It is possible that the installed version is actually more recent\n\
-but reports an incorrect version. If the installed version is\n\
-actually more recent than 2.18.3, that's fine; if it is not,\n
-CoqIDE will compile but may be very unstable." v;
-        (true, "an unknown version")
-      end
     else
       (true, v)
   with _ -> (false, v)
+*)
 
 let pr_ide = function No -> "no" | Byte -> "only bytecode" | Opt -> "native"
 
@@ -892,19 +745,19 @@ let lablgtkdir = ref ""
 let check_coqide () =
   if !prefs.coqide = Some No then set_ide No "CoqIde manually disabled";
   let dir, via = get_lablgtkdir () in
-  if dir = "" then set_ide No "LablGtk2 not found";
-  let (ok, version) = check_lablgtk_version via dir in
-  let found = sprintf "LablGtk2 found (%s, %s)" (get_source via) version in
-  if not ok then set_ide No (found^", but too old (required >= 2.18.3, found " ^ version ^ ")");
-  (* We're now sure to produce at least one kind of coqide *)
-  lablgtkdir := shorten_camllib dir;
-  if !prefs.coqide = Some Byte then set_ide Byte (found^", bytecode requested");
-  if best_compiler<>"opt" then set_ide Byte (found^", but no native compiler");
-  if not (Sys.file_exists (dir/"gtkThread.cmx")) then
-    set_ide Byte (found^", but no native LablGtk2");
-  if not (Sys.file_exists (camllib/"threads"/"threads.cmxa")) then
-    set_ide Byte (found^", but no native threads");
-  set_ide Opt (found^", with native threads")
+  if dir = ""
+  then set_ide No "LablGtk3 not found"
+  else
+    let (ok, version) = check_lablgtk_version () in
+    let found = sprintf "LablGtk3 found (%s)" version in
+    if not ok then set_ide No (found^", but too old (required >= 3.0, found " ^ version ^ ")");
+    (* We're now sure to produce at least one kind of coqide *)
+    lablgtkdir := shorten_camllib dir;
+    if !prefs.coqide = Some Byte then set_ide Byte (found^", bytecode requested");
+    if best_compiler <> "opt" then set_ide Byte (found^", but no native compiler");
+    if not (Sys.file_exists (camllib/"threads"/"threads.cmxa")) then
+      set_ide Byte (found^", but no native threads");
+    set_ide Opt (found^", with native threads")
 
 let coqide =
   try check_coqide ()
@@ -912,19 +765,16 @@ let coqide =
 
 (** System-specific CoqIde flags *)
 
-let lablgtkincludes = ref ""
 let idearchflags = ref ""
 let idearchfile = ref ""
 let idecdepsflags = ref ""
 let idearchdef = ref "X11"
 
 let coqide_flags () =
-  if !lablgtkdir <> "" then lablgtkincludes := sprintf "-I %S" !lablgtkdir;
   match coqide, arch with
     | "opt", "Darwin" when !prefs.macintegration ->
       let osxdir,_ = tryrun camlexec.find ["query";"lablgtkosx"] in
       if osxdir <> "" then begin
-        lablgtkincludes := sprintf "%s -I %S" !lablgtkincludes osxdir;
         idearchflags := "lablgtkosx.cma";
         idearchdef := "QUARTZ"
       end
@@ -1105,19 +955,17 @@ let print_summary () =
   pr "  Architecture                : %s\n" arch;
   if operating_system <> "" then
     pr "  Operating system            : %s\n" operating_system;
+  pr "  Sys.os_type                 : %s\n" Sys.os_type;
   pr "  Coq VM bytecode link flags  : %s\n" (String.concat " " vmbyteflags);
   pr "  Other bytecode link flags   : %s\n" custom_flag;
   pr "  OCaml version               : %s\n" caml_version;
   pr "  OCaml binaries in           : %s\n" (esc camlbin);
   pr "  OCaml library in            : %s\n" (esc camllib);
   pr "  OCaml flambda flags         : %s\n" (String.concat " " !prefs.flambda_flags);
-  pr "  Camlp5 version              : %s\n" camlp5_version;
-  pr "  Camlp5 binaries in          : %s\n" (esc camlp5bindir);
-  pr "  Camlp5 library in           : %s\n" (esc camlp5libdir);
   if best_compiler = "opt" then
     pr "  Native dynamic link support : %B\n" hasnatdynlink;
   if coqide <> "no" then
-    pr "  Lablgtk2 library in         : %s\n" (esc !lablgtkdir);
+    pr "  Lablgtk3 library in         : %s\n" (esc !lablgtkdir);
   if !idearchdef = "QUARTZ" then
     pr "  Mac OS integration is on\n";
   pr "  CoqIde                      : %s\n" coqide;
@@ -1153,7 +1001,6 @@ let write_dbg_wrapper f =
   pr "# DO NOT EDIT THIS FILE: automatically generated by ../configure #\n\n";
   pr "export COQTOP=%S\n" coqtop;
   pr "OCAMLDEBUG=%S\n" (camlbin^"/ocamldebug");
-  pr "CAMLP5LIB=%S\n\n" camlp5libdir;
   pr ". $COQTOP/dev/ocamldebug-coq.run\n";
   close_out o;
   Unix.chmod f 0o555
@@ -1185,10 +1032,6 @@ let write_configml f =
   pr_p "datadirsuffix" datadirsuffix;
   pr_p "docdirsuffix" docdirsuffix;
   pr_s "ocamlfind" camlexec.find;
-  pr_s "camlp5o" camlp5o;
-  pr_s "camlp5bin" camlp5bindir;
-  pr_s "camlp5lib" camlp5libdir;
-  pr_s "camlp5compat" camlp5compat;
   pr_s "caml_flags" caml_flags;
   pr_s "version" coq_version;
   pr_s "caml_version" caml_version;
@@ -1211,10 +1054,9 @@ let write_configml f =
   pr_b "bytecode_compiler" !prefs.bytecodecompiler;
   pr_b "native_compiler" !prefs.nativecompiler;
 
-  let core_src_dirs = [ "config"; "dev"; "lib"; "clib"; "kernel"; "library";
-                        "engine"; "pretyping"; "interp"; "parsing"; "proofs";
-                        "tactics"; "toplevel"; "printing";
-                        "grammar"; "ide"; "stm"; "vernac" ] in
+  let core_src_dirs = [ "config"; "lib"; "clib"; "kernel"; "library";
+                        "engine"; "pretyping"; "interp"; "gramlib"; "gramlib/.pack"; "parsing"; "proofs";
+                        "tactics"; "toplevel"; "printing"; "ide"; "stm"; "vernac" ] in
   let core_src_dirs = List.fold_left (fun acc core_src_subdir -> acc ^ "  \"" ^ core_src_subdir ^ "\";\n")
                                     ""
                                     core_src_dirs in
@@ -1296,11 +1138,6 @@ let write_makefile f =
   pr "CAMLDEBUGOPT=%s\n\n" coq_debug_flag;
   pr "# Compilation profile flag\n";
   pr "CAMLTIMEPROF=%s\n\n" coq_profile_flag;
-  pr "# Camlp5 : flavor, binaries, libraries ...\n";
-  pr "# NB : avoid using CAMLP5LIB (conflict under Windows)\n";
-  pr "CAMLP5O=%s\n" (win_aware_quote_executable camlp5o);
-  pr "CAMLP5COMPAT=%s\n" camlp5compat;
-  pr "MYCAMLP5LIB=%S\n\n" camlp5libdir;
   pr "# Your architecture\n";
   pr "# Can be obtain by UNIX command arch\n";
   pr "ARCH=%s\n" arch;
@@ -1320,7 +1157,6 @@ let write_makefile f =
   pr "# Unix systems and no profiling: strip\n";
   pr "STRIP=%s\n\n" strip;
   pr "# LablGTK\n";
-  pr "COQIDEINCLUDES=%s\n\n" !lablgtkincludes;
   pr "# CoqIde (no/byte/opt)\n";
   pr "HASCOQIDE=%s\n" coqide;
   pr "IDEFLAGS=%s\n" !idearchflags;
@@ -1332,7 +1168,7 @@ let write_makefile f =
   pr "# Option to control compilation and installation of the documentation\n";
   pr "WITHDOC=%s\n\n" (if !prefs.withdoc then "all" else "no");
   pr "# Option to produce precompiled files for native_compute\n";
-  pr "NATIVECOMPUTE=%s\n" (if !prefs.nativecompiler then "-native-compiler" else "");
+  pr "NATIVECOMPUTE=%s\n" (if !prefs.nativecompiler then "-native-compiler yes" else "");
   pr "COQWARNERROR=%s\n" (if !prefs.warn_error then "-w +default" else "");
   close_out o;
   Unix.chmod f 0o444
@@ -1370,8 +1206,8 @@ let write_configpy f =
   safe_remove f;
   let o = open_out f in
   let pr s = fprintf o s in
-  let pr_s = pr "%s = '%s'\n" in
   pr "# DO NOT EDIT THIS FILE: automatically generated by ../configure\n";
-  pr_s "version" coq_version
+  pr "version = '%s'\n" coq_version;
+  pr "is_a_released_version = %s\n" (if is_a_released_version then "True" else "False")
 
 let _ = write_configpy "config/coq_config.py"

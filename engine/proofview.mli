@@ -156,10 +156,15 @@ type +'a tactic
     tactic has given up. In case of multiple success the first one is
     selected. If there is no success, fails with
     {!Logic_monad.TacticFailure}*)
-val apply : Environ.env -> 'a tactic -> proofview -> 'a
-                                                   * proofview
-                                                   * (bool*Evar.t list*Evar.t list)
-                                                   * Proofview_monad.Info.tree
+val apply
+  :  name:Names.Id.t
+  -> poly:bool
+  -> Environ.env
+  -> 'a tactic
+  -> proofview
+  -> 'a * proofview
+       * (bool*Evar.t list*Evar.t list)
+       * Proofview_monad.Info.tree
 
 (** {7 Monadic primitives} *)
 
@@ -239,15 +244,12 @@ val tclBREAK : (iexn -> iexn option) -> 'a tactic -> 'a tactic
 (** [tclFOCUS i j t] applies [t] after focusing on the goals number
     [i] to [j] (see {!focus}). The rest of the goals is restored after
     the tactic action. If the specified range doesn't correspond to
-    existing goals, fails with [NoSuchGoals] (a user error). this
-    exception is caught at toplevel with a default message + a hook
-    message that can be customized by [set_nosuchgoals_hook] below.
-    This hook is used to add a suggestion about bullets when
-    applicable. *)
+    existing goals, fails with the [nosuchgoal] argument, by default
+    raising [NoSuchGoals] (a user error). This exception is caught at
+    toplevel with a default message. *)
 exception NoSuchGoals of int
-val set_nosuchgoals_hook: (int -> Pp.t) -> unit
 
-val tclFOCUS : int -> int -> 'a tactic -> 'a tactic
+val tclFOCUS : ?nosuchgoal:'a tactic -> int -> int -> 'a tactic -> 'a tactic
 
 (** [tclFOCUSLIST li t] applies [t] on the list of focused goals
     described by [li]. Each element of [li] is a pair [(i, j)] denoting
@@ -256,13 +258,14 @@ val tclFOCUS : int -> int -> 'a tactic -> 'a tactic
     intervals. If the set of such goals is not a single range, then it
     will move goals such that it is a single range. (So, for
     instance, [[1, 3-5]; idtac.] is not the identity.)
-    If the set of such goals is empty, it will fail. *)
-val tclFOCUSLIST : (int * int) list -> 'a tactic -> 'a tactic
+    If the set of such goals is empty, it will fail with [nosuchgoal],
+    by default raising [NoSuchGoals 0]. *)
+val tclFOCUSLIST : ?nosuchgoal:'a tactic ->  (int * int) list -> 'a tactic -> 'a tactic
 
 (** [tclFOCUSID x t] applies [t] on a (single) focused goal like
     {!tclFOCUS}. The goal is found by its name rather than its
-    number.*)
-val tclFOCUSID : Names.Id.t -> 'a tactic -> 'a tactic
+    number. Fails with [nosuchgoal], by default raising [NoSuchGoals 1]. *)
+val tclFOCUSID : ?nosuchgoal:'a tactic -> Names.Id.t -> 'a tactic -> 'a tactic
 
 (** [tclTRYFOCUS i j t] behaves like {!tclFOCUS}, except that if the
     specified range doesn't correspond to existing goals, behaves like
@@ -390,14 +393,19 @@ val give_up : unit tactic
 (** {7 Control primitives} *)
 
 (** [tclPROGRESS t] checks the state of the proof after [t]. It it is
-    identical to the state before, then [tclePROGRESS t] fails, otherwise
+    identical to the state before, then [tclPROGRESS t] fails, otherwise
     it succeeds like [t]. *)
 val tclPROGRESS : 'a tactic -> 'a tactic
+
+module Progress : sig
+  val goal_equal : Evd.evar_map -> Evar.t -> Evd.evar_map -> Evar.t -> bool
+end
 
 (** Checks for interrupts *)
 val tclCHECKINTERRUPT : unit tactic
 
 exception Timeout
+
 (** [tclTIMEOUT n t] can have only one success.
     In case of timeout if fails with [tclZERO Timeout]. *)
 val tclTIMEOUT : int -> 'a tactic -> 'a tactic
@@ -405,6 +413,10 @@ val tclTIMEOUT : int -> 'a tactic -> 'a tactic
 (** [tclTIME s t] displays time for each atomic call to t, using s as an
     identifying annotation if present *)
 val tclTIME : string option -> 'a tactic -> 'a tactic
+
+(** Internal, don't use. *)
+val tclProofInfo : (Names.Id.t * bool) tactic
+[@@ocaml.deprecated "internal, don't use"]
 
 (** {7 Unsafe primitives} *)
 
@@ -456,9 +468,9 @@ module Unsafe : sig
   (** Clears the future goals store in the proof view. *)
   val reset_future_goals : proofview -> proofview
 
-  (** Give an evar the status of a goal (changes its source location
-      and makes it unresolvable for type classes. *)
-  val mark_as_goal : Evd.evar_map -> Evar.t -> Evd.evar_map
+  (** Give the evars the status of a goal (changes their source location
+      and makes them unresolvable for type classes. *)
+  val mark_as_goals : Evd.evar_map -> Evar.t list -> Evd.evar_map
 
   (** Make an evar unresolvable for type classes. *)
   val mark_as_unresolvable : proofview -> Evar.t -> proofview
@@ -474,8 +486,6 @@ module Unsafe : sig
       defined *)
   val undefined : Evd.evar_map -> Proofview_monad.goal_with_state list ->
     Proofview_monad.goal_with_state list
-
-  val typeclass_resolvable : unit Evd.Store.field
 
 end
 
@@ -495,10 +505,6 @@ module Goal : sig
   (** Type of goals. *)
   type t
 
-  (** Normalises the argument goal. *)
-  val normalize : t -> t tactic
-  [@@ocaml.deprecated "Normalization is enforced by EConstr, [normalize] is not needed anymore"]
-
   (** [concl], [hyps], [env] and [sigma] given a goal [gl] return
       respectively the conclusion of [gl], the hypotheses of [gl], the
       environment of [gl] (i.e. the global environment and the
@@ -507,7 +513,6 @@ module Goal : sig
   val hyps : t -> named_context
   val env : t -> Environ.env
   val sigma : t -> Evd.evar_map
-  val extra : t -> Evd.Store.t
   val state : t -> Proofview_monad.StateStore.t
 
   (** [nf_enter t] applies the goal-dependent tactic [t] in each goal
@@ -520,8 +525,8 @@ module Goal : sig
   (** Like {!nf_enter}, but does not normalize the goal beforehand. *)
   val enter : (t -> unit tactic) -> unit tactic
 
-  (** Like {!enter}, but assumes exactly one goal under focus, raising *)
-  (** a fatal error otherwise. *)
+  (** Like {!enter}, but assumes exactly one goal under focus, raising
+      a fatal error otherwise. *)
   val enter_one : ?__LOC__:string -> (t -> 'a tactic) -> 'a tactic
 
   (** Recover the list of current goals under focus, without evar-normalization.
@@ -550,7 +555,7 @@ module Trace : sig
   val log : Proofview_monad.lazy_msg -> unit tactic
   val name_tactic : Proofview_monad.lazy_msg -> 'a tactic -> 'a tactic
 
-  val pr_info : ?lvl:int -> Proofview_monad.Info.tree -> Pp.t
+  val pr_info : Environ.env -> Evd.evar_map -> ?lvl:int -> Proofview_monad.Info.tree -> Pp.t
 
 end
 
@@ -590,7 +595,7 @@ module V82 : sig
   val top_goals : entry -> proofview -> Evar.t list Evd.sigma
 
   (* returns the existential variable used to start the proof *)
-  val top_evars : entry -> Evar.t list
+  val top_evars : entry -> proofview -> Evar.t list
 
   (* Caution: this function loses quite a bit of information. It
      should be avoided as much as possible.  It should work as
@@ -615,8 +620,10 @@ module Notations : sig
 
   (** {!tclBIND} *)
   val (>>=) : 'a tactic -> ('a -> 'b tactic) -> 'b tactic
+
   (** {!tclTHEN} *)
   val (<*>) : unit tactic -> 'a tactic -> 'a tactic
+
   (** {!tclOR}: [t1+t2] = [tclOR t1 (fun _ -> t2)]. *)
   val (<+>) : 'a tactic -> 'a tactic -> 'a tactic
 

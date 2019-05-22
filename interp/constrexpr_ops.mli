@@ -113,11 +113,11 @@ val map_constr_expr_with_binders :
 val replace_vars_constr_expr :
   Id.t Id.Map.t -> constr_expr -> constr_expr
 
-(** Specific function for interning "in indtype" syntax of "match" *)
-val ids_of_cases_indtype : cases_pattern_expr -> Id.Set.t
-
 val free_vars_of_constr_expr : constr_expr -> Id.Set.t
 val occur_var_constr_expr : Id.t -> constr_expr -> bool
+
+(** Return all (non-qualified) names treating binders as names *)
+val names_of_constr_expr : constr_expr -> Id.Set.t
 
 val split_at_annot : local_binder_expr list -> lident option -> local_binder_expr list * local_binder_expr list
 
@@ -126,9 +126,6 @@ val patntn_loc : ?loc:Loc.t -> cases_pattern_notation_substitution -> notation -
 
 (** For cases pattern parsing errors *)
 val error_invalid_pattern_notation : ?loc:Loc.t -> unit -> 'a
-
-(** Placeholder for global option, should be moved to a parameter *)
-val asymmetric_patterns : bool ref
 
 (** Local universe and constraint declarations. *)
 val interp_univ_decl : Environ.env -> universe_decl_expr ->

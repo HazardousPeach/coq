@@ -48,16 +48,26 @@ type abstraction_kind = AbsLambda | AbsPi
 
 type proj_flag = int option (** [Some n] = proj of the n-th visible argument *)
 
-(** Representation of integer literals that appear in Coq scripts.
-    We now use raw strings of digits in base 10 (big-endian), and a separate
-    sign flag. Note that this representation is not unique, due to possible
-    multiple leading zeros, and -0 = +0 *)
+(** Representation of decimal literals that appear in Coq scripts.
+   We now use raw strings following the format defined by
+   [NumTok.t] and a separate sign flag.
 
-type sign = bool
-type raw_natural_number = string
+   Note that this representation is not unique, due to possible
+   multiple leading or trailing zeros, and -0 = +0, for instances.
+   The reason to keep the numeral exactly as it was parsed is that
+   specific notations can be declared for specific numerals
+   (e.g. [Notation "0" := False], or [Notation "00" := (nil,nil)], or
+   [Notation "2e1" := ...]). Those notations, which override the
+   generic interpretation as numeral, use the same representation of
+   numeral using the Numeral constructor. So the latter should be able
+   to record the form of the numeral which exactly matches the
+   notation. *)
+
+type sign = SPlus | SMinus
+type raw_numeral = NumTok.t
 
 type prim_token =
-  | Numeral of raw_natural_number * sign
+  | Numeral of sign * raw_numeral
   | String of string
 
 type instance_expr = Glob_term.glob_level list
@@ -80,8 +90,8 @@ type cases_pattern_expr_r =
 and cases_pattern_expr = cases_pattern_expr_r CAst.t
 
 and cases_pattern_notation_substitution =
-    cases_pattern_expr list *     (** for constr subterms *)
-    cases_pattern_expr list list  (** for recursive notations *)
+    cases_pattern_expr list *     (* for constr subterms *)
+    cases_pattern_expr list list  (* for recursive notations *)
 
 and constr_expr_r =
   | CRef     of qualid * instance_expr option
@@ -124,16 +134,17 @@ and branch_expr =
   (cases_pattern_expr list list * constr_expr) CAst.t
 
 and fix_expr =
-    lident * (lident option * recursion_order_expr) *
+    lident * recursion_order_expr option *
       local_binder_expr list * constr_expr * constr_expr
 
 and cofix_expr =
     lident * local_binder_expr list * constr_expr * constr_expr
 
-and recursion_order_expr =
-  | CStructRec
-  | CWfRec of constr_expr
-  | CMeasureRec of constr_expr * constr_expr option (** measure, relation *)
+and recursion_order_expr_r =
+  | CStructRec of lident
+  | CWfRec of lident * constr_expr
+  | CMeasureRec of lident option * constr_expr * constr_expr option (** argument, measure, relation *)
+and recursion_order_expr = recursion_order_expr_r CAst.t
 
 (* Anonymous defs allowed ?? *)
 and local_binder_expr =
@@ -142,10 +153,10 @@ and local_binder_expr =
   | CLocalPattern of (cases_pattern_expr * constr_expr option) CAst.t
 
 and constr_notation_substitution =
-    constr_expr list *      (** for constr subterms *)
-    constr_expr list list * (** for recursive notations *)
-    cases_pattern_expr list *   (** for binders *)
-    local_binder_expr list list (** for binder lists (recursive notations) *)
+    constr_expr list *      (* for constr subterms *)
+    constr_expr list list * (* for recursive notations *)
+    cases_pattern_expr list *   (* for binders *)
+    local_binder_expr list list (* for binder lists (recursive notations) *)
 
 type constr_pattern_expr = constr_expr
 

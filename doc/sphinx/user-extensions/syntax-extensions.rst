@@ -31,8 +31,8 @@ Basic notations
 
 .. cmd:: Notation
 
-A *notation* is a symbolic expression denoting some term or term
-pattern.
+   A *notation* is a symbolic expression denoting some term or term
+   pattern.
 
 A typical notation is the use of the infix symbol ``/\`` to denote the
 logical conjunction (and). Such a notation is declared by
@@ -70,7 +70,7 @@ associativity rules have to be given.
 
    The right-hand side of a notation is interpreted at the time the notation is
    given. In particular, disambiguation of constants, :ref:`implicit arguments
-   <ImplicitArguments>`, :ref:`coercions <Coercions>`, etc. are resolved at the
+   <ImplicitArguments>` and other notations are resolved at the
    time of the declaration of the notation.
 
 Precedences and associativity
@@ -181,7 +181,7 @@ rules. Some simple left factorization work has to be done. Here is an example.
 .. coqtop:: all
 
    Notation "x < y" := (lt x y) (at level 70).
-   Notation "x < y < z" := (x < y /\ y < z) (at level 70).
+   Fail Notation "x < y < z" := (x < y /\ y < z) (at level 70).
 
 In order to factorize the left part of the rules, the subexpression
 referred to by ``y`` has to be at the same level in both rules. However the
@@ -327,22 +327,29 @@ symbols.
 Reserving notations
 ~~~~~~~~~~~~~~~~~~~
 
-A given notation may be used in different contexts. Coq expects all
-uses of the notation to be defined at the same precedence and with the
-same associativity. To avoid giving the precedence and associativity
-every time, it is possible to declare a parsing rule in advance
-without giving its interpretation. Here is an example from the initial
-state of Coq.
+.. cmd:: Reserved Notation @string {? (@modifiers) }
 
-.. coqtop:: in
+   A given notation may be used in different contexts. Coq expects all
+   uses of the notation to be defined at the same precedence and with the
+   same associativity. To avoid giving the precedence and associativity
+   every time, this command declares a parsing rule (:token:`string`) in advance
+   without giving its interpretation. Here is an example from the initial
+   state of Coq.
 
-   Reserved Notation "x = y" (at level 70, no associativity).
+   .. coqtop:: in
 
-Reserving a notation is also useful for simultaneously defining an
-inductive type or a recursive constant and a notation for it.
+      Reserved Notation "x = y" (at level 70, no associativity).
 
-.. note:: The notations mentioned in the module :ref:`init-notations` are reserved. Hence
-          their precedence and associativity cannot be changed.
+   Reserving a notation is also useful for simultaneously defining an
+   inductive type or a recursive constant and a notation for it.
+
+   .. note:: The notations mentioned in the module :ref:`init-notations` are reserved. Hence
+             their precedence and associativity cannot be changed.
+
+   .. cmdv:: Reserved Infix "@symbol" {* @modifiers}
+
+      This command declares an infix parsing rule without giving its
+      interpretation.
 
 Simultaneous definition of terms and notations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -486,7 +493,7 @@ Sometimes, for the sake of factorization of rules, a binder has to be
 parsed as a term. This is typically the case for a notation such as
 the following:
 
-.. coqtop:: in
+.. coqdoc::
 
    Notation "{ x : A | P }" := (sig (fun x : A => P))
        (at level 0, x at level 99 as ident).
@@ -692,6 +699,8 @@ side. E.g.:
    Notation "'apply_id' f a1 .. an" := (.. (f a1) .. an)
      (at level 10, f ident, a1, an at level 9).
 
+.. _custom-entries:
+
 Custom entries
 ~~~~~~~~~~~~~~
 
@@ -786,9 +795,9 @@ main grammar, or from another custom entry as is the case in
 to indicate that ``e`` has to be parsed at level ``2`` of the grammar
 associated to the custom entry ``expr``. The level can be omitted, as in
 
-.. coqtop:: in
+.. coqdoc::
 
-   Notation "[ e ]" := e (e custom expr)`.
+   Notation "[ e ]" := e (e custom expr).
 
 in which case Coq tries to infer it.
 
@@ -838,10 +847,11 @@ gives a way to let any arbitrary expression which is not handled by the
 custom entry ``expr`` be parsed or printed by the main grammar of term
 up to the insertion of a pair of curly brackets.
 
-.. cmd:: Print Grammar @ident.
+.. cmd:: Print Custom Grammar @ident.
+   :name: Print Custom Grammar
 
-   This displays the state of the grammar for terms and grammar for
-   patterns associated to the custom entry :token:`ident`.
+   This displays the state of the grammar for terms associated to
+   the custom entry :token:`ident`.
 
 Summary
 ~~~~~~~
@@ -857,41 +867,41 @@ notations are given below. The optional :production:`scope` is described in
 
 .. productionlist:: coq
    notation      : [Local] Notation `string` := `term` [`modifiers`] [: `scope`].
-                 : | [Local] Infix `string` := `qualid` [`modifiers`] [: `scope`].
-                 : | [Local] Reserved Notation `string` [`modifiers`] .
-                 : | Inductive `ind_body` [`decl_notation`] with … with `ind_body` [`decl_notation`].
-                 : | CoInductive `ind_body` [`decl_notation`] with … with `ind_body` [`decl_notation`].
-                 : | Fixpoint `fix_body` [`decl_notation`] with … with `fix_body` [`decl_notation`].
-                 : | CoFixpoint `cofix_body` [`decl_notation`] with … with `cofix_body` [`decl_notation`].
-                 : | [Local] Declare Custom Entry `ident`.
+                 : [Local] Infix `string` := `qualid` [`modifiers`] [: `scope`].
+                 : [Local] Reserved Notation `string` [`modifiers`] .
+                 : Inductive `ind_body` [`decl_notation`] with … with `ind_body` [`decl_notation`].
+                 : CoInductive `ind_body` [`decl_notation`] with … with `ind_body` [`decl_notation`].
+                 : Fixpoint `fix_body` [`decl_notation`] with … with `fix_body` [`decl_notation`].
+                 : CoFixpoint `cofix_body` [`decl_notation`] with … with `cofix_body` [`decl_notation`].
+                 : [Local] Declare Custom Entry `ident`.
    decl_notation : [where `string` := `term` [: `scope`] and … and `string` := `term` [: `scope`]].
    modifiers     : at level `num`
                  : in custom `ident`
                  : in custom `ident` at level `num`
-                 : | `ident` , … , `ident` at level `num` [`binderinterp`]
-                 : | `ident` , … , `ident` at next level [`binderinterp`]
-                 : | `ident` `explicit_subentry`
-                 : | left associativity
-                 : | right associativity
-                 : | no associativity
-                 : | only parsing
-                 : | only printing
-                 : | format `string`
+                 : `ident` , … , `ident` at level `num` [`binderinterp`]
+                 : `ident` , … , `ident` at next level [`binderinterp`]
+                 : `ident` `explicit_subentry`
+                 : left associativity
+                 : right associativity
+                 : no associativity
+                 : only parsing
+                 : only printing
+                 : format `string`
    explicit_subentry : ident
-                 : | global
-                 : | bigint
-                 : | [strict] pattern [at level `num`]
-                 : | binder
-                 : | closed binder
-                 : | constr [`binderinterp`]
-                 : | constr at level `num` [`binderinterp`]
-                 : | constr at next level [`binderinterp`]
-                 : | custom [`binderinterp`]
-                 : | custom at level `num` [`binderinterp`]
-                 : | custom at next level [`binderinterp`]
+                 : global
+                 : bigint
+                 : [strict] pattern [at level `num`]
+                 : binder
+                 : closed binder
+                 : constr [`binderinterp`]
+                 : constr at level `num` [`binderinterp`]
+                 : constr at next level [`binderinterp`]
+                 : custom [`binderinterp`]
+                 : custom at level `num` [`binderinterp`]
+                 : custom at next level [`binderinterp`]
    binderinterp  : as ident
-                 : | as pattern
-                 : | as strict pattern
+                 : as pattern
+                 : as strict pattern
 
 .. note:: No typing of the denoted expression is performed at definition
           time. Type checking is done only at the time of use of the notation.
@@ -941,8 +951,8 @@ instance the infix symbol ``+``, can be used to denote distinct
 definitions of the additive operator. Depending on which interpretation
 scopes are currently open, the interpretation is different.
 Interpretation scopes can include an interpretation for numerals and
-strings. However, this is only made possible at the Objective Caml
-level.
+strings, either at the OCaml level or using :cmd:`Numeral Notation`
+or :cmd:`String Notation`.
 
 .. cmd:: Declare Scope @scope
 
@@ -1054,7 +1064,7 @@ Binding arguments of a constant to an interpretation scope
    in the scope delimited by the key ``F`` (``Rfun_scope``) and the last
    argument in the scope delimited by the key ``R`` (``R_scope``).
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Arguments plus_fct (f1 f2)%F x%R.
 
@@ -1062,7 +1072,7 @@ Binding arguments of a constant to an interpretation scope
    parentheses. In the following example arguments A and B are marked as
    maximally inserted implicit arguments and are put into the type_scope scope.
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Arguments respectful {A B}%type (R R')%signature _ _.
 
@@ -1111,6 +1121,8 @@ Binding arguments of a constant to an interpretation scope
    .. coqtop:: all
 
       Parameter g : bool -> bool.
+      Declare Scope mybool_scope.
+
       Notation "@@" := true (only parsing) : bool_scope.
       Notation "@@" := false (only parsing): mybool_scope.
 
@@ -1144,9 +1156,10 @@ Binding types of arguments to an interpretation scope
    can be bound to an interpretation scope. The command to do it is
    :n:`Bind Scope @scope with @class`
 
-   .. coqtop:: in
+   .. coqtop:: in reset
 
       Parameter U : Set.
+      Declare Scope U_scope.
       Bind Scope U_scope with U.
       Parameter Uplus : U -> U -> U.
       Parameter P : forall T:Set, T -> U -> Prop.
@@ -1207,7 +1220,7 @@ Scopes` or :cmd:`Print Scope`.
 
 ``nat_scope``
   This scope includes the standard arithmetical operators and relations on type
-  nat. Positive numerals in this scope are mapped to their canonical
+  nat. Positive integer numerals in this scope are mapped to their canonical
   representent built from :g:`O` and :g:`S`. The scope is delimited by the key
   ``nat``, and bound to the type :g:`nat` (see above).
 
@@ -1231,20 +1244,19 @@ Scopes` or :cmd:`Print Scope`.
   This scope includes the standard arithmetical operators and relations on
   type :g:`Q` (rational numbers defined as fractions of an integer and a
   strictly positive integer modulo the equality of the numerator-
-  denominator cross-product). As for numerals, only 0 and 1 have an
-  interpretation in scope ``Q_scope`` (their interpretations are 0/1 and 1/1
-  respectively).
+  denominator cross-product) and comes with an interpretation for numerals
+  as closed terms of type :g:`Q`.
 
 ``Qc_scope``
   This scope includes the standard arithmetical operators and relations on the
   type :g:`Qc` of rational numbers defined as the type of irreducible
   fractions of an integer and a strictly positive integer.
 
-``real_scope``
+``R_scope``
   This scope includes the standard arithmetical operators and relations on
   type :g:`R` (axiomatic real numbers). It is delimited by the key ``R`` and comes
   with an interpretation for numerals using the :g:`IZR` morphism from binary
-  integer numbers to :g:`R`.
+  integer numbers to :g:`R` and :g:`Z.pow_pos` for potential exponent parts.
 
 ``bool_scope``
   This scope includes notations for the boolean operators. It is delimited by the
@@ -1372,153 +1384,267 @@ Abbreviations
    denoted expression is performed at definition time. Type checking is
    done only at the time of use of the abbreviation.
 
+.. _numeral-notations:
 
 Numeral notations
 -----------------
 
 .. cmd:: Numeral Notation @ident__1 @ident__2 @ident__3 : @scope.
+   :name: Numeral Notation
 
-  This command allows the user to customize the way numeral literals
-  are parsed and printed.
+   This command allows the user to customize the way numeral literals
+   are parsed and printed.
 
-  The token :n:`@ident__1` should be the name of an inductive type,
-  while :n:`@ident__2` and :n:`@ident__3` should be the names of the
-  parsing and printing functions, respectively.  The parsing function
-  :n:`@ident__2` should have one of the following types:
+   The token :n:`@ident__1` should be the name of an inductive type,
+   while :n:`@ident__2` and :n:`@ident__3` should be the names of the
+   parsing and printing functions, respectively.  The parsing function
+   :n:`@ident__2` should have one of the following types:
 
-    * :n:`Decimal.int -> @ident__1`
-    * :n:`Decimal.int -> option @ident__1`
-    * :n:`Decimal.uint -> @ident__1`
-    * :n:`Decimal.uint -> option @ident__1`
-    * :n:`Z -> @ident__1`
-    * :n:`Z -> option @ident__1`
+     * :n:`Decimal.int -> @ident__1`
+     * :n:`Decimal.int -> option @ident__1`
+     * :n:`Decimal.uint -> @ident__1`
+     * :n:`Decimal.uint -> option @ident__1`
+     * :n:`Z -> @ident__1`
+     * :n:`Z -> option @ident__1`
+     * :n:`Decimal.decimal -> @ident__1`
+     * :n:`Decimal.decimal -> option @ident__1`
 
-  And the printing function :n:`@ident__3` should have one of the
-  following types:
+   And the printing function :n:`@ident__3` should have one of the
+   following types:
 
-    * :n:`@ident__1 -> Decimal.int`
-    * :n:`@ident__1 -> option Decimal.int`
-    * :n:`@ident__1 -> Decimal.uint`
-    * :n:`@ident__1 -> option Decimal.uint`
-    * :n:`@ident__1 -> Z`
-    * :n:`@ident__1 -> option Z`
+     * :n:`@ident__1 -> Decimal.int`
+     * :n:`@ident__1 -> option Decimal.int`
+     * :n:`@ident__1 -> Decimal.uint`
+     * :n:`@ident__1 -> option Decimal.uint`
+     * :n:`@ident__1 -> Z`
+     * :n:`@ident__1 -> option Z`
+     * :n:`@ident__1 -> Decimal.decimal`
+     * :n:`@ident__1 -> option Decimal.decimal`
 
-    When parsing, the application of the parsing function
-    :n:`@ident__2` to the number will be fully reduced, and universes
-    of the resulting term will be refreshed.
+     When parsing, the application of the parsing function
+     :n:`@ident__2` to the number will be fully reduced, and universes
+     of the resulting term will be refreshed.
 
-  .. cmdv:: Numeral Notation @ident__1 @ident__2 @ident__3 : @scope (warning after @num).
+     Note that only fully-reduced ground terms (terms containing only
+     function application, constructors, inductive type families, and
+     primitive integers) will be considered for printing.
 
-    When a literal larger than :token:`num` is parsed, a warning
-    message about possible stack overflow, resulting from evaluating
-    :n:`@ident__2`, will be displayed.
+   .. cmdv:: Numeral Notation @ident__1 @ident__2 @ident__3 : @scope (warning after @num).
 
-  .. cmdv:: Numeral Notation @ident__1 @ident__2 @ident__3 : @scope (abstract after @num).
+     When a literal larger than :token:`num` is parsed, a warning
+     message about possible stack overflow, resulting from evaluating
+     :n:`@ident__2`, will be displayed.
 
-    When a literal :g:`m` larger than :token:`num` is parsed, the
-    result will be :n:`(@ident__2 m)`, without reduction of this
-    application to a normal form.  Here :g:`m` will be a
-    :g:`Decimal.int` or :g:`Decimal.uint` or :g:`Z`, depending on the
-    type of the parsing function :n:`@ident__2`. This allows for a
-    more compact representation of literals in types such as :g:`nat`,
-    and limits parse failures due to stack overflow.  Note that a
-    warning will be emitted when an integer larger than :token:`num`
-    is parsed.  Note that :n:`(abstract after @num)` has no effect
-    when :n:`@ident__2` lands in an :g:`option` type.
+   .. cmdv:: Numeral Notation @ident__1 @ident__2 @ident__3 : @scope (abstract after @num).
 
-  .. exn:: Cannot interpret this number as a value of type @type
+     When a literal :g:`m` larger than :token:`num` is parsed, the
+     result will be :n:`(@ident__2 m)`, without reduction of this
+     application to a normal form.  Here :g:`m` will be a
+     :g:`Decimal.int` or :g:`Decimal.uint` or :g:`Z`, depending on the
+     type of the parsing function :n:`@ident__2`. This allows for a
+     more compact representation of literals in types such as :g:`nat`,
+     and limits parse failures due to stack overflow.  Note that a
+     warning will be emitted when an integer larger than :token:`num`
+     is parsed.  Note that :n:`(abstract after @num)` has no effect
+     when :n:`@ident__2` lands in an :g:`option` type.
 
-    The numeral notation registered for :token:`type` does not support
-    the given numeral.  This error is given when the interpretation
-    function returns :g:`None`, or if the interpretation is registered
-    for only non-negative integers, and the given numeral is negative.
+   .. exn:: Cannot interpret this number as a value of type @type
 
-  .. exn:: @ident should go from Decimal.int to @type or (option @type). Instead of Decimal.int, the types Decimal.uint or Z could be used{? (require BinNums first)}.
+     The numeral notation registered for :token:`type` does not support
+     the given numeral.  This error is given when the interpretation
+     function returns :g:`None`, or if the interpretation is registered
+     only for integers or non-negative integers, and the given numeral
+     has a fractional or exponent part or is negative.
 
-    The parsing function given to the :cmd:`Numeral Notation`
-    vernacular is not of the right type.
 
-  .. exn:: @ident should go from @type to Decimal.int or (option Decimal.int).  Instead of Decimal.int, the types Decimal.uint or Z could be used{? (require BinNums first)}.
+   .. exn:: @ident should go from Decimal.int to @type or (option @type). Instead of Decimal.int, the types Decimal.uint or Z or Int63.int or Decimal.decimal could be used (you may need to require BinNums or Decimal or Int63 first).
 
-    The printing function given to the :cmd:`Numeral Notation`
-    vernacular is not of the right type.
+     The parsing function given to the :cmd:`Numeral Notation`
+     vernacular is not of the right type.
 
-  .. exn:: @type is not an inductive type.
+   .. exn:: @ident should go from @type to Decimal.int or (option Decimal.int).  Instead of Decimal.int, the types Decimal.uint or Z or Int63.int or Decimal.decimal could be used (you may need to require BinNums or Decimal or Int63 first).
 
-    Numeral notations can only be declared for inductive types with no
-    arguments.
+     The printing function given to the :cmd:`Numeral Notation`
+     vernacular is not of the right type.
 
-  .. exn:: Unexpected term @term while parsing a numeral notation.
+   .. exn:: @type is not an inductive type.
 
-    Parsing functions must always return ground terms, made up of
-    applications of constructors and inductive types.  Parsing
-    functions may not return terms containing axioms, bare
-    (co)fixpoints, lambdas, etc.
+     Numeral notations can only be declared for inductive types with no
+     arguments.
 
-  .. exn:: Unexpected non-option term @term while parsing a numeral notation.
+   .. exn:: Unexpected term @term while parsing a numeral notation.
 
-    Parsing functions expected to return an :g:`option` must always
-    return a concrete :g:`Some` or :g:`None` when applied to a
-    concrete numeral expressed as a decimal.  They may not return
-    opaque constants.
+     Parsing functions must always return ground terms, made up of
+     applications of constructors, inductive types, and primitive
+     integers.  Parsing functions may not return terms containing
+     axioms, bare (co)fixpoints, lambdas, etc.
 
-  .. exn:: Cannot interpret in @scope because @ident could not be found in the current environment.
+   .. exn:: Unexpected non-option term @term while parsing a numeral notation.
 
-    The inductive type used to register the numeral notation is no
-    longer available in the environment.  Most likely, this is because
-    the numeral notation was declared inside a functor for an
-    inductive type inside the functor.  This use case is not currently
-    supported.
+     Parsing functions expected to return an :g:`option` must always
+     return a concrete :g:`Some` or :g:`None` when applied to a
+     concrete numeral expressed as a decimal.  They may not return
+     opaque constants.
 
-    Alternatively, you might be trying to use a primitive token
-    notation from a plugin which forgot to specify which module you
-    must :g:`Require` for access to that notation.
+   .. exn:: Cannot interpret in @scope because @ident could not be found in the current environment.
 
-  .. exn:: Syntax error: [prim:reference] expected after 'Notation' (in [vernac:command]).
+     The inductive type used to register the numeral notation is no
+     longer available in the environment.  Most likely, this is because
+     the numeral notation was declared inside a functor for an
+     inductive type inside the functor.  This use case is not currently
+     supported.
 
-    The type passed to :cmd:`Numeral Notation` must be a single
-    identifier.
+     Alternatively, you might be trying to use a primitive token
+     notation from a plugin which forgot to specify which module you
+     must :g:`Require` for access to that notation.
 
-  .. exn:: Syntax error: [prim:reference] expected after [prim:reference] (in [vernac:command]).
+   .. exn:: Syntax error: [prim:reference] expected after 'Notation' (in [vernac:command]).
 
-    Both functions passed to :cmd:`Numeral Notation` must be single
-    identifiers.
+     The type passed to :cmd:`Numeral Notation` must be a single
+     identifier.
 
-  .. exn:: The reference @ident was not found in the current environment.
+   .. exn:: Syntax error: [prim:reference] expected after [prim:reference] (in [vernac:command]).
 
-    Identifiers passed to :cmd:`Numeral Notation` must exist in the
-    global environment.
+     Both functions passed to :cmd:`Numeral Notation` must be single
+     identifiers.
 
-  .. exn:: @ident is bound to a notation that does not denote a reference.
+   .. exn:: The reference @ident was not found in the current environment.
 
-    Identifiers passed to :cmd:`Numeral Notation` must be global
-    references, or notations which denote to single identifiers.
+     Identifiers passed to :cmd:`Numeral Notation` must exist in the
+     global environment.
 
-  .. warn:: Stack overflow or segmentation fault happens when working with large numbers in @type (threshold may vary depending on your system limits and on the command executed).
+   .. exn:: @ident is bound to a notation that does not denote a reference.
 
-    When a :cmd:`Numeral Notation` is registered in the current scope
-    with :n:`(warning after @num)`, this warning is emitted when
-    parsing a numeral greater than or equal to :token:`num`.
+     Identifiers passed to :cmd:`Numeral Notation` must be global
+     references, or notations which denote to single identifiers.
 
-  .. warn:: To avoid stack overflow, large numbers in @type are interpreted as applications of @ident__2.
+   .. warn:: Stack overflow or segmentation fault happens when working with large numbers in @type (threshold may vary depending on your system limits and on the command executed).
 
-    When a :cmd:`Numeral Notation` is registered in the current scope
-    with :n:`(abstract after @num)`, this warning is emitted when
-    parsing a numeral greater than or equal to :token:`num`.
-    Typically, this indicates that the fully computed representation
-    of numerals can be so large that non-tail-recursive OCaml
-    functions run out of stack space when trying to walk them.
+     When a :cmd:`Numeral Notation` is registered in the current scope
+     with :n:`(warning after @num)`, this warning is emitted when
+     parsing a numeral greater than or equal to :token:`num`.
 
-    For example
+   .. warn:: To avoid stack overflow, large numbers in @type are interpreted as applications of @ident__2.
 
-    .. coqtop:: all
+     When a :cmd:`Numeral Notation` is registered in the current scope
+     with :n:`(abstract after @num)`, this warning is emitted when
+     parsing a numeral greater than or equal to :token:`num`.
+     Typically, this indicates that the fully computed representation
+     of numerals can be so large that non-tail-recursive OCaml
+     functions run out of stack space when trying to walk them.
 
-       Check 90000.
+     For example
 
-  .. warn:: The 'abstract after' directive has no effect when the parsing function (@ident__2) targets an option type.
+     .. coqtop:: all warn
 
-    As noted above, the :n:`(abstract after @num)` directive has no
-    effect when :n:`@ident__2` lands in an :g:`option` type.
+        Check 90000.
+
+   .. warn:: The 'abstract after' directive has no effect when the parsing function (@ident__2) targets an option type.
+
+     As noted above, the :n:`(abstract after @num)` directive has no
+     effect when :n:`@ident__2` lands in an :g:`option` type.
+
+String notations
+-----------------
+
+.. cmd:: String Notation @ident__1 @ident__2 @ident__3 : @scope.
+   :name: String Notation
+
+   This command allows the user to customize the way strings are parsed
+   and printed.
+
+   The token :n:`@ident__1` should be the name of an inductive type,
+   while :n:`@ident__2` and :n:`@ident__3` should be the names of the
+   parsing and printing functions, respectively.  The parsing function
+   :n:`@ident__2` should have one of the following types:
+
+     * :n:`Byte.byte -> @ident__1`
+     * :n:`Byte.byte -> option @ident__1`
+     * :n:`list Byte.byte -> @ident__1`
+     * :n:`list Byte.byte -> option @ident__1`
+
+   And the printing function :n:`@ident__3` should have one of the
+   following types:
+
+     * :n:`@ident__1 -> Byte.byte`
+     * :n:`@ident__1 -> option Byte.byte`
+     * :n:`@ident__1 -> list Byte.byte`
+     * :n:`@ident__1 -> option (list Byte.byte)`
+
+     When parsing, the application of the parsing function
+     :n:`@ident__2` to the string will be fully reduced, and universes
+     of the resulting term will be refreshed.
+
+     Note that only fully-reduced ground terms (terms containing only
+     function application, constructors, inductive type families, and
+     primitive integers) will be considered for printing.
+
+   .. exn:: Cannot interpret this string as a value of type @type
+
+     The string notation registered for :token:`type` does not support
+     the given string.  This error is given when the interpretation
+     function returns :g:`None`.
+
+   .. exn:: @ident should go from Byte.byte or (list Byte.byte) to @type or (option @type).
+
+     The parsing function given to the :cmd:`String Notation`
+     vernacular is not of the right type.
+
+   .. exn:: @ident should go from @type to Byte.byte or (option Byte.byte) or (list Byte.byte) or (option (list Byte.byte)).
+
+     The printing function given to the :cmd:`String Notation`
+     vernacular is not of the right type.
+
+   .. exn:: @type is not an inductive type.
+
+     String notations can only be declared for inductive types with no
+     arguments.
+
+   .. exn:: Unexpected term @term while parsing a string notation.
+
+     Parsing functions must always return ground terms, made up of
+     applications of constructors, inductive types, and primitive
+     integers.  Parsing functions may not return terms containing
+     axioms, bare (co)fixpoints, lambdas, etc.
+
+   .. exn:: Unexpected non-option term @term while parsing a string notation.
+
+     Parsing functions expected to return an :g:`option` must always
+     return a concrete :g:`Some` or :g:`None` when applied to a
+     concrete string expressed as a decimal.  They may not return
+     opaque constants.
+
+   .. exn:: Cannot interpret in @scope because @ident could not be found in the current environment.
+
+     The inductive type used to register the string notation is no
+     longer available in the environment.  Most likely, this is because
+     the string notation was declared inside a functor for an
+     inductive type inside the functor.  This use case is not currently
+     supported.
+
+     Alternatively, you might be trying to use a primitive token
+     notation from a plugin which forgot to specify which module you
+     must :g:`Require` for access to that notation.
+
+   .. exn:: Syntax error: [prim:reference] expected after 'Notation' (in [vernac:command]).
+
+     The type passed to :cmd:`String Notation` must be a single
+     identifier.
+
+   .. exn:: Syntax error: [prim:reference] expected after [prim:reference] (in [vernac:command]).
+
+     Both functions passed to :cmd:`String Notation` must be single
+     identifiers.
+
+   .. exn:: The reference @ident was not found in the current environment.
+
+     Identifiers passed to :cmd:`String Notation` must exist in the
+     global environment.
+
+   .. exn:: @ident is bound to a notation that does not denote a reference.
+
+     Identifiers passed to :cmd:`String Notation` must be global
+     references, or notations which denote to single identifiers.
 
 .. _TacticNotation:
 
@@ -1531,13 +1657,13 @@ Tactic notations allow to customize the syntax of tactics. They have the followi
    tacn                 : Tactic Notation [`tactic_level`] [`prod_item` … `prod_item`] := `tactic`.
    prod_item            : `string` | `tactic_argument_type`(`ident`)
    tactic_level         : (at level `num`)
-   tactic_argument_type : ident | simple_intropattern | reference
-                        : | hyp | hyp_list | ne_hyp_list
-                        : | constr | uconstr | constr_list | ne_constr_list
-                        : | integer | integer_list | ne_integer_list
-                        : | int_or_var | int_or_var_list | ne_int_or_var_list
-                        : | tactic | tactic0 | tactic1 | tactic2 | tactic3
-                        : | tactic4 | tactic5
+   tactic_argument_type : `ident` | `simple_intropattern` | `reference`
+                        : `hyp` | `hyp_list` | `ne_hyp_list`
+                        : `constr` | `uconstr` | `constr_list` | `ne_constr_list`
+                        : `integer` | `integer_list` | `ne_integer_list`
+                        : `int_or_var` | `int_or_var_list` | `ne_int_or_var_list`
+                        : `tactic` | `tactic0` | `tactic1` | `tactic2` | `tactic3`
+                        : `tactic4` | `tactic5`
 
 .. cmd:: Tactic Notation {? (at level @level)} {+ @prod_item} := @tactic.
 

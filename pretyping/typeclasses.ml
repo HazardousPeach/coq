@@ -17,11 +17,8 @@ open Vars
 open Evd
 open Util
 open Typeclasses_errors
-open Libobject
 open Context.Rel.Declaration
 
-module RelDecl = Context.Rel.Declaration
-module NamedDecl = Context.Named.Declaration
 (*i*)
 
 (* Core typeclasses hints *)
@@ -31,25 +28,12 @@ type 'a hint_info_gen =
 
 type hint_info = (Pattern.patvar list * Pattern.constr_pattern) hint_info_gen
 
-let typeclasses_unique_solutions = ref false
-let set_typeclasses_unique_solutions d = (:=) typeclasses_unique_solutions d
-let get_typeclasses_unique_solutions () = !typeclasses_unique_solutions
-
-open Goptions
-
-let _ =
-  declare_bool_option
-    { optdepr  = false;
-      optname  = "check that typeclasses proof search returns unique solutions";
-      optkey   = ["Typeclasses";"Unique";"Solutions"];
-      optread  = get_typeclasses_unique_solutions;
-      optwrite = set_typeclasses_unique_solutions; }
-
-let (add_instance_hint, add_instance_hint_hook) = Hook.make ()
-let add_instance_hint id = Hook.get add_instance_hint id
-
-let (remove_instance_hint, remove_instance_hint_hook) = Hook.make ()
-let remove_instance_hint id = Hook.get remove_instance_hint id
+let get_typeclasses_unique_solutions =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"check that typeclasses proof search returns unique solutions"
+    ~key:["Typeclasses";"Unique";"Solutions"]
+    ~value:false
 
 let (set_typeclass_transparency, set_typeclass_transparency_hook) = Hook.make ()
 let set_typeclass_transparency gr local c = Hook.get set_typeclass_transparency gr local c
@@ -104,18 +88,6 @@ let instance_impl is = is.is_impl
 
 let hint_priority is = is.is_info.hint_priority
 
-let new_instance cl info glob impl =
-  let global =
-    if glob then Some (Lib.sections_depth ())
-    else None
-  in
-  if match global with Some n -> n>0 && isVarRef impl | _ -> false then
-    CErrors.user_err (Pp.str "Cannot set Global an instance referring to a section variable.");
-    { is_class = cl.cl_impl;
-      is_info = info ;
-      is_global = global ;
-      is_impl = impl }
-
 (*
  * states management
  *)
@@ -129,14 +101,15 @@ let typeclass_univ_instance (cl, u) =
     { cl with cl_context = on_snd subst_ctx cl.cl_context;
       cl_props = subst_ctx cl.cl_props}
 
-let class_info c =
+let class_info env sigma c =
   try GlobRef.Map.find c !classes
-  with Not_found -> not_a_class (Global.env()) (EConstr.of_constr (printable_constr_of_global c))
+  with Not_found ->
+    not_a_class env sigma (EConstr.of_constr (printable_constr_of_global c))
 
 let global_class_of_constr env sigma c =
   try let gr, u = Termops.global_of_constr sigma c in
-	class_info gr, u
-  with Not_found -> not_a_class env c
+    GlobRef.Map.find gr !classes, u
+  with Not_found -> not_a_class env sigma c
 
 let dest_class_app env sigma c =
   let cl, args = EConstr.decompose_app sigma c in
@@ -147,8 +120,8 @@ let dest_class_arity env sigma c =
   let rels, c = decompose_prod_assum sigma c in
     rels, dest_class_app env sigma c
 
-let class_of_constr sigma c =
-  try Some (dest_class_arity (Global.env ()) sigma c)
+let class_of_constr env sigma c =
+  try Some (dest_class_arity env sigma c)
   with e when CErrors.noncritical e -> None
 
 let is_class_constr sigma c = 
@@ -166,102 +139,23 @@ let rec is_class_type evd c =
 let is_class_evar evd evi =
   is_class_type evd evi.Evd.evar_concl
 
-(*
- * classes persistent object
- *)
+let is_class_constr sigma c =
+  try let gr, u = Termops.global_of_constr sigma c in
+    GlobRef.Map.mem gr !classes
+  with Not_found -> false
 
-let load_class (_, cl) =
+let rec is_maybe_class_type evd c =
+  let c, _ = Termops.decompose_app_vect evd c in
+    match EConstr.kind evd c with
+    | Prod (_, _, t) -> is_maybe_class_type evd t
+    | Cast (t, _, _) -> is_maybe_class_type evd t
+    | Evar _ -> true
+    | _ -> is_class_constr evd c
+
+let () = Hook.set Evd.is_maybe_typeclass_hook (fun evd c -> is_maybe_class_type evd (EConstr.of_constr c))
+
+let load_class cl =
   classes := GlobRef.Map.add cl.cl_impl cl !classes
-
-let cache_class = load_class
-
-let subst_class (subst,cl) =
-  let do_subst_con c = Mod_subst.subst_constant subst c
-  and do_subst c = Mod_subst.subst_mps subst c
-  and do_subst_gr gr = fst (subst_global subst gr) in
-  let do_subst_ctx = List.Smart.map (RelDecl.map_constr do_subst) in
-  let do_subst_context (grs,ctx) =
-    List.Smart.map (Option.Smart.map do_subst_gr) grs,
-    do_subst_ctx ctx in
-  let do_subst_projs projs = List.Smart.map (fun (x, y, z) ->
-    (x, y, Option.Smart.map do_subst_con z)) projs in
-  { cl_univs = cl.cl_univs;
-    cl_impl = do_subst_gr cl.cl_impl;
-    cl_context = do_subst_context cl.cl_context;
-    cl_props = do_subst_ctx cl.cl_props;
-    cl_projs = do_subst_projs cl.cl_projs;
-    cl_strict = cl.cl_strict;
-    cl_unique = cl.cl_unique }
-
-let discharge_class (_,cl) =
-  let repl = Lib.replacement_context () in
-  let rel_of_variable_context ctx = List.fold_right
-    ( fun (decl,_) (ctx', subst) ->
-        let decl' = decl |> NamedDecl.map_constr (substn_vars 1 subst) |> NamedDecl.to_rel_decl in
-	(decl' :: ctx', NamedDecl.get_id decl :: subst)
-    ) ctx ([], []) in
-  let discharge_rel_context (subst, usubst) n rel =
-    let rel = Context.Rel.map (Cooking.expmod_constr repl) rel in
-    let fold decl (ctx, k) =
-      let map c = subst_univs_level_constr usubst (substn_vars k subst c) in
-      RelDecl.map_constr map decl :: ctx, succ k
-    in
-    let ctx, _ = List.fold_right fold rel ([], n) in
-    ctx
-  in
-  let abs_context cl =
-    match cl.cl_impl with
-      | VarRef _ | ConstructRef _ -> assert false
-      | ConstRef cst -> Lib.section_segment_of_constant cst
-      | IndRef (ind,_) -> Lib.section_segment_of_mutual_inductive ind in
-  let discharge_context ctx' subst (grs, ctx) =
-    let grs' =
-      let newgrs = List.map (fun decl ->
-			     match decl |> RelDecl.get_type |> EConstr.of_constr |> class_of_constr Evd.empty with
-			     | None -> None
-                             | Some (_, ((tc,_), _)) -> Some tc.cl_impl)
-			    ctx'
-      in
-      grs @ newgrs
-    in grs', discharge_rel_context subst 1 ctx @ ctx' in
-  try
-    let info = abs_context cl in
-    let ctx = info.Lib.abstr_ctx in
-    let ctx, subst = rel_of_variable_context ctx in
-    let usubst, cl_univs' = Lib.discharge_abstract_universe_context info cl.cl_univs in
-    let context = discharge_context ctx (subst, usubst) cl.cl_context in
-    let props = discharge_rel_context (subst, usubst) (succ (List.length (fst cl.cl_context))) cl.cl_props in
-    let discharge_proj x = x in
-    { cl_univs = cl_univs';
-      cl_impl = cl.cl_impl;
-      cl_context = context;
-      cl_props = props;
-      cl_projs = List.Smart.map discharge_proj cl.cl_projs;
-      cl_strict = cl.cl_strict;
-      cl_unique = cl.cl_unique
-    }
-  with Not_found -> (* not defined in the current section *)
-    cl
-
-let rebuild_class cl = 
-  try 
-    let cst = Tacred.evaluable_of_global_reference (Global.env ()) cl.cl_impl in
-      set_typeclass_transparency cst false false; cl
-  with e when CErrors.noncritical e -> cl
-
-let class_input : typeclass -> obj =
-  declare_object
-    { (default_object "type classes state") with
-      cache_function = cache_class;
-      load_function = (fun _ -> load_class);
-      open_function = (fun _ -> load_class);
-      classify_function = (fun x -> Substitute x);
-      discharge_function = (fun a -> Some (discharge_class a));
-      rebuild_function = rebuild_class;
-      subst_function = subst_class }
-
-let add_class cl =
-  Lib.add_anonymous_leaf (class_input cl)
 
 (** Build the subinstances hints. *)
 
@@ -279,13 +173,13 @@ let build_subclasses ~check env sigma glob { hint_priority = pri } =
       (fun () -> incr i;
         Nameops.add_suffix _id ("_subinstance_" ^ string_of_int !i))
   in
-  let ty, ctx = Global.type_of_global_in_context env glob in
+  let ty, ctx = Typeops.type_of_global_in_context env glob in
   let inst, ctx = UnivGen.fresh_instance_from ctx None in
   let ty = Vars.subst_instance_constr inst ty in
   let ty = EConstr.of_constr ty in
   let sigma = Evd.merge_context_set Evd.univ_rigid sigma ctx in
   let rec aux pri c ty path =
-      match class_of_constr sigma ty with
+      match class_of_constr env sigma ty with
       | None -> []
       | Some (rels, ((tc,u), args)) ->
 	let instapp = 
@@ -326,124 +220,23 @@ let build_subclasses ~check env sigma glob { hint_priority = pri } =
     aux pri term ty [glob]
 
 (*
- * instances persistent object
+ * interface functions
  *)
 
-type instance_action = 
-  | AddInstance
-  | RemoveInstance
-
-let load_instance inst = 
-  let insts = 
+let load_instance inst =
+  let insts =
     try GlobRef.Map.find inst.is_class !instances
     with Not_found -> GlobRef.Map.empty in
   let insts = GlobRef.Map.add inst.is_impl inst insts in
   instances := GlobRef.Map.add inst.is_class insts !instances
 
 let remove_instance inst =
-  let insts = 
+  let insts =
     try GlobRef.Map.find inst.is_class !instances
     with Not_found -> assert false in
   let insts = GlobRef.Map.remove inst.is_impl insts in
   instances := GlobRef.Map.add inst.is_class insts !instances
 
-let cache_instance (_, (action, i)) =
-  match action with 
-  | AddInstance -> load_instance i
-  | RemoveInstance -> remove_instance i      
-
-let subst_instance (subst, (action, inst)) = action,
-  { inst with 
-      is_class = fst (subst_global subst inst.is_class);
-      is_impl = fst (subst_global subst inst.is_impl) }
-
-let discharge_instance (_, (action, inst)) =
-  match inst.is_global with
-  | None -> None
-  | Some n ->
-    assert (not (isVarRef inst.is_impl));
-    Some (action,
-    { inst with 
-      is_global = Some (pred n);
-      is_class = inst.is_class;
-      is_impl = inst.is_impl })
-    
-
-let is_local i = (i.is_global == None)
-
-let is_local_for_hint i =
-  match i.is_global with
-  | None -> true  (* i.e. either no Global keyword not in section, or in section *)
-  | Some n -> n <> 0 (* i.e. in a section, declare the hint as local
-     since discharge is managed by rebuild_instance which calls again
-     add_instance_hint; don't ask hints to take discharge into account
-     itself *)
-
-let add_instance check inst =
-  let poly = Global.is_polymorphic inst.is_impl in
-  let local = is_local_for_hint inst in
-  add_instance_hint (IsGlobal inst.is_impl) [inst.is_impl] local
-    inst.is_info poly;
-  List.iter (fun (path, pri, c) -> add_instance_hint (IsConstr c) path
-    local pri poly)
-    (build_subclasses ~check:(check && not (isVarRef inst.is_impl))
-       (Global.env ()) (Evd.from_env (Global.env ())) inst.is_impl inst.is_info)
-
-let rebuild_instance (action, inst) =
-  let () = match action with
-  | AddInstance -> add_instance true inst
-  | _ -> ()
-  in
-  (action, inst)
-
-let classify_instance (action, inst) =
-  if is_local inst then Dispose
-  else Substitute (action, inst)
-
-let instance_input : instance_action * instance -> obj =
-  declare_object
-    { (default_object "type classes instances state") with
-      cache_function = cache_instance;
-      load_function = (fun _ x -> cache_instance x);
-      open_function = (fun _ x -> cache_instance x);
-      classify_function = classify_instance;
-      discharge_function = discharge_instance;
-      rebuild_function = rebuild_instance;
-      subst_function = subst_instance }
-
-let add_instance i =
-  Lib.add_anonymous_leaf (instance_input (AddInstance, i));
-  add_instance true i
-
-let remove_instance i =
-  Lib.add_anonymous_leaf (instance_input (RemoveInstance, i));
-  remove_instance_hint i.is_impl
-
-let declare_instance info local glob =
-  let ty, _ = Global.type_of_global_in_context (Global.env ()) glob in
-  let info = Option.default {hint_priority = None; hint_pattern = None} info in
-    match class_of_constr Evd.empty (EConstr.of_constr ty) with
-    | Some (rels, ((tc,_), args) as _cl) ->
-      assert (not (isVarRef glob) || local);
-      add_instance (new_instance tc info (not local) glob)
-    | None -> ()
-
-let add_class cl =
-  add_class cl;
-  List.iter (fun (n, inst, body) ->
-	     match inst with
-	     | Some (Backward, info) ->
-	       (match body with
-	       | None -> CErrors.user_err Pp.(str "Non-definable projection can not be declared as a subinstance")
-	       | Some b -> declare_instance (Some info) false (ConstRef b))
-	     | _ -> ())
-  cl.cl_projs
-
-
-      
-(*
- * interface functions
- *)
 
 let instance_constructor (cl,u) args =
   let lenpars = List.count is_local_assum (snd cl.cl_context) in
@@ -475,69 +268,35 @@ let all_instances () =
     GlobRef.Map.fold (fun k v acc -> v :: acc) v acc)
     !instances []
 
-let instances r = 
-  let cl = class_info r in instances_of cl    
+let instances env sigma r =
+  let cl = class_info env sigma r in instances_of cl
 
 let is_class gr = 
   GlobRef.Map.exists (fun _ v -> GlobRef.equal v.cl_impl gr) !classes
 
-(* To embed a boolean for resolvability status.
-   This is essentially a hack to mark which evars correspond to
-   goals and do not need to be resolved when we have nested [resolve_all_evars]
-   calls (e.g. when doing apply in an External hint in typeclass_instances).
-   Would be solved by having real evars-as-goals.
-
-   Nota: we will only check the resolvability status of undefined evars.
- *)
-
-let resolvable = Proofview.Unsafe.typeclass_resolvable
-
-let set_resolvable s b =
-  if b then Store.remove s resolvable
-  else Store.set s resolvable ()
-
-let is_resolvable evi =
-  assert (match evi.evar_body with Evar_empty -> true | _ -> false);
-  Option.is_empty (Store.get evi.evar_extra resolvable)
-
-let mark_resolvability_undef b evi =
-  if is_resolvable evi == (b : bool) then evi
-  else
-    let t = set_resolvable evi.evar_extra b in
-    { evi with evar_extra = t }
-
-let mark_resolvability b evi =
-  assert (match evi.evar_body with Evar_empty -> true | _ -> false);
-  mark_resolvability_undef b evi
-
-let mark_unresolvable evi = mark_resolvability false evi
-let mark_resolvable evi = mark_resolvability true evi
-
 open Evar_kinds
-type evar_filter = Evar.t -> Evar_kinds.t -> bool
+type evar_filter = Evar.t -> Evar_kinds.t Lazy.t -> bool
+
+let make_unresolvables filter evd =
+  let tcs = Evd.get_typeclass_evars evd in
+  Evd.set_typeclass_evars evd (Evar.Set.filter (fun x -> not (filter x)) tcs)
 
 let all_evars _ _ = true
-let all_goals _ = function VarInstance _ | GoalEvar -> true | _ -> false
+let all_goals _ source =
+  match Lazy.force source with
+  | VarInstance _ | GoalEvar -> true
+  | _ -> false
+
 let no_goals ev evi = not (all_goals ev evi)
-let no_goals_or_obligations _ = function
+let no_goals_or_obligations _ source =
+  match Lazy.force source with
   | VarInstance _ | GoalEvar | QuestionMark _ -> false
   | _ -> true
 
-let mark_resolvability filter b sigma =
-  let map ev evi =
-    if filter ev (snd evi.evar_source) then mark_resolvability_undef b evi
-    else evi
-  in
-  Evd.raw_map_undefined map sigma
-
-let mark_unresolvables ?(filter=all_evars) sigma = mark_resolvability filter false sigma
-let mark_resolvables ?(filter=all_evars) sigma = mark_resolvability filter true sigma
-
 let has_typeclasses filter evd =
-  let check ev evi =
-    filter ev (snd evi.evar_source) && is_resolvable evi && is_class_evar evd evi
-  in
-  Evar.Map.exists check (Evd.undefined_map evd)
+  let tcs = get_typeclass_evars evd in
+  let check ev = filter ev (lazy (snd (Evd.find evd ev).evar_source)) in
+  Evar.Set.exists check tcs
 
 let get_solve_all_instances, solve_all_instances_hook = Hook.make ()
 
@@ -548,7 +307,7 @@ let solve_all_instances env evd filter unique split fail =
 (* let solve_classeskey = CProfile.declare_profile "solve_typeclasses" *)
 (* let solve_problem = CProfile.profile5 solve_classeskey solve_problem *)
 
-let resolve_typeclasses ?(fast_path = true) ?(filter=no_goals) ?(unique=get_typeclasses_unique_solutions ())
+let resolve_typeclasses ?(filter=no_goals) ?(unique=get_typeclasses_unique_solutions ())
     ?(split=true) ?(fail=true) env evd =
-  if fast_path && not (has_typeclasses filter evd) then evd
+  if not (has_typeclasses filter evd) then evd
   else solve_all_instances env evd filter unique split fail

@@ -9,8 +9,10 @@ The Coq documentation includes
 The documentation of the latest released version is available on the Coq
 web site at [coq.inria.fr/documentation](http://coq.inria.fr/documentation).
 
-Additionally, you can view the documentation for the current master version at
-<https://gitlab.com/coq/coq/-/jobs/artifacts/master/file/_install_ci/share/doc/coq/sphinx/html/index.html?job=doc:refman>.
+Additionally, you can view the reference manual for the development version
+at <https://coq.github.io/doc/master/refman/>, and the documentation of the
+standard library for the development version at
+<https://coq.github.io/doc/master/stdlib/>.
 
 The reference manual is written is reStructuredText and compiled
 using Sphinx. See [`sphinx/README.rst`](sphinx/README.rst)
@@ -101,18 +103,21 @@ Alternatively, you can use some specific targets:
 Also note the `-with-doc yes` option of `./configure` to enable the
 build of the documentation as part of the default make target.
 
-If you're editing Sphinx documentation, set SPHINXWARNERROR to 0
-to avoid treating Sphinx warnings as errors.  Otherwise, Sphinx quits
-upon detecting the first warning.  You can set this on the Sphinx `make`
-command line or as an environment variable:
+To build the Sphinx documentation without stopping at the first
+warning with the legacy Makefile, set `SPHINXWARNERROR` to 0 as such:
 
-- `make refman SPHINXWARNERROR=0`
+```
+SPHINXWARNERROR=0 make refman-html
+```
 
-- ~~~
-  export SPHINXWARNERROR=0
-    ⋮
-  make refman
-  ~~~
+To do the same with the Dune build system, change the value of the
+`SPHINXWARNOPT` variable (default is `-W`). The following will build
+the Sphinx documentation without stopping at the first warning, and
+store all the warnings in the file `/tmp/warn.log`:
+
+```
+SPHINXWARNOPT="-w/tmp/warn.log" dune build @refman-html
+```
 
 Installation
 ------------

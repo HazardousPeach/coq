@@ -83,7 +83,9 @@ let file_exists_respecting_case path f =
   let rec aux f =
     let bf = Filename.basename f in
     let df = Filename.dirname f in
-    (String.equal df "." || aux df)
+    (* When [df] is the same as [f], it means that the root of the file system
+       has been reached. There is no point in looking further up. *)
+    (String.equal df "." || String.equal f df || aux df)
     && exists_in_dir_respecting_case (Filename.concat path df) bf
   in (!trust_file_cache || Sys.file_exists (Filename.concat path f)) && aux f
 
@@ -285,24 +287,24 @@ let fmt_time_difference (startreal,ustart,sstart) (stopreal,ustop,sstop) =
   real (round (sstop -. sstart)) ++ str "s" ++
   str ")"
 
-let with_time ~batch f x =
+let with_time ~batch ~header f x =
   let tstart = get_time() in
   let msg = if batch then "" else "Finished transaction in " in
   try
     let y = f x in
     let tend = get_time() in
     let msg2 = if batch then "" else " (successful)" in
-    Feedback.msg_info (str msg ++ fmt_time_difference tstart tend ++ str msg2);
+    Feedback.msg_info (header ++ str msg ++ fmt_time_difference tstart tend ++ str msg2);
     y
   with e ->
     let tend = get_time() in
     let msg = if batch then "" else "Finished failing transaction in " in
     let msg2 = if batch then "" else " (failure)" in
-    Feedback.msg_info (str msg ++ fmt_time_difference tstart tend ++ str msg2);
+    Feedback.msg_info (header ++ str msg ++ fmt_time_difference tstart tend ++ str msg2);
     raise e
 
 (* We use argv.[0] as we don't want to resolve symlinks *)
-let get_toplevel_path ?(byte=not Dynlink.is_native) top =
+let get_toplevel_path ?(byte=Sys.(backend_type = Bytecode)) top =
   let open Filename in
   let dir = if String.equal (basename Sys.argv.(0)) Sys.argv.(0)
             then "" else dirname Sys.argv.(0) ^ dir_sep in

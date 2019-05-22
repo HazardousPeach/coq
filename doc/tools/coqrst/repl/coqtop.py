@@ -20,6 +20,14 @@ import re
 
 import pexpect
 
+
+class CoqTopError(Exception):
+    def __init__(self, err, last_sentence, before):
+        super().__init__()
+        self.err = err
+        self.before = before
+        self.last_sentence = last_sentence
+
 class CoqTop:
     """Create an instance of coqtop.
 
@@ -41,13 +49,10 @@ class CoqTop:
                            the ansicolors module)
         :param args:       Additional arugments to coqtop.
         """
-        BOOT = True
-        if os.getenv('COQBOOT') == "no":
-            BOOT = False
         self.coqtop_bin = coqtop_bin or os.path.join(os.getenv('COQBIN', ""), "coqtop")
         if not pexpect.utils.which(self.coqtop_bin):
             raise ValueError("coqtop binary not found: '{}'".format(self.coqtop_bin))
-        self.args = (args or []) + ["-boot"] * BOOT + ["-color", "on"] * color
+        self.args = (args or []) + ["-color", "on"] * color
         self.coqtop = None
 
     def __enter__(self):
@@ -63,7 +68,7 @@ class CoqTop:
         self.coqtop.kill(9)
 
     def next_prompt(self):
-        "Wait for the next coqtop prompt, and return the output preceeding it."
+        """Wait for the next coqtop prompt, and return the output preceeding it."""
         self.coqtop.expect(CoqTop.COQTOP_PROMPT, timeout = 10)
         return self.coqtop.before
 
@@ -75,14 +80,17 @@ class CoqTop:
         """
         # Suppress newlines, but not spaces: they are significant in notations
         sentence = re.sub(r"[\r\n]+", " ", sentence).strip()
-        self.coqtop.sendline(sentence)
         try:
+            self.coqtop.sendline(sentence)
             output = self.next_prompt()
-        except:
-            print("Error while sending the following sentence to coqtop: {}".format(sentence))
-            raise
-        # print("Got {}".format(repr(output)))
+        except Exception as err:
+            raise CoqTopError(err, sentence, self.coqtop.before)
         return output
+
+    def send_initial_options(self):
+        """Options to send when starting the toplevel and after a Reset Initial."""
+        self.sendone('Set Coqtop Exit On Error.')
+        self.sendone('Set Warnings "+default".')
 
 def sendmany(*sentences):
     """A small demo: send each sentence in sentences and print the output"""

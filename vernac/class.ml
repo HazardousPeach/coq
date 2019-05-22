@@ -14,6 +14,7 @@ open Pp
 open Names
 open Term
 open Constr
+open Context
 open Vars
 open Termops
 open Entries
@@ -21,8 +22,8 @@ open Environ
 open Classops
 open Declare
 open Globnames
-open Nametab
 open Decl_kinds
+open Libobject
 
 let strength_min l = if List.mem `LOCAL l then `LOCAL else `GLOBAL
 
@@ -66,8 +67,8 @@ let explain_coercion_error g = function
 
 let check_reference_arity ref =
   let env = Global.env () in
-  let c, _ = Global.type_of_global_in_context env ref in
-  if not (Reductionops.is_arity env (Evd.from_env env) (EConstr.of_constr c)) (** FIXME *) then
+  let c, _ = Typeops.type_of_global_in_context env ref in
+  if not (Reductionops.is_arity env (Evd.from_env env) (EConstr.of_constr c)) (* FIXME *) then
     raise (CoercionError (NotAClass ref))
 
 let check_arity = function
@@ -189,14 +190,14 @@ let build_id_coercion idf_opt source poly =
   let lams,t = decompose_lam_assum c in
   let val_f =
     it_mkLambda_or_LetIn
-      (mkLambda (Name Namegen.default_dependent_ident,
+      (mkLambda (make_annot (Name Namegen.default_dependent_ident) Sorts.Relevant,
 		 applistc vs (Context.Rel.to_extended_list mkRel 0 lams),
 		 mkRel 1))
        lams
   in
   let typ_f =
     List.fold_left (fun d c -> Term.mkProd_wo_LetIn c d)
-      (mkProd (Anonymous, applistc vs (Context.Rel.to_extended_list mkRel 0 lams), lift 1 t))
+      (mkProd (make_annot Anonymous Sorts.Relevant, applistc vs (Context.Rel.to_extended_list mkRel 0 lams), lift 1 t))
       lams
   in
   (* juste pour verification *)
@@ -216,7 +217,7 @@ let build_id_coercion idf_opt source poly =
 	  Id.of_string ("Id_"^(ident_key_of_class source)^"_"^
                         (ident_key_of_class cl))
   in
-  let univs = Evd.const_univ_entry ~poly sigma in
+  let univs = Evd.univ_entry ~poly sigma in
   let constr_entry = (* Cast is necessary to express [val_f] is identity *)
     DefinitionEntry
       (definition_entry ~types:typ_f ~univs
@@ -229,6 +230,58 @@ let build_id_coercion idf_opt source poly =
 let check_source = function
 | Some (CL_FUN as s) -> raise (CoercionError (ForbiddenSourceClass s))
 | _ -> ()
+
+let cache_coercion (_,c) =
+  let env = Global.env () in
+  let sigma = Evd.from_env env in
+  Classops.declare_coercion env sigma c
+
+let open_coercion i o =
+  if Int.equal i 1 then
+    cache_coercion o
+
+let discharge_coercion (_, c) =
+  if c.coercion_local then None
+  else
+    let n =
+      try
+        let ins = Lib.section_instance c.coercion_type in
+        Array.length (snd ins)
+      with Not_found -> 0
+    in
+    let nc = { c with
+      coercion_params = n + c.coercion_params;
+      coercion_is_proj = Option.map Lib.discharge_proj_repr c.coercion_is_proj;
+    } in
+    Some nc
+
+let classify_coercion obj =
+  if obj.coercion_local then Dispose else Substitute obj
+
+let inCoercion : coercion -> obj =
+  declare_object {(default_object "COERCION") with
+    open_function = open_coercion;
+    cache_function = cache_coercion;
+    subst_function = (fun (subst,c) -> subst_coercion subst c);
+    classify_function = classify_coercion;
+    discharge_function = discharge_coercion }
+
+let declare_coercion coef ?(local = false) ~isid ~src:cls ~target:clt ~params:ps =
+  let isproj =
+    match coef with
+    | ConstRef c -> Recordops.find_primitive_projection c
+    | _ -> None
+  in
+  let c = {
+    coercion_type = coef;
+    coercion_local = local;
+    coercion_is_id = isid;
+    coercion_is_proj = isproj;
+    coercion_source = cls;
+    coercion_target = clt;
+    coercion_params = ps;
+  } in
+  Lib.add_anonymous_leaf (inCoercion c)
 
 (*
 nom de la fonction coercion
@@ -249,7 +302,7 @@ let warn_uniform_inheritance =
 
 let add_new_coercion_core coef stre poly source target isid =
   check_source source;
-  let t, _ = Global.type_of_global_in_context (Global.env ()) coef in
+  let t, _ = Typeops.type_of_global_in_context (Global.env ()) coef in
   if coercion_exists coef then raise (CoercionError AlreadyExists);
   let lp,tg = decompose_prod_assum t in
   let llp = List.length lp in
@@ -261,7 +314,7 @@ let add_new_coercion_core coef stre poly source target isid =
       raise (CoercionError (NoSource source))
   in
   check_source (Some cls);
-  if not (uniform_cond Evd.empty (** FIXME - for when possibly called with unresolved evars in the future *)
+  if not (uniform_cond Evd.empty (* FIXME - for when possibly called with unresolved evars in the future *)
                        ctx lvs) then
     warn_uniform_inheritance coef;
   let clt =
@@ -303,19 +356,19 @@ let try_add_new_identity_coercion id ~local poly ~source ~target =
 let try_add_new_coercion_with_source ref ~local poly ~source =
   try_add_new_coercion_core ref ~local poly (Some source) None false
 
-let add_coercion_hook poly local ref =
+let add_coercion_hook poly _uctx _trans local ref =
   let local = match local with
   | Discharge
   | Local -> true
   | Global -> false
   in
   let () = try_add_new_coercion ref ~local poly in
-  let msg = pr_global_env Id.Set.empty ref ++ str " is now a coercion" in
+  let msg = Nametab.pr_global_env Id.Set.empty ref ++ str " is now a coercion" in
   Flags.if_verbose Feedback.msg_info msg
 
 let add_coercion_hook poly = Lemmas.mk_hook (add_coercion_hook poly)
 
-let add_subclass_hook poly local ref =
+let add_subclass_hook poly _uctx _trans local ref =
   let stre = match local with
   | Local -> true
   | Global -> false

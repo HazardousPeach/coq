@@ -13,6 +13,9 @@ open Univ
 (** {6 Graphs of universes. } *)
 type t
 
+val make_sprop_cumulative : t -> t
+(** Don't use this in the kernel, it makes the system incomplete. *)
+
 type 'a check_function = t -> 'a -> 'a -> bool
 
 val check_leq : Universe.t check_function
@@ -21,9 +24,6 @@ val check_eq_level : Level.t check_function
 
 (** The initial graph of universes: Prop < Set *)
 val initial_universes : t
-
-(** Check if we are in the initial case *)
-val is_initial_universes : t -> bool
 
 (** Check equality of instances w.r.t. a universe graph *)
 val check_eq_instances : Instance.t check_function
@@ -73,11 +73,18 @@ val sort_universes : t -> t
    of the universes into equivalence classes. *)
 val constraints_of_universes : t -> Constraint.t * LSet.t list
 
+val choose : (Level.t -> bool) -> t -> Level.t -> Level.t option
+(** [choose p g u] picks a universe verifying [p] and equal
+   to [u] in [g]. *)
+
 (** [constraints_for ~kept g] returns the constraints about the
    universes [kept] in [g] up to transitivity.
 
     eg if [g] is [a <= b <= c] then [constraints_for ~kept:{a, c} g] is [a <= c]. *)
 val constraints_for : kept:LSet.t -> t -> Constraint.t
+
+val domain : t -> LSet.t
+(** Known universes *)
 
 val check_subtype : AUContext.t check_function
 (** [check_subtype univ ctx1 ctx2] checks whether [ctx2] is an instance of
@@ -86,7 +93,7 @@ val check_subtype : AUContext.t check_function
 (** {6 Dumping to a file } *)
 
 val dump_universes :
-  (constraint_type -> string -> string -> unit) -> t -> unit
+  (constraint_type -> Level.t -> Level.t -> unit) -> t -> unit
 
 (** {6 Debugging} *)
 val check_universes_invariants : t -> unit

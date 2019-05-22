@@ -12,62 +12,63 @@ open Reduction
 open Declarations
 open Constr
 open Univ
+open Variance
 open Util
 
-(** Throughout this module we modify a map [variances] from local
-   universes to [Variance.t]. It starts as a trivial mapping to
-   [Irrelevant] and every time we encounter a local universe we
-   restrict it accordingly. *)
+type inferred = IrrelevantI | CovariantI
 
-let infer_level_eq u variances =
-  if LMap.mem u variances
-  then LMap.set u Variance.Invariant variances
+(** Throughout this module we modify a map [variances] from local
+    universes to [inferred]. It starts as a trivial mapping to
+    [Irrelevant] and every time we encounter a local universe we
+    restrict it accordingly.
+    [Invariant] universes are removed from the map.
+*)
+exception TrivialVariance
+
+let maybe_trivial variances =
+  if LMap.is_empty variances then raise TrivialVariance
   else variances
 
+let infer_level_eq u variances =
+  maybe_trivial (LMap.remove u variances)
+
 let infer_level_leq u variances =
-  match LMap.find u variances with
-  | exception Not_found -> variances
-  | varu -> LMap.set u (Variance.sup varu Variance.Covariant) variances
+  (* can only set Irrelevant -> Covariant so nontrivial *)
+  LMap.update u (function
+      | None -> None
+      | Some CovariantI as x -> x
+      | Some IrrelevantI -> Some CovariantI)
+    variances
 
 let infer_generic_instance_eq variances u =
   Array.fold_left (fun variances u -> infer_level_eq u variances)
     variances (Instance.to_array u)
 
-let variance_pb cv_pb var =
-  let open Variance in
-  match cv_pb, var with
-  | _, Irrelevant -> Irrelevant
-  | _, Invariant -> Invariant
-  | CONV, Covariant -> Invariant
-  | CUMUL, Covariant -> Covariant
-
-let infer_cumulative_ind_instance cv_pb cumi variances u =
+let infer_cumulative_ind_instance cv_pb mind_variance variances u =
   Array.fold_left2 (fun variances varu u ->
-      match LMap.find u variances with
-      | exception Not_found -> variances
-      | varu' ->
-        LMap.set u (Variance.sup varu' (variance_pb cv_pb varu)) variances)
-    variances (ACumulativityInfo.variance cumi) (Instance.to_array u)
+      match cv_pb, varu with
+      | _, Irrelevant -> variances
+      | _, Invariant | CONV, Covariant -> infer_level_eq u variances
+      | CUMUL, Covariant -> infer_level_leq u variances)
+    variances mind_variance (Instance.to_array u)
 
 let infer_inductive_instance cv_pb env variances ind nargs u =
   let mind = Environ.lookup_mind (fst ind) env in
-  match mind.mind_universes with
-  | Monomorphic_ind _ -> assert (Instance.is_empty u); variances
-  | Polymorphic_ind _ -> infer_generic_instance_eq variances u
-  | Cumulative_ind cumi ->
+  match mind.mind_variance with
+  | None -> infer_generic_instance_eq variances u
+  | Some mind_variance ->
     if not (Int.equal (inductive_cumulativity_arguments (mind,snd ind)) nargs)
     then infer_generic_instance_eq variances u
-    else infer_cumulative_ind_instance cv_pb cumi variances u
+    else infer_cumulative_ind_instance cv_pb mind_variance variances u
 
 let infer_constructor_instance_eq env variances ((mi,ind),ctor) nargs u =
   let mind = Environ.lookup_mind mi env in
-  match mind.mind_universes with
-  | Monomorphic_ind _ -> assert (Instance.is_empty u); variances
-  | Polymorphic_ind _ -> infer_generic_instance_eq variances u
-  | Cumulative_ind cumi ->
+  match mind.mind_variance with
+  | None -> infer_generic_instance_eq variances u
+  | Some _ ->
     if not (Int.equal (constructor_cumulativity_arguments (mind,ind,ctor)) nargs)
     then infer_generic_instance_eq variances u
-    else infer_cumulative_ind_instance CONV cumi variances u
+    else variances (* constructors are convertible at common supertype *)
 
 let infer_sort cv_pb variances s =
   match cv_pb with
@@ -100,6 +101,7 @@ let rec infer_fterm cv_pb infos variances hd stk =
     let variances = infer_stack infos variances stk in
     infer_vect infos variances (Array.map (mk_clos e) args)
   | FRel _ -> infer_stack infos variances stk
+  | FInt _ -> infer_stack infos variances stk
   | FFlex fl ->
     let variances = infer_table_key infos variances fl in
     infer_stack infos variances stk
@@ -110,9 +112,9 @@ let rec infer_fterm cv_pb infos variances hd stk =
     let (_,ty,bd) = destFLambda mk_clos hd in
     let variances = infer_fterm CONV infos variances ty [] in
     infer_fterm CONV infos variances bd []
-  | FProd (_,dom,codom) ->
+  | FProd (_,dom,codom,e) ->
     let variances = infer_fterm CONV infos variances dom [] in
-    infer_fterm cv_pb infos variances codom []
+    infer_fterm cv_pb infos variances (mk_clos (Esubst.subs_lift e) codom) []
   | FInd (ind, u) ->
     let variances =
       if Instance.is_empty u then variances
@@ -155,6 +157,10 @@ and infer_stack infos variances (stk:CClosure.stack) =
         infer_vect infos variances (Array.map (mk_clos e) br)
       | Zshift _ -> variances
       | Zupdate _ -> variances
+      | Zprimitive (_,_,rargs,kargs) ->
+        let variances = List.fold_left (fun variances c -> infer_fterm CONV infos variances c []) variances rargs in
+        let variances = List.fold_left (fun variances (_,c) -> infer_fterm CONV infos variances c []) variances kargs in
+        variances
     in
     infer_stack infos variances stk
 
@@ -179,34 +185,50 @@ let infer_arity_constructor is_arity env variances arcn =
      i is irrelevant, j is invariant. *)
   if not is_arity then infer_term CUMUL env variances codom else variances
 
+open Entries
+
+let infer_inductive_core env params entries uctx =
+  let uarray = Instance.to_array @@ UContext.instance uctx in
+  if Array.is_empty uarray then raise TrivialVariance;
+  let env = Environ.push_context uctx env in
+  let variances =
+    Array.fold_left (fun variances u -> LMap.add u IrrelevantI variances)
+      LMap.empty uarray
+  in
+  let env, params = Typeops.check_context env params in
+  let variances = List.fold_left (fun variances entry ->
+      let variances = infer_arity_constructor true
+          env variances entry.mind_entry_arity
+      in
+      List.fold_left (infer_arity_constructor false env)
+        variances entry.mind_entry_lc)
+      variances
+      entries
+  in
+  Array.map (fun u -> match LMap.find u variances with
+      | exception Not_found -> Invariant
+      | IrrelevantI -> Irrelevant
+      | CovariantI -> Covariant)
+    uarray
+
 let infer_inductive env mie =
   let open Entries in
   let { mind_entry_params = params;
         mind_entry_inds = entries; } = mie
   in
-  let univs =
-    match mie.mind_entry_universes with
-    | Monomorphic_ind_entry _
-    | Polymorphic_ind_entry _ as univs -> univs
-    | Cumulative_ind_entry cumi ->
-      let uctx = CumulativityInfo.univ_context cumi in
-      let uarray = Instance.to_array @@ UContext.instance uctx in
-      let env = Environ.push_context uctx env in
-      let variances =
-        Array.fold_left (fun variances u -> LMap.add u Variance.Irrelevant variances)
-          LMap.empty uarray
+  let variances =
+    match mie.mind_entry_variance with
+    | None -> None
+    | Some _ ->
+      let uctx = match mie.mind_entry_universes with
+        | Monomorphic_entry _ -> assert false
+        | Polymorphic_entry (_,uctx) -> uctx
       in
-      let env, _ = Typeops.infer_local_decls env params in
-      let variances = List.fold_left (fun variances entry ->
-          let variances = infer_arity_constructor true
-              env variances entry.mind_entry_arity
-          in
-          List.fold_left (infer_arity_constructor false env)
-            variances entry.mind_entry_lc)
-          variances
-          entries
-      in
-      let variances = Array.map (fun u -> LMap.find u variances) uarray in
-      Cumulative_ind_entry (CumulativityInfo.make (uctx, variances))
+      try Some (infer_inductive_core env params entries uctx)
+      with TrivialVariance -> Some (Array.make (UContext.size uctx) Invariant)
   in
-  { mie with mind_entry_universes = univs }
+  { mie with mind_entry_variance = variances }
+
+let dummy_variance = let open Entries in function
+  | Monomorphic_entry _ -> assert false
+  | Polymorphic_entry (_,uctx) -> Array.make (UContext.size uctx) Irrelevant

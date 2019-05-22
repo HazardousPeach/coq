@@ -74,14 +74,20 @@ Identifiers and access identifiers
   `.` (dot) without blank. They are used in the syntax of qualified
   identifiers.
 
-Natural numbers and integers
-  Numerals are sequences of digits. Integers are numerals optionally
-  preceded by a minus sign.
+Numerals
+  Numerals are sequences of digits with a potential fractional part
+  and exponent. Integers are numerals without fractional nor exponent
+  part and optionally preceded by a minus sign. Underscores ``_`` can
+  be used as comments in numerals.
 
   .. productionlist:: coq
      digit   : 0..9
      num     : `digit`…`digit`
      integer : [-]`num`
+     dot     : .
+     exp     : e | E
+     sign    : + | -
+     numeral : `num`[`dot` `num`][`exp`[`sign`]`num`]
 
 Strings
   Strings are delimited by ``"`` (double quote), and enclose a sequence of
@@ -94,8 +100,8 @@ Keywords
   employed otherwise::
 
     _ as at cofix else end exists exists2 fix for
-    forall fun if IF in let match mod Prop return
-    Set then Type using where with
+    forall fun if IF in let match mod return
+    SProp Prop Set Type then using where with
 
 Special tokens
   The following sequences of characters are special tokens::
@@ -127,43 +133,43 @@ is described in Chapter :ref:`syntaxextensionsandinterpretationscopes`.
 
 .. productionlist:: coq
    term             : forall `binders` , `term`
-                    : | fun `binders` => `term`
-                    : | fix `fix_bodies`
-                    : | cofix `cofix_bodies`
-                    : | let `ident` [`binders`] [: `term`] := `term` in `term`
-                    : | let fix `fix_body` in `term`
-                    : | let cofix `cofix_body` in `term`
-                    : | let ( [`name` , … , `name`] ) [`dep_ret_type`] := `term` in `term`
-                    : | let ' `pattern` [in `term`] := `term` [`return_type`] in `term`
-                    : | if `term` [`dep_ret_type`] then `term` else `term`
-                    : | `term` : `term`
-                    : | `term` <: `term`
-                    : | `term` :>
-                    : | `term` -> `term`
-                    : | `term` `arg` … `arg`
-                    : | @ `qualid` [`term` … `term`]
-                    : | `term` % `ident`
-                    : | match `match_item` , … , `match_item` [`return_type`] with
+                    : fun `binders` => `term`
+                    : fix `fix_bodies`
+                    : cofix `cofix_bodies`
+                    : let `ident` [`binders`] [: `term`] := `term` in `term`
+                    : let fix `fix_body` in `term`
+                    : let cofix `cofix_body` in `term`
+                    : let ( [`name` , … , `name`] ) [`dep_ret_type`] := `term` in `term`
+                    : let ' `pattern` [in `term`] := `term` [`return_type`] in `term`
+                    : if `term` [`dep_ret_type`] then `term` else `term`
+                    : `term` : `term`
+                    : `term` <: `term`
+                    : `term` :>
+                    : `term` -> `term`
+                    : `term` `arg` … `arg`
+                    : @ `qualid` [`term` … `term`]
+                    : `term` % `ident`
+                    : match `match_item` , … , `match_item` [`return_type`] with
                     :   [[|] `equation` | … | `equation`] end
-                    : | `qualid`
-                    : | `sort`
-                    : | `num`
-                    : | _
-                    : | ( `term` )
+                    : `qualid`
+                    : `sort`
+                    : `num`
+                    : _
+                    : ( `term` )
    arg              : `term`
-                    : | ( `ident` := `term` )
+                    : ( `ident` := `term` )
    binders          : `binder` … `binder`
    binder           : `name`
-                    : | ( `name` … `name` : `term` )
-                    : | ( `name` [: `term`] := `term` )
-                    : | ' `pattern`
+                    : ( `name` … `name` : `term` )
+                    : ( `name` [: `term`] := `term` )
+                    : ' `pattern`
    name             : `ident` | _
    qualid           : `ident` | `qualid` `access_ident`
-   sort             : Prop | Set | Type
+   sort             : SProp | Prop | Set | Type
    fix_bodies       : `fix_body`
-                    : | `fix_body` with `fix_body` with … with `fix_body` for `ident`
+                    : `fix_body` with `fix_body` with … with `fix_body` for `ident`
    cofix_bodies     : `cofix_body`
-                    : | `cofix_body` with `cofix_body` with … with `cofix_body` for `ident`
+                    : `cofix_body` with `cofix_body` with … with `cofix_body` for `ident`
    fix_body         : `ident` `binders` [`annotation`] [: `term`] := `term`
    cofix_body       : `ident` [`binders`] [: `term`] := `term`
    annotation       : { struct `ident` }
@@ -173,13 +179,13 @@ is described in Chapter :ref:`syntaxextensionsandinterpretationscopes`.
    equation         : `mult_pattern` | … | `mult_pattern` => `term`
    mult_pattern     : `pattern` , … , `pattern`
    pattern          : `qualid` `pattern` … `pattern`
-                    : | @ `qualid` `pattern` … `pattern`
-                    : | `pattern` as `ident`
-                    : | `pattern` % `ident`
-                    : | `qualid`
-                    : | _
-                    : | `num`
-                    : | ( `or_pattern` , … , `or_pattern` )
+                    : @ `qualid` `pattern` … `pattern`
+                    : `pattern` as `ident`
+                    : `pattern` % `ident`
+                    : `qualid`
+                    : _
+                    : `num`
+                    : ( `or_pattern` , … , `or_pattern` )
    or_pattern       : `pattern` | … | `pattern`
 
 
@@ -218,24 +224,28 @@ numbers (see :ref:`datatypes`).
 
 .. index::
    single: Set (sort)
+   single: SProp
    single: Prop
    single: Type
 
 Sorts
 -----
 
-There are three sorts :g:`Set`, :g:`Prop` and :g:`Type`.
+There are four sorts :g:`SProp`, :g:`Prop`, :g:`Set`  and :g:`Type`.
+
+-  :g:`SProp` is the universe of *definitionally irrelevant
+   propositions* (also called *strict propositions*).
 
 -  :g:`Prop` is the universe of *logical propositions*. The logical propositions
    themselves are typing the proofs. We denote propositions by :production:`form`.
    This constitutes a semantic subclass of the syntactic class :token:`term`.
 
--  :g:`Set` is is the universe of *program types* or *specifications*. The
+-  :g:`Set` is the universe of *program types* or *specifications*. The
    specifications themselves are typing the programs. We denote
    specifications by :production:`specif`. This constitutes a semantic subclass of
    the syntactic class :token:`term`.
 
--  :g:`Type` is the type of :g:`Prop` and :g:`Set`
+-  :g:`Type` is the type of sorts.
 
 More on sorts can be found in Section :ref:`sorts`.
 
@@ -434,6 +444,10 @@ the identifier :g:`b` being used to represent the dependency.
    the return type. For instance, the following alternative definition is
    accepted and has the same meaning as the previous one.
 
+   .. coqtop:: none
+
+      Reset bool_case.
+
    .. coqtop:: in
 
       Definition bool_case (b:bool) : or (eq bool b true) (eq bool b false) :=
@@ -471,7 +485,7 @@ For instance, in the following example:
 
    Definition eq_sym (A:Type) (x y:A) (H:eq A x y) : eq A y x :=
    match H in eq _ _ z return eq A z x with
-   | eq_refl _ => eq_refl A x
+   | eq_refl _ _ => eq_refl A x
    end.
 
 the type of the branch is :g:`eq A x x` because the third argument of
@@ -524,38 +538,38 @@ The Vernacular
 .. productionlist:: coq
    decorated-sentence : [ `decoration` … `decoration` ] `sentence`
    sentence           : `assumption`
-                      : | `definition`
-                      : | `inductive`
-                      : | `fixpoint`
-                      : | `assertion` `proof`
+                      : `definition`
+                      : `inductive`
+                      : `fixpoint`
+                      : `assertion` `proof`
    assumption         : `assumption_keyword` `assums`.
    assumption_keyword : Axiom | Conjecture
-                      : | Parameter | Parameters
-                      : | Variable | Variables
-                      : | Hypothesis | Hypotheses
+                      : Parameter | Parameters
+                      : Variable | Variables
+                      : Hypothesis | Hypotheses
    assums             : `ident` … `ident` : `term`
-                      : | ( `ident` … `ident` : `term` ) … ( `ident` … `ident` : `term` )
+                      : ( `ident` … `ident` : `term` ) … ( `ident` … `ident` : `term` )
    definition         : [Local] Definition `ident` [`binders`] [: `term`] := `term` .
-                      : | Let `ident` [`binders`] [: `term`] := `term` .
+                      : Let `ident` [`binders`] [: `term`] := `term` .
    inductive          : Inductive `ind_body` with … with `ind_body` .
-                      : | CoInductive `ind_body` with … with `ind_body` .
+                      : CoInductive `ind_body` with … with `ind_body` .
    ind_body           : `ident` [`binders`] : `term` :=
                       : [[|] `ident` [`binders`] [:`term`] | … | `ident` [`binders`] [:`term`]]
    fixpoint           : Fixpoint `fix_body` with … with `fix_body` .
-                      : | CoFixpoint `cofix_body` with … with `cofix_body` .
+                      : CoFixpoint `cofix_body` with … with `cofix_body` .
    assertion          : `assertion_keyword` `ident` [`binders`] : `term` .
    assertion_keyword  : Theorem | Lemma
-                      : | Remark | Fact
-                      : | Corollary | Proposition
-                      : | Definition | Example
+                      : Remark | Fact
+                      : Corollary | Proposition
+                      : Definition | Example
    proof              : Proof . … Qed .
-                      : | Proof . … Defined .
-                      : | Proof . … Admitted .
+                      : Proof . … Defined .
+                      : Proof . … Admitted .
    decoration : #[ `attributes` ]
    attributes : [`attribute`, … , `attribute`]
    attribute :  `ident`
-   :| `ident` = `string`
-   :| `ident` ( `attributes` )
+             : `ident` = `string`
+             : `ident` ( `attributes` )
 
 .. todo:: This use of … in this grammar is inconsistent
           What about removing the proof part of this grammar from this chapter
@@ -602,53 +616,41 @@ has type :token:`type`.
 
       Adds several parameters with specification :token:`type`.
 
-   .. cmdv:: Parameter {+ ( {+ @ident } : @type ) }
+   .. cmdv:: Parameter {+ ( {+ @ident } : @type ) }
 
       Adds blocks of parameters with different specifications.
 
-   .. cmdv:: Local Parameter {+ ( {+ @ident } : @type ) }
+   .. cmdv:: Local Parameter {+ ( {+ @ident } : @type ) }
       :name: Local Parameter
 
       Such parameters are never made accessible through their unqualified name by
       :cmd:`Import` and its variants. You have to explicitly give their fully
       qualified name to refer to them.
 
-   .. cmdv:: {? Local } Parameters {+ ( {+ @ident } : @type ) }
-             {? Local } Axiom {+ ( {+ @ident } : @type ) }
-             {? Local } Axioms {+ ( {+ @ident } : @type ) }
-             {? Local } Conjecture {+ ( {+ @ident } : @type ) }
-             {? Local } Conjectures {+ ( {+ @ident } : @type ) }
+   .. cmdv:: {? Local } Parameters {+ ( {+ @ident } : @type ) }
+             {? Local } Axiom {+ ( {+ @ident } : @type ) }
+             {? Local } Axioms {+ ( {+ @ident } : @type ) }
+             {? Local } Conjecture {+ ( {+ @ident } : @type ) }
+             {? Local } Conjectures {+ ( {+ @ident } : @type ) }
       :name: Parameters; Axiom; Axioms; Conjecture; Conjectures
 
-      These variants are synonyms of :n:`{? Local } Parameter {+ ( {+ @ident } : @type ) }`.
+      These variants are synonyms of :n:`{? Local } Parameter {+ ( {+ @ident } : @type ) }`.
 
-.. cmd:: Variable @ident : @type
+   .. cmdv:: Variable  {+ ( {+ @ident } : @type ) }
+             Variables {+ ( {+ @ident } : @type ) }
+             Hypothesis {+ ( {+ @ident } : @type ) }
+             Hypotheses {+ ( {+ @ident } : @type ) }
+      :name: Variable (outside a section); Variables (outside a section); Hypothesis (outside a section); Hypotheses (outside a section)
 
-   This command links :token:`type` to the name :token:`ident` in the context of
-   the current section (see Section :ref:`section-mechanism` for a description of
-   the section mechanism). When the current section is closed, name :token:`ident`
-   will be unknown and every object using this variable will be explicitly
-   parametrized (the variable is *discharged*). Using the :cmd:`Variable` command out
-   of any section is equivalent to using :cmd:`Local Parameter`.
+      Outside of any section, these variants are synonyms of
+      :n:`Local Parameter {+ ( {+ @ident } : @type ) }`.
+      For their meaning inside a section, see :cmd:`Variable` in
+      :ref:`section-mechanism`.
 
-   .. exn:: @ident already exists.
-      :name: @ident already exists. (Variable)
-      :undocumented:
+      .. warn:: @ident is declared as a local axiom [local-declaration,scope]
 
-   .. cmdv:: Variable {+ @ident } : @term
-
-      Links :token:`type` to each :token:`ident`.
-
-   .. cmdv:: Variable {+ ( {+ @ident } : @term ) }
-
-      Adds blocks of variables with different specifications.
-
-   .. cmdv:: Variables {+ ( {+ @ident } : @term) }
-             Hypothesis {+ ( {+ @ident } : @term) }
-             Hypotheses {+ ( {+ @ident } : @term) }
-      :name: Variables; Hypothesis; Hypotheses
-
-      These variants are synonyms of :n:`Variable {+ ( {+ @ident } : @term) }`.
+         Warning generated when using :cmd:`Variable` instead of
+         :cmd:`Local Parameter`.
 
 .. note::
    It is advised to use the commands :cmd:`Axiom`, :cmd:`Conjecture` and
@@ -656,6 +658,8 @@ has type :token:`type`.
    the assertion :token:`type` is of sort :g:`Prop`), and to use the commands
    :cmd:`Parameter` and :cmd:`Variable` (and their plural forms) in other cases
    (corresponding to the declaration of an abstract mathematical entity).
+
+.. seealso:: Section :ref:`section-mechanism`.
 
 .. _gallina-definitions:
 
@@ -696,10 +700,10 @@ Section :ref:`typing-rules`.
       .. exn:: The term @term has type @type while it is expected to have type @type'.
          :undocumented:
 
-   .. cmdv:: Definition @ident @binders {? : @term } := @term
+   .. cmdv:: Definition @ident @binders {? : @type } := @term
 
       This is equivalent to
-      :n:`Definition @ident : forall @binders, @term := fun @binders => @term`.
+      :n:`Definition @ident : forall @binders, @type := fun @binders => @term`.
 
    .. cmdv:: Local Definition @ident {? @binders } {? : @type } := @term
       :name: Local Definition
@@ -713,32 +717,18 @@ Section :ref:`typing-rules`.
 
       This is equivalent to :cmd:`Definition`.
 
-.. seealso:: :cmd:`Opaque`, :cmd:`Transparent`, :tacn:`unfold`.
+   .. cmdv:: Let @ident := @term
+      :name: Let (outside a section)
 
-.. cmd:: Let @ident := @term
+      Outside of any section, this variant is a synonym of
+      :n:`Local Definition @ident := @term`.
+      For its meaning inside a section, see :cmd:`Let` in
+      :ref:`section-mechanism`.
 
-   This command binds the value :token:`term` to the name :token:`ident` in the
-   environment of the current section. The name :token:`ident` disappears when the
-   current section is eventually closed, and all persistent objects (such
-   as theorems) defined within the section and depending on :token:`ident` are
-   prefixed by the let-in definition :n:`let @ident := @term in`.
-   Using the :cmd:`Let` command out of any section is equivalent to using
-   :cmd:`Local Definition`.
+      .. warn:: @ident is declared as a local definition [local-declaration,scope]
 
-   .. exn:: @ident already exists.
-      :name: @ident already exists. (Let)
-      :undocumented:
-
-   .. cmdv:: Let @ident {? @binders } {? : @type } := @term
-      :undocumented:
-
-   .. cmdv:: Let Fixpoint @ident @fix_body {* with @fix_body}
-      :name: Let Fixpoint
-      :undocumented:
-
-   .. cmdv:: Let CoFixpoint @ident @cofix_body {* with @cofix_body}
-      :name: Let CoFixpoint
-      :undocumented:
+         Warning generated when using :cmd:`Let` instead of
+         :cmd:`Local Definition`.
 
 .. seealso:: Section :ref:`section-mechanism`, commands :cmd:`Opaque`,
              :cmd:`Transparent`, and tactic :tacn:`unfold`.
@@ -763,9 +753,9 @@ Simple inductive types
    are the names of its constructors and :token:`type` their respective types.
    Depending on the universe where the inductive type :token:`ident` lives
    (e.g. its type :token:`sort`), Coq provides a number of destructors.
-   Destructors are named :token:`ident`\ ``_ind``, :token:`ident`\ ``_rec``
-   or :token:`ident`\ ``_rect`` which respectively correspond to elimination
-   principles on :g:`Prop`, :g:`Set` and :g:`Type`.
+   Destructors are named :token:`ident`\ ``_sind``,:token:`ident`\ ``_ind``,
+   :token:`ident`\ ``_rec`` or :token:`ident`\ ``_rect`` which respectively
+   correspond to elimination principles on :g:`SProp`, :g:`Prop`, :g:`Set` and :g:`Type`.
    The type of the destructors expresses structural induction/recursion
    principles over objects of type :token:`ident`.
    The constant :token:`ident`\ ``_ind`` is always provided,
@@ -826,6 +816,10 @@ Simple inductive types
 
       .. example::
 
+         .. coqtop:: none
+
+            Reset nat.
+
          .. coqtop:: in
 
             Inductive nat : Set := O | S (_:nat).
@@ -865,8 +859,8 @@ which is a type whose conclusion is a sort.
    successor :g:`(S (S n))` satisfies also :g:`P`. This is indeed analogous to the
    structural induction principle we got for :g:`nat`.
 
-Parametrized inductive types
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Parameterized inductive types
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. cmdv:: Inductive @ident @binders {? : @type } := {? | } @ident : @type {* | @ident : @type}
 
@@ -904,6 +898,10 @@ Parametrized inductive types
       Once again, it is possible to specify only the type of the arguments
       of the constructors, and to omit the type of the conclusion:
 
+      .. coqtop:: none
+
+         Reset list.
+
       .. coqtop:: in
 
          Inductive list (A:Set) : Set := nil | cons (_:A) (_:list A).
@@ -938,7 +936,7 @@ Parametrized inductive types
      because the conclusion of the type of constructors should be :g:`listw A`
      in both cases.
 
-   + A parametrized inductive definition can be defined using annotations
+   + A parameterized inductive definition can be defined using annotations
      instead of parameters but it will sometimes give a different (bigger)
      sort for the inductive definition and will produce a less convenient
      rule for case elimination.
@@ -949,7 +947,7 @@ Parametrized inductive types
      inductive definitions are abstracted over their parameters
      before type checking constructors, allowing to write:
 
-     .. coqtop:: all undo
+     .. coqtop:: all
 
         Set Uniform Inductive Parameters.
         Inductive list3 (A:Set) : Set :=
@@ -960,7 +958,7 @@ Parametrized inductive types
      and using :cmd:`Context` to give the uniform parameters, like so
      (cf. :ref:`section-mechanism`):
 
-     .. coqtop:: all undo
+     .. coqtop:: all reset
 
         Section list3.
         Context (A:Set).
@@ -998,7 +996,7 @@ Mutually defined inductive types
 
    .. cmdv:: Inductive @ident @binders {? : @type } := {? | } {*| @ident : @type } {* with {? | } {*| @ident @binders {? : @type } } }
 
-      In this variant, the inductive definitions are parametrized
+      In this variant, the inductive definitions are parameterized
       with :token:`binders`. However, parameters correspond to a local context
       in which the whole set of inductive declarations is done. For this
       reason, the parameters must be strictly the same for each inductive types.
@@ -1011,7 +1009,7 @@ Mutually defined inductive types
 
    .. coqtop:: in
 
-      Variables A B : Set.
+      Parameters A B : Set.
 
       Inductive tree : Set := node : A -> forest -> tree
 
@@ -1034,11 +1032,11 @@ Mutually defined inductive types
 
       Check forest_rec.
 
-   Assume we want to parametrize our mutual inductive definitions with the
+   Assume we want to parameterize our mutual inductive definitions with the
    two type variables :g:`A` and :g:`B`, the declaration should be
    done the following way:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Inductive tree (A B:Set) : Set := node : A -> forest A B -> tree A B
 
@@ -1130,6 +1128,10 @@ found in e.g. Agda, and preserves subject reduction.
 
 The above example can be rewritten in the following way.
 
+.. coqtop:: none
+
+   Reset Stream.
+
 .. coqtop:: all
 
    Set Primitive Projections.
@@ -1147,7 +1149,7 @@ axiom.
 
 .. coqtop:: all
 
-   Axiom Stream_eta : forall s: Stream, s = cons (hs s) (tl s).
+   Axiom Stream_eta : forall s: Stream, s = Seq (hd s) (tl s).
 
 More generally, as in the case of positive coinductive types, it is consistent
 to further identify extensional equality of coinductive types with propositional
@@ -1517,7 +1519,7 @@ the following attributes names are recognized:
 
 .. example::
 
-   .. coqtop:: all reset
+   .. coqtop:: all reset warn
 
         From Coq Require Program.
         #[program] Definition one : nat := S _.

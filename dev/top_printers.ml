@@ -20,14 +20,13 @@ open Univ
 open Environ
 open Printer
 open Constr
-open Goptions
+open Context
 open Genarg
 open Clenv
 
 let _ = Detyping.print_evar_arguments := true
 let _ = Detyping.print_universes := true
-let _ = set_bool_option_value ["Printing";"Matching"] false
-let _ = Detyping.set_detype_anonymous (fun ?loc _ -> raise Not_found)
+let _ = Goptions.set_bool_option_value ["Printing";"Matching"] false
 
 (* std_ppcmds *)
 let pp   x = Pp.pp_with !Topfmt.std_ft x
@@ -60,19 +59,26 @@ let prrecarg = function
      str "Imbr[" ++ MutInd.print mind ++ pr_comma () ++ int i ++ str "]"
 let ppwf_paths x = pp (Rtree.pp_tree prrecarg x)
 
+let get_current_context () =
+  try Vernacstate.Proof_global.get_current_context ()
+  with Vernacstate.Proof_global.NoCurrentProof ->
+    let env = Global.env() in
+    Evd.from_env env, env
+  [@@ocaml.warning "-3"]
+
 (* term printers *)
-let envpp pp = let sigma,env = Pfedit.get_current_context () in pp env sigma
+let envpp pp = let sigma,env = get_current_context () in pp env sigma
 let rawdebug = ref false
 let ppevar evk = pp (Evar.print evk)
 let pr_constr t =
-  let sigma, env = Pfedit.get_current_context () in
+  let sigma, env = get_current_context () in
   Printer.pr_constr_env env sigma t
 let pr_econstr t =
-  let sigma, env = Pfedit.get_current_context () in
+  let sigma, env = get_current_context () in
   Printer.pr_econstr_env env sigma t
 let ppconstr x = pp (pr_constr x)
 let ppeconstr x = pp (pr_econstr x)
-let ppconstr_expr x = pp (Ppconstr.pr_constr_expr x)
+let ppconstr_expr x = let sigma,env = get_current_context () in pp (Ppconstr.pr_constr_expr env sigma x)
 let ppsconstr x = ppconstr (Mod_subst.force_constr x)
 let ppconstr_univ x = Constrextern.with_universes ppconstr x
 let ppglob_constr = (fun x -> pp(pr_lglob_constr_env (Global.env()) x))
@@ -168,8 +174,8 @@ let pp_state_t n = pp (Reductionops.pr_state Global.(env()) Evd.empty n)
 (* proof printers *)
 let pr_evar ev = Pp.int (Evar.repr ev)
 let ppmetas metas = pp(Termops.pr_metaset metas)
-let ppevm evd = pp(Termops.pr_evar_map ~with_univs:!Detyping.print_universes (Some 2) evd)
-let ppevmall evd = pp(Termops.pr_evar_map ~with_univs:!Detyping.print_universes None evd)
+let ppevm evd = pp(Termops.pr_evar_map ~with_univs:!Detyping.print_universes (Some 2) (Global.env ()) evd)
+let ppevmall evd = pp(Termops.pr_evar_map ~with_univs:!Detyping.print_universes None (Global.env ()) evd)
 let pr_existentialset evars =
   prlist_with_sep spc pr_evar (Evar.Set.elements evars)
 let ppexistentialset evars =
@@ -180,14 +186,14 @@ let ppexistentialfilter filter = match Evd.Filter.repr filter with
 let ppclenv clenv = pp(pr_clenv clenv)
 let ppgoalgoal gl = pp(Goal.pr_goal gl)
 let ppgoal g = pp(Printer.pr_goal g)
-let ppgoalsigma g = pp(Printer.pr_goal g ++ Termops.pr_evar_map None (Refiner.project g))
+let ppgoalsigma g = pp(Printer.pr_goal g ++ Termops.pr_evar_map None (Global.env ()) (Refiner.project g))
 let pphintdb db = pp(envpp Hints.pr_hint_db_env db)
 let ppproofview p =
   let gls,sigma = Proofview.proofview p in
-  pp(pr_enum Goal.pr_goal gls ++ fnl () ++ Termops.pr_evar_map (Some 1) sigma)
+  pp(pr_enum Goal.pr_goal gls ++ fnl () ++ Termops.pr_evar_map (Some 1) (Global.env ()) sigma)
 
 let ppopenconstr (x : Evd.open_constr) =
-  let (evd,c) = x in pp (Termops.pr_evar_map (Some 2) evd ++ envpp pr_econstr_env c)
+  let (evd,c) = x in pp (Termops.pr_evar_map (Some 2) (Global.env ()) evd ++ envpp pr_econstr_env c)
 (* spiwack: deactivated until a replacement is found
 let pppftreestate p = pp(print_pftreestate p)
 *)
@@ -223,13 +229,20 @@ let ppuniverseconstraints c = pp (UnivProblem.Set.pr c)
 let ppuniverse_context_future c = 
   let ctx = Future.force c in
     ppuniverse_context ctx
-let ppcumulativity_info c = pp (Univ.pr_cumulativity_info Univ.Level.pr c)
-let ppabstract_cumulativity_info c = pp (Univ.pr_abstract_cumulativity_info Univ.Level.pr c)
 let ppuniverses u = pp (UGraph.pr_universes Level.pr u)
 let ppnamedcontextval e =
   let env = Global.env () in
   let sigma = Evd.from_env env in
   pp (pr_named_context env sigma (named_context_of_val e))
+
+let ppaucontext auctx =
+  let nas = AUContext.names auctx in
+  let prlev l = match Level.var_index l with
+    | Some n -> Name.print nas.(n)
+    | None -> prlev l
+  in
+  pp (pr_universe_context prlev (AUContext.repr auctx))
+
 
 let ppenv e = pp
   (str "[" ++ pr_named_context_of e Evd.empty ++ str "]" ++ spc() ++
@@ -293,6 +306,8 @@ let constr_display csr =
       ^(Array.fold_right (fun x i -> (name_display x)^(if not(i="")
         then (";"^i) else "")) lna "")^","
       ^(array_display bl)^")"
+  | Int i ->
+      "Int("^(Uint63.to_string i)^")"
 
   and array_display v =
     "[|"^
@@ -307,6 +322,7 @@ let constr_display csr =
     incr cnt; pp (str "with " ++ int !cnt ++ str" " ++ Level.pr u ++ fnl ())
 
   and sort_display = function
+    | SProp -> "SProp"
     | Set -> "Set"
     | Prop -> "Prop"
     | Type u -> univ_display u;
@@ -316,7 +332,7 @@ let constr_display csr =
     Array.fold_right (fun x i -> level_display x; (string_of_int !cnt)^(if not(i="")
         then (" "^i) else "")) (Instance.to_array l) ""
 
-  and name_display = function
+  and name_display x = match x.binder_name with
     | Name id -> "Name("^(Id.to_string id)^")"
     | Anonymous -> "Anonymous"
 
@@ -336,13 +352,13 @@ let print_pure_constr csr =
   | Cast (c,_, t) -> open_hovbox 1;
       print_string "("; (term_display c); print_cut();
       print_string "::"; (term_display t); print_string ")"; close_box()
-  | Prod (Name(id),t,c) ->
+  | Prod ({binder_name=Name(id)},t,c) ->
       open_hovbox 1;
       print_string"("; print_string (Id.to_string id);
       print_string ":"; box_display t;
       print_string ")"; print_cut();
       box_display c; close_box()
-  | Prod (Anonymous,t,c) ->
+  | Prod ({binder_name=Anonymous},t,c) ->
       print_string"("; box_display t; print_cut(); print_string "->";
       box_display c; print_string ")";
   | Lambda (na,t,c) ->
@@ -422,6 +438,8 @@ let print_pure_constr csr =
 	  print_cut();
         done
       in print_string"{"; print_fix (); print_string"}"
+  | Int i ->
+     print_string ("Int("^(Uint63.to_string i)^")")
 
   and box_display c = open_hovbox 1; term_display c; close_box()
 
@@ -429,12 +447,13 @@ let print_pure_constr csr =
     Array.iter (fun u -> print_space (); pp (Level.pr u)) (Instance.to_array u)
 
   and sort_display = function
+    | SProp -> print_string "SProp"
     | Set -> print_string "Set"
     | Prop -> print_string "Prop"
     | Type u -> open_hbox();
 	print_string "Type("; pp (pr_uni u); print_string ")"; close_box()
 
-  and name_display = function
+  and name_display x = match x.binder_name with
     | Name id -> print_string (Id.to_string id)
     | Anonymous -> print_string "_"
 (* Remove the top names for library and Scratch to avoid long names *)
@@ -477,7 +496,7 @@ let pp_generic_argument arg =
 let prgenarginfo arg =
   let Geninterp.Val.Dyn (tag, _) = arg in
   let tpe = Geninterp.Val.pr tag in
-  (** FIXME *)
+  (* FIXME *)
 (*   try *)
 (*     let data = Pptactic.pr_top_generic (Global.env ()) arg in *)
 (*     str "<genarg:" ++ tpe ++ str " := [ " ++ data ++ str " ] >" *)
@@ -496,7 +515,7 @@ let ppist ist =
 (* Vernac-level debugging commands                                    *)
 
 let in_current_context f c =
-  let (evmap,sign) = Pfedit.get_current_context () in
+  let (evmap,sign) = get_current_context () in
   f (fst (Constrintern.interp_constr sign evmap c))(*FIXME*)
 
 (* We expand the result of preprocessing to be independent of camlp5
@@ -509,41 +528,23 @@ VERNAC COMMAND EXTEND PrintConstr
 END
 *)
 
-open Genarg
-open Stdarg
-open Egramml
+let _ =
+  let open Vernacextend in
+  let ty_constr = Extend.TUentry (get_arg_tag Stdarg.wit_constr) in
+  let cmd_sig = TyTerminal("PrintConstr", TyNonTerminal(ty_constr, TyNil)) in
+  let cmd_fn c ~atts ~st = in_current_context econstr_display c; st in
+  let cmd_class _ = VtQuery,VtNow in
+  let cmd : ty_ml = TyML (false, cmd_sig, cmd_fn, Some cmd_class) in
+  vernac_extend ~command:"PrintConstr" [cmd]
 
 let _ =
-  try
-    Vernacinterp.vinterp_add false ("PrintConstr", 0)
-      (function
-         [c] when genarg_tag c = unquote (topwit wit_constr) && true ->
-           let c = out_gen (rawwit wit_constr) c in
-           (fun ~atts ~st -> in_current_context econstr_display c; st)
-       | _ -> failwith "Vernac extension: cannot occur")
-  with
-    e -> pp (CErrors.print e)
-let _ =
-  extend_vernac_command_grammar ("PrintConstr", 0) None
-    [GramTerminal "PrintConstr";
-      GramNonTerminal
-        (Loc.tag (rawwit wit_constr,Extend.Aentry Pcoq.Constr.constr))]
-
-let _ =
-  try
-    Vernacinterp.vinterp_add false ("PrintPureConstr", 0)
-      (function
-         [c] when genarg_tag c = unquote (topwit wit_constr) && true ->
-           let c = out_gen (rawwit wit_constr) c in
-           (fun ~atts ~st -> in_current_context print_pure_econstr c; st)
-       | _ -> failwith "Vernac extension: cannot occur")
-  with
-    e -> pp (CErrors.print e)
-let _ =
-  extend_vernac_command_grammar ("PrintPureConstr", 0) None
-    [GramTerminal "PrintPureConstr";
-      GramNonTerminal
-        (Loc.tag (rawwit wit_constr,Extend.Aentry Pcoq.Constr.constr))]
+  let open Vernacextend in
+  let ty_constr = Extend.TUentry (get_arg_tag Stdarg.wit_constr) in
+  let cmd_sig = TyTerminal("PrintPureConstr", TyNonTerminal(ty_constr, TyNil)) in
+  let cmd_fn c ~atts ~st = in_current_context print_pure_econstr c; st in
+  let cmd_class _ = VtQuery,VtNow in
+  let cmd : ty_ml = TyML (false, cmd_sig, cmd_fn, Some cmd_class) in
+  vernac_extend ~command:"PrintPureConstr" [cmd]
 
 (* Setting printer of unbound global reference *)
 open Names

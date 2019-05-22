@@ -119,7 +119,7 @@ let rec filter_coq_opts args =
 
 and asks_for_coqtop args =
   let pb_mes = GWindow.message_dialog
-    ~message:"Failed to load coqtop. Reset the preference to default ?"
+    ~message:"Failed to load coqidetop. Reset the preference to default ?"
     ~message_type:`QUESTION ~buttons:GWindow.Buttons.yes_no () in
   match pb_mes#run () with
     | `YES ->
@@ -128,16 +128,15 @@ and asks_for_coqtop args =
       let () = pb_mes#destroy () in
       filter_coq_opts args
     | `DELETE_EVENT | `NO ->
-      let () = pb_mes#destroy () in
-      let cmd_sel = GWindow.file_selection
-	~title:"Coqtop to execute (edit your preference then)"
-	~filename:(coqtop_path ()) ~urgency_hint:true () in
-      match cmd_sel#run () with
-	| `OK ->
-	  let () = custom_coqtop := (Some cmd_sel#filename) in
-	  let () = cmd_sel#destroy () in
+      let file = select_file_for_open
+        ~title:"coqidetop to execute (edit your preference then)"
+        ~filter:false
+        ~filename:(coqtop_path ()) () in
+      match file with
+      | Some _ ->
+          let () = custom_coqtop := file in
 	  filter_coq_opts args
-	| `CANCEL | `DELETE_EVENT | `HELP -> exit 0
+      | None -> exit 0
 
 exception WrongExitStatus of string
 
@@ -334,8 +333,8 @@ let unsafe_handle_input handle feedback_processor state conds ~read_all =
     (* Parsing error at the end of s : we have only received a part of
         an xml answer. We store the current fragment for later *)
     let l_end = Lexing.lexeme_end lex in
-    (** Heuristic hack not to reimplement the lexer:  if ever the lexer dies
-        twice at the same place, then this is a non-recoverable error *)
+    (* Heuristic hack not to reimplement the lexer:  if ever the lexer dies
+       twice at the same place, then this is a non-recoverable error *)
     if state.lexerror = Some l_end then raise e;
     state.lexerror <- Some l_end
 
@@ -419,7 +418,7 @@ let rec respawn_coqtop ?(why=Unexpected) coqtop =
     let title = "Warning" in
     let icon = (warn_image ())#coerce in
     let buttons = ["Reset"; "Save all and quit"; "Quit without saving"] in
-    let ans = GToolbox.question_box ~title ~buttons ~icon "Coqtop died badly." in
+    let ans = GToolbox.question_box ~title ~buttons ~icon "coqidetop died badly." in
     if ans = 2 then (!save_all (); GtkMain.Main.quit ())
     else if ans = 3 then GtkMain.Main.quit ()
   | Planned -> ()
@@ -496,7 +495,7 @@ let init_coqtop coqtop task =
 type 'a query = 'a Interface.value task
 
 let eval_call call handle k =
-  (** Send messages to coqtop and prepare the decoding of the answer *)
+  (* Send messages to coqtop and prepare the decoding of the answer *)
   Minilib.log ("Start eval_call " ^ Xmlprotocol.pr_call call);
   assert (handle.alive && handle.waiting_for = None);
   handle.waiting_for <- Some (mk_ccb (call,k));

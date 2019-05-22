@@ -16,6 +16,7 @@ val make_ident : string -> int option -> Id.t
 val repr_ident : Id.t -> string * int option
 
 val atompart_of_id : Id.t -> string  (** remove trailing digits *)
+
 val root_of_id : Id.t -> Id.t (** remove trailing digits, ' and _ *)
 
 val add_suffix : Id.t -> string -> Id.t
@@ -23,7 +24,41 @@ val add_prefix : string -> Id.t -> Id.t
 
 (** Below, by {i subscript} we mean a suffix composed solely from (decimal) digits. *)
 
+module Subscript :
+sig
+  type t
+  (** Abstract datatype of subscripts. Isomorphic to a string of digits. *)
+
+  val zero : t
+  (** Empty subscript *)
+
+  val succ : t -> t
+  (** Guarantees that [x < succ x], but [succ x] might not be the smallest
+      element strictly above [x], generally it does not exist. Example mappings:
+      ""   ↦ "0"
+      "0"  ↦ "1"
+      "00" ↦ "01"
+      "1"  ↦ "2"
+      "01" ↦ "02"
+      "9"  ↦ "10"
+      "09" ↦ "10"
+      "99" ↦ "100"
+  *)
+
+  val compare : t -> t -> int
+  (** Well-founded order. *)
+
+  val equal : t -> t -> bool
+
+end
+
 val has_subscript       : Id.t -> bool
+
+val get_subscript : Id.t -> Id.t * Subscript.t
+(** Split an identifier into a base name and a subscript. *)
+
+val add_subscript : Id.t -> Subscript.t -> Id.t
+(** Append the subscript to the identifier. *)
 
 val increment_subscript : Id.t -> Id.t
 (** Return the same identifier as the original one but whose {i subscript} is incremented.
@@ -82,6 +117,9 @@ module Name : sig
   val pick : Name.t -> Name.t -> Name.t
   (** [pick na na'] returns [Anonymous] if both names are [Anonymous].
       Pick one of [na] or [na'] otherwise. *)
+
+  val pick_annot : Name.t Context.binder_annot -> Name.t Context.binder_annot ->
+    Name.t Context.binder_annot
 
   val cons : Name.t -> Id.t list -> Id.t list
   (** [cons na l] returns [id::l] if [na] is [Name id] and [l] otherwise. *)

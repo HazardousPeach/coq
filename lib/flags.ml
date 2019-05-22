@@ -41,11 +41,7 @@ let with_options ol f x =
     let () = List.iter2 (:=) ol vl in
     Exninfo.iraise reraise
 
-let boot = ref false
-
 let record_aux_file = ref false
-
-let test_mode = ref false
 
 let async_proofs_worker_id = ref "master"
 let async_proofs_is_worker () = !async_proofs_worker_id <> "master"
@@ -66,25 +62,25 @@ let we_are_parsing = ref false
 (* Current means no particular compatibility consideration.
    For correct comparisons, this constructor should remain the last one. *)
 
-type compat_version = V8_7 | V8_8 | Current
+type compat_version = V8_8 | V8_9 | Current
 
 let compat_version = ref Current
 
 let version_compare v1 v2 = match v1, v2 with
-  | V8_7, V8_7 -> 0
-  | V8_7, _ -> -1
-  | _, V8_7 -> 1
   | V8_8, V8_8 -> 0
   | V8_8, _ -> -1
   | _, V8_8 -> 1
+  | V8_9, V8_9 -> 0
+  | V8_9, _ -> -1
+  | _, V8_9 -> 1
   | Current, Current -> 0
 
 let version_strictly_greater v = version_compare !compat_version v > 0
 let version_less_or_equal v = not (version_strictly_greater v)
 
 let pr_version = function
-  | V8_7 -> "8.7"
   | V8_8 -> "8.8"
+  | V8_9 -> "8.9"
   | Current -> "current"
 
 (* Translate *)
@@ -99,24 +95,6 @@ let verbosely f x = without_option quiet f x
 let if_silent f x = if !quiet then f x
 let if_verbose f x = if not !quiet then f x
 
-let auto_intros = ref true
-let make_auto_intros flag = auto_intros := flag
-let is_auto_intros () = !auto_intros
-
-let universe_polymorphism = ref false
-let make_universe_polymorphism b = universe_polymorphism := b
-let is_universe_polymorphism () = !universe_polymorphism
-
-let polymorphic_inductive_cumulativity = ref false
-let make_polymorphic_inductive_cumulativity b = polymorphic_inductive_cumulativity := b
-let is_polymorphic_inductive_cumulativity () = !polymorphic_inductive_cumulativity
-
-(** [program_mode] tells that Program mode has been activated, either
-    globally via [Set Program] or locally via the Program command prefix. *)
-
-let program_mode = ref false
-let is_program_mode () = !program_mode
-
 let warn = ref true
 let make_warn flag = warn := flag;  ()
 let if_warn f x = if !warn then f x
@@ -127,12 +105,6 @@ let default_inline_level = 100
 let inline_level = ref default_inline_level
 let set_inline_level = (:=) inline_level
 let get_inline_level () = !inline_level
-
-(* Native code compilation for conversion and normalization *)
-let output_native_objects = ref false
-
-(* Print the mod uid associated to a vo file by the native compiler *)
-let print_mod_uid = ref false
 
 let profile_ltac = ref false
 let profile_ltac_cutoff = ref 2.0

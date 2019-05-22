@@ -60,6 +60,24 @@ sig
   val height : 'a t -> int
   (** An indication of the logarithmic size of a map *)
 
+  val filter_range : (key -> int) -> 'a t -> 'a t
+  (** [find_range in_range m] Given a comparison function [in_range x],
+      that tests if [x] is below, above, or inside a given range
+      [filter_range] returns the submap of [m] whose keys are in
+      range. Note that [in_range] has to define a continouous range. *)
+
+  val update: key -> ('a option -> 'a option) -> 'a t -> 'a t
+  (** [update x f m] returns a map containing the same bindings as
+      [m], except for the binding of [x]. Depending on the value of
+      [y] where [y] is [f (find_opt x m)], the binding of [x] is
+      added, removed or updated. If [y] is [None], the binding is
+      removed if it exists; otherwise, if [y] is [Some z] then [x]
+      is associated to [z] in the resulting map.  If [x] was already
+      bound in [m] to a value that is physically equal to [z], [m]
+      is returned unchanged (the result of the function is then
+      physically equal to [m]).
+    *)
+
   module Smart :
   sig
     val map : ('a -> 'a) -> 'a t -> 'a t

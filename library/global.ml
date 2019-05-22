@@ -36,10 +36,9 @@ let is_joined_environment () =
 
 let global_env_summary_tag =
   Summary.declare_summary_tag global_env_summary_name
-    { Summary.freeze_function = (function
-        | `Yes -> join_safe_environment (); !global_env
-        | `No -> !global_env
-        | `Shallow -> !global_env);
+    { Summary.freeze_function = (fun ~marshallable -> if marshallable then
+        (join_safe_environment (); !global_env)
+        else !global_env);
       unfreeze_function = (fun fr -> global_env := fr);
       init_function = (fun () -> global_env := Safe_typing.empty_environment) }
 
@@ -88,10 +87,15 @@ let add_constraints c = globalize0 (Safe_typing.add_constraints c)
 let push_context_set b c = globalize0 (Safe_typing.push_context_set b c)
 
 let set_engagement c = globalize0 (Safe_typing.set_engagement c)
+let set_indices_matter b = globalize0 (Safe_typing.set_indices_matter b)
 let set_typing_flags c = globalize0 (Safe_typing.set_typing_flags c)
 let typing_flags () = Environ.typing_flags (env ())
+let make_sprop_cumulative () = globalize0 Safe_typing.make_sprop_cumulative
+let set_allow_sprop b = globalize0 (Safe_typing.set_allow_sprop b)
+let sprop_allowed () = Environ.sprop_allowed (env())
 let export_private_constants ~in_section cd = globalize (Safe_typing.export_private_constants ~in_section cd)
-let add_constant ~in_section id d = globalize (Safe_typing.add_constant ~in_section (i2l id) d)
+let add_constant ?role ~in_section id d = globalize (Safe_typing.add_constant ?role ~in_section (i2l id) d)
+let add_recipe ~in_section id d = globalize (Safe_typing.add_recipe ~in_section (i2l id) d)
 let add_mind id mie = globalize (Safe_typing.add_mind (i2l id) mie)
 let add_modtype id me inl = globalize (Safe_typing.add_modtype (i2l id) me inl)
 let add_module id me inl = globalize (Safe_typing.add_module (i2l id) me inl)
@@ -128,19 +132,7 @@ let exists_objlabel id = Safe_typing.exists_objlabel id (safe_env ())
 
 let opaque_tables () = Environ.opaque_tables (env ())
 
-let instantiate cb c =
-  let open Declarations in
-  match cb.const_universes with
-  | Monomorphic_const _ -> c, Univ.AUContext.empty
-  | Polymorphic_const ctx -> c, ctx
-
-let body_of_constant_body cb =
-  let open Declarations in
-  let otab = opaque_tables () in
-  match cb.const_body with
-  | Undef _ -> None
-  | Def c -> Some (instantiate cb (Mod_subst.force_constr c))
-  | OpaqueDef o -> Some (instantiate cb (Opaqueproof.force_proof otab o))
+let body_of_constant_body ce = body_of_constant_body (env ()) ce
 
 let body_of_constant cst = body_of_constant_body (lookup_constant cst)
 
@@ -155,7 +147,8 @@ let mind_of_delta_kn kn =
 (** Operations on libraries *)
 
 let start_library dir = globalize (Safe_typing.start_library dir)
-let export ?except s = Safe_typing.export ?except (safe_env ()) s
+let export ?except ~output_native_objects s =
+  Safe_typing.export ?except ~output_native_objects (safe_env ()) s
 let import c u d = globalize (Safe_typing.import c u d)
 
 
@@ -165,71 +158,11 @@ let import c u d = globalize (Safe_typing.import c u d)
 let env_of_context hyps =
   reset_with_named_context hyps (env())
 
-open Globnames
-
-(** Build a fresh instance for a given context, its associated substitution and 
-    the instantiated constraints. *)
-
-let constr_of_global_in_context env r =
-  let open Constr in
-  match r with
-  | VarRef id -> mkVar id, Univ.AUContext.empty
-  | ConstRef c ->
-    let cb = Environ.lookup_constant c env in
-    let univs = Declareops.constant_polymorphic_context cb in
-    mkConstU (c, Univ.make_abstract_instance univs), univs
-  | IndRef ind ->
-    let (mib, oib as specif) = Inductive.lookup_mind_specif env ind in
-    let univs = Declareops.inductive_polymorphic_context mib in
-    mkIndU (ind, Univ.make_abstract_instance univs), univs
-  | ConstructRef cstr ->
-    let (mib,oib as specif) =
-      Inductive.lookup_mind_specif env (inductive_of_constructor cstr)
-    in
-    let univs = Declareops.inductive_polymorphic_context mib in
-    mkConstructU (cstr, Univ.make_abstract_instance univs), univs
-
-let type_of_global_in_context env r = 
-  match r with
-  | VarRef id -> Environ.named_type id env, Univ.AUContext.empty
-  | ConstRef c -> 
-    let cb = Environ.lookup_constant c env in 
-    let univs = Declareops.constant_polymorphic_context cb in
-    cb.Declarations.const_type, univs
-  | IndRef ind ->
-    let (mib, oib as specif) = Inductive.lookup_mind_specif env ind in
-    let univs = Declareops.inductive_polymorphic_context mib in
-    let inst = Univ.make_abstract_instance univs in
-    let env = Environ.push_context ~strict:false (Univ.AUContext.repr univs) env in
-    Inductive.type_of_inductive env (specif, inst), univs
-  | ConstructRef cstr ->
-    let (mib,oib as specif) =
-      Inductive.lookup_mind_specif env (inductive_of_constructor cstr) 
-    in
-    let univs = Declareops.inductive_polymorphic_context mib in
-    let inst = Univ.make_abstract_instance univs in
-    Inductive.type_of_constructor (cstr,inst) specif, univs
-
-let universes_of_global gr = 
-  universes_of_global (env ()) gr
-
 let is_polymorphic r = Environ.is_polymorphic (env()) r
 
-let is_template_polymorphic r = 
-  let env = env() in 
-  match r with
-  | VarRef id -> false
-  | ConstRef c -> false
-  | IndRef ind -> Environ.template_polymorphic_ind ind env
-  | ConstructRef cstr -> Environ.template_polymorphic_ind (inductive_of_constructor cstr) env
+let is_template_polymorphic r = is_template_polymorphic (env ()) r
 
-let is_type_in_type r =
-  let env = env() in
-  match r with
-  | VarRef id -> false
-  | ConstRef c -> Environ.type_in_type_constant c env
-  | IndRef ind -> Environ.type_in_type_ind ind env
-  | ConstructRef cstr -> Environ.type_in_type_ind (inductive_of_constructor cstr) env
+let is_type_in_type r = is_type_in_type (env ()) r
 
 let current_modpath () =
   Safe_typing.current_modpath (safe_env ())
@@ -241,18 +174,14 @@ let with_global f =
   let (a, ctx) = f (env ()) (current_dirpath ()) in
     push_context_set false ctx; a
 
-(* spiwack: register/unregister functions for retroknowledge *)
-let register field value =
-  globalize0 (Safe_typing.register field value)
-
 let register_inline c = globalize0 (Safe_typing.register_inline c)
+let register_inductive c r = globalize0 (Safe_typing.register_inductive c r)
 
 let set_strategy k l =
-  GlobalSafeEnv.set_safe_env (Safe_typing.set_strategy (safe_env ()) k l)
+  globalize0 (Safe_typing.set_strategy k l)
 
-let set_reduction_sharing b =
-  let env = safe_env () in
-  let flags = Environ.typing_flags (Safe_typing.env_of_safe_env env) in
-  let flags = { flags with Declarations.share_reduction = b } in
-  let env = Safe_typing.set_typing_flags flags env in
-  GlobalSafeEnv.set_safe_env env
+let set_share_reduction b =
+  globalize0 (Safe_typing.set_share_reduction b)
+
+let set_VM b = globalize0 (Safe_typing.set_VM b)
+let set_native_compiler b = globalize0 (Safe_typing.set_native_compiler b)

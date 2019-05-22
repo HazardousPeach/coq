@@ -12,7 +12,7 @@
 
 open Vernacexpr
 open Tacexpr
-open Vernacinterp
+open Attributes
 
 (** {5 Tactic Definitions} *)
 
@@ -125,10 +125,10 @@ type ('b, 'c) argument_interp =
 | ArgInterpFun : ('b, Geninterp.Val.t) Geninterp.interp_fun -> ('b, 'c) argument_interp
 | ArgInterpWit : ('a, 'b, 'r) Genarg.genarg_type -> ('b, 'c) argument_interp
 | ArgInterpLegacy :
-  (Geninterp.interp_sign -> Proof_type.goal Evd.sigma -> 'b -> Evd.evar_map * 'c) -> ('b, 'c) argument_interp
+  (Geninterp.interp_sign -> Goal.goal Evd.sigma -> 'b -> Evd.evar_map * 'c) -> ('b, 'c) argument_interp
 
 type ('a, 'b, 'c) tactic_argument = {
-  arg_parsing : 'a Vernacentries.argument_rule;
+  arg_parsing : 'a Vernacextend.argument_rule;
   arg_tag : 'c Geninterp.Val.tag option;
   arg_intern : ('a, 'b) argument_intern;
   arg_subst : 'b argument_subst;

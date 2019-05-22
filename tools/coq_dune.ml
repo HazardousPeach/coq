@@ -109,6 +109,9 @@ module Aux = struct
     (* Move to Dirmap.update once we require OCaml >= 4.06.0 *)
     Legacy.dirmap_update key (fun l -> Some (option_cata [elem] (fun ll -> elem :: ll) l)) map
 
+  let replace_ext ~file ~newext =
+    Filename.(remove_extension file) ^ newext
+
 end
 
 open Aux
@@ -124,6 +127,7 @@ module Options = struct
   let all_opts =
   [ { enabled = false; cmd = "-debug"; }
   ; { enabled = false; cmd = "-native_compiler"; }
+  ; { enabled = true; cmd = "-allow-sprop"; }
   ]
 
   let build_coq_flags () =
@@ -136,7 +140,7 @@ type vodep = {
   deps : string list;
 }
 
-type ldep = | VO of vodep | ML4 of string | MLG of string
+type ldep = | VO of vodep | MLG of string
 type ddir = ldep list DirMap.t
 
 (* Filter `.vio` etc... *)
@@ -163,6 +167,11 @@ let pp_rule fmt targets deps action =
     "@[(rule@\n @[(targets @[%a@])@\n(deps @[%a@])@\n(action @[%a@])@])@]@\n"
     ppl targets pp_deps deps pp_print_string action
 
+let gen_coqc_targets vo =
+  [ vo.target
+  ; replace_ext ~file:vo.target ~newext:".glob"
+  ; "." ^ replace_ext ~file:vo.target ~newext:".aux"]
+
 (* Generate the dune rule: *)
 let pp_vo_dep dir fmt vo =
   let depth = List.length dir in
@@ -174,31 +183,28 @@ let pp_vo_dep dir fmt vo =
   (* Correct path from global to local "theories/Init/Decimal.vo" -> "../../theories/Init/Decimal.vo" *)
   let deps = List.map (fun s -> bpath [sdir;s]) (edep @ vo.deps) in
   (* The source file is also corrected as we will call coqtop from the top dir *)
-  let source = bpath (dir @ [Filename.(remove_extension vo.target) ^ ".v"]) in
+  let source = bpath (dir @ [replace_ext ~file:vo.target ~newext:".v"]) in
+  (* We explicitly include the location of coqlib to avoid tricky issues with coqlib location *)
+  let libflag = "-coqlib %{project_root}" in
   (* The final build rule *)
-  let action = sprintf "(chdir %%{project_root} (run coqtop -boot %s %s -compile %s))" eflag cflag source in
-  pp_rule fmt [vo.target] deps action
-
-let pp_ml4_dep _dir fmt ml =
-  let target = Filename.(remove_extension ml) ^ ".ml" in
-  let ml4_rule = "(run coqp5 -loc loc -impl %{pp-file} -o %{targets})" in
-  pp_rule fmt [target] [ml] ml4_rule
+  let action = sprintf "(chdir %%{project_root} (run coqc -q %s %s %s %s))" libflag eflag cflag source in
+  let all_targets = gen_coqc_targets vo in
+  pp_rule fmt all_targets deps action
 
 let pp_mlg_dep _dir fmt ml =
   let target = Filename.(remove_extension ml) ^ ".ml" in
-  let ml4_rule = "(run coqpp %{pp-file})" in
-  pp_rule fmt [target] [ml] ml4_rule
+  let mlg_rule = "(run coqpp %{pp-file})" in
+  pp_rule fmt [target] [ml] mlg_rule
 
 let pp_dep dir fmt oo = match oo with
   | VO vo -> pp_vo_dep dir fmt vo
-  | ML4 f -> pp_ml4_dep dir fmt f
   | MLG f -> pp_mlg_dep dir fmt f
 
 let out_install fmt dir ff =
   let itarget = String.concat "/" dir in
-  let ff = pmap (function | VO vo -> Some vo.target | _ -> None) ff in
-  let pp_ispec fmt tg = fprintf fmt "(%s as %s)" tg (bpath [itarget;tg]) in
-  fprintf fmt "(install@\n @[(section lib)@\n(package coq)@\n(files @[%a@])@])@\n"
+  let ff = List.concat @@ pmap (function | VO vo -> Some (gen_coqc_targets vo) | _ -> None) ff in
+  let pp_ispec fmt tg = fprintf fmt "(%s as coq/%s)" tg (bpath [itarget;tg]) in
+  fprintf fmt "(install@\n @[(section lib_root)@\n(package coq)@\n(files @[%a@])@])@\n"
     (pp_list pp_ispec sep) ff
 
 (* For each directory, we must record two things, the build rules and
@@ -208,7 +214,7 @@ let record_dune d ff =
   if Sys.file_exists sd && Sys.is_directory sd then
     let out = open_out (bpath [sd;"dune"]) in
     let fmt = formatter_of_out_channel out in
-    if List.nth d 0 = "plugins" then
+    if List.nth d 0 = "plugins" || List.nth d 0 = "user-contrib" then
       fprintf fmt "(include plugin_base.dune)@\n";
     out_install fmt d ff;
     List.iter (pp_dep d fmt) ff;
@@ -218,21 +224,26 @@ let record_dune d ff =
     eprintf "error in coq_dune, a directory disappeared: %s@\n%!" sd
 
 (* File Scanning *)
-let choose_ml4g_form f =
-  if Filename.check_suffix f ".ml4" then ML4 f
-  else MLG f
-
-let scan_mlg4 m d =
-  let dir = ["plugins"; d] in
+let scan_mlg ~root m d =
+  let dir = [root; d] in
   let m = DirMap.add dir [] m in
-  let ml4 = Sys.(List.filter (fun f -> Filename.(check_suffix f ".ml4" || check_suffix f ".mlg"))
+  let mlg = Sys.(List.filter (fun f -> Filename.(check_suffix f ".mlg"))
                    Array.(to_list @@ readdir (bpath dir))) in
-  List.fold_left (fun m f -> add_map_list ["plugins"; d] (choose_ml4g_form f) m) m ml4
+  List.fold_left (fun m f -> add_map_list [root; d] (MLG f) m) m mlg
 
-let scan_plugins m =
+let scan_dir ~root m =
   let is_plugin_directory dir = Sys.(is_directory dir && file_exists (bpath [dir;"plugin_base.dune"])) in
-  let dirs = Sys.(List.filter (fun f -> is_plugin_directory @@ bpath ["plugins";f]) Array.(to_list @@ readdir "plugins")) in
-  List.fold_left scan_mlg4 m dirs
+  let dirs = Sys.(List.filter (fun f -> is_plugin_directory @@ bpath [root;f]) Array.(to_list @@ readdir root)) in
+  List.fold_left (scan_mlg ~root) m dirs
+
+let scan_plugins m = scan_dir ~root:"plugins" m
+let scan_usercontrib m = scan_dir ~root:"user-contrib" m
+
+(* This will be removed when we drop support for Make *)
+let fix_cmo_cma file =
+  if String.equal Filename.(extension file) ".cmo"
+  then replace_ext ~file ~newext:".cma"
+  else file
 
 (* Process .vfiles.d and generate a skeleton for the dune file *)
 let parse_coqdep_line l =
@@ -248,6 +259,7 @@ let parse_coqdep_line l =
          the platform. Anyways, I hope we can link to coqdep instead
          of having to parse its output soon, that should solve this
          kind of issues *)
+      let deps = List.map fix_cmo_cma deps in
       Some (String.split_on_char '/' dir, VO { target; deps; })
     (* Otherwise a vio file, we ignore *)
     | _ -> None
@@ -270,12 +282,18 @@ let exec_ifile f =
   match Array.length Sys.argv with
   | 1 -> f stdin
   | 2 ->
-    let ic = open_in Sys.argv.(1) in
-    (try f ic with _ -> close_in ic)
+    let in_file = Sys.argv.(1) in
+    begin try
+      let ic = open_in in_file in
+      (try f ic
+       with _ -> eprintf "Error: exec_ifile@\n%!"; close_in ic)
+      with _ -> eprintf "Error: cannot open input file %s@\n%!" in_file
+    end
   | _ -> eprintf "Error: wrong number of arguments@\n%!"; exit 1
 
 let _ =
   exec_ifile (fun ic ->
       let map = scan_plugins DirMap.empty in
+      let map = scan_usercontrib map in
       let map = read_vfiles ic map in
       out_map map)

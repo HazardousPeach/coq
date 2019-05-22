@@ -9,7 +9,6 @@
 (************************************************************************)
 
 open Names
-open Libnames
 open Constr
 open Entries
 open Decl_kinds
@@ -29,7 +28,7 @@ type section_variable_entry =
 
 type variable_declaration = DirPath.t * section_variable_entry * logical_kind
 
-val declare_variable : variable -> variable_declaration -> object_name
+val declare_variable : variable -> variable_declaration -> Libobject.object_name
 
 (** Declaration of global constructions 
    i.e. Definition/Theorem/Axiom/Parameter/... *)
@@ -44,7 +43,7 @@ type internal_flag =
 (* Defaut definition entries, transparent with no secctx or proj information *)
 val definition_entry : ?fix_exn:Future.fix_exn ->
   ?opaque:bool -> ?inline:bool -> ?types:types ->
-  ?univs:Entries.constant_universes_entry ->
+  ?univs:Entries.universes_entry ->
   ?eff:Safe_typing.private_constants -> constr -> Safe_typing.private_constants definition_entry
 
 (** [declare_constant id cd] declares a global declaration
@@ -56,10 +55,13 @@ val definition_entry : ?fix_exn:Future.fix_exn ->
 val declare_constant :
  ?internal:internal_flag -> ?local:bool -> Id.t -> ?export_seff:bool -> constant_declaration -> Constant.t
 
+val declare_private_constant :
+  role:side_effect_role -> ?internal:internal_flag -> ?local:bool -> Id.t -> constant_declaration -> Constant.t * Safe_typing.private_constants
+
 val declare_definition : 
   ?internal:internal_flag -> ?opaque:bool -> ?kind:definition_object_kind ->
   ?local:bool -> Id.t -> ?types:constr ->
-  constr Entries.in_constant_universes_entry -> Constant.t
+  constr Entries.in_universes_entry -> Constant.t
 
 (** Since transparent constants' side effects are globally declared, we
  *  need that *)
@@ -69,7 +71,7 @@ val set_declare_scheme :
 (** [declare_mind me] declares a block of inductive types with
    their constructors in the current section; it returns the path of
    the whole block and a boolean indicating if it is a primitive record. *)
-val declare_mind : mutual_inductive_entry -> object_name * bool
+val declare_mind : mutual_inductive_entry -> Libobject.object_name * bool
 
 (** Declaration messages *)
 

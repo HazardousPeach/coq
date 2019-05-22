@@ -57,6 +57,8 @@ val add_linked_module : module_body -> link_info -> env -> env
 (** same, for a module type *)
 val add_module_type : ModPath.t -> module_type_body -> env -> env
 
+val add_retroknowledge : module_implementation module_retroknowledge -> env -> env
+
 (** {6 Strengthening } *)
 
 val strengthen : module_type_body -> ModPath.t -> module_type_body
@@ -106,10 +108,10 @@ type signature_mismatch_error =
   | RecordFieldExpected of bool
   | RecordProjectionsExpected of Name.t list
   | NotEqualInductiveAliases
-  | IncompatibleInstances
   | IncompatibleUniverses of Univ.univ_inconsistency
   | IncompatiblePolymorphism of env * types * types
-  | IncompatibleConstraints of Univ.AUContext.t
+  | IncompatibleConstraints of { got : Univ.AUContext.t; expect : Univ.AUContext.t }
+  | IncompatibleVariance
 
 type module_typing_error =
   | SignatureMismatch of

@@ -611,31 +611,7 @@ let import_module export modl =
 (************************************************************************)
 (*s Initializing the compilation of a library. *)
 
-let check_coq_overwriting p id =
-  let l = DirPath.repr p in
-  let is_empty = match l with [] -> true | _ -> false in
-  if not !Flags.boot && not is_empty && Id.equal (List.last l) coq_root then
-    user_err 
-      (str "Cannot build module " ++ DirPath.print p ++ str "." ++ Id.print id ++ str "." ++ spc () ++
-      str "it starts with prefix \"Coq\" which is reserved for the Coq library.")
-
-let start_library fo =
-  let ldir0 =
-    try
-      let lp = Loadpath.find_load_path (Filename.dirname fo) in
-      Loadpath.logical lp
-    with Not_found -> Libnames.default_root_prefix
-  in
-  let file = Filename.chop_extension (Filename.basename fo) in
-  let id = Id.of_string file in
-  check_coq_overwriting ldir0 id;
-  let ldir = add_dirpath_suffix ldir0 id in
-  Declaremods.start_library ldir;
-  ldir
-
 let load_library_todo f =
-  let longf = Loadpath.locate_file (f^".v") in
-  let f = longf^"io" in
   let ch = raw_intern_library f in
   let (s0 : seg_sum), _, _ = System.marshal_in_segment f ch in
   let (s1 : seg_lib), _, _ = System.marshal_in_segment f ch in
@@ -648,7 +624,7 @@ let load_library_todo f =
   if s2 = None then user_err ~hdr:"restart" (str"not a .vio file");
   if s3 = None then user_err ~hdr:"restart" (str"not a .vio file");
   if pi3 (Option.get s2) then user_err ~hdr:"restart" (str"not a .vio file");
-  longf, s0, s1, Option.get s2, Option.get s3, Option.get tasks, s5
+  s0, s1, Option.get s2, Option.get s3, Option.get tasks, s5
 
 (************************************************************************)
 (*s [save_library dir] ends library [dir] and save it to the disk. *)
@@ -679,7 +655,7 @@ let error_recursively_dependent_library dir =
 (* Security weakness: file might have been changed on disk between
    writing the content and computing the checksum... *)
 
-let save_library_to ?todo dir f otab =
+let save_library_to ?todo ~output_native_objects dir f otab =
   let except = match todo with
     | None ->
         (* XXX *)
@@ -690,7 +666,7 @@ let save_library_to ?todo dir f otab =
         assert(Filename.check_suffix f ".vio");
         List.fold_left (fun e (r,_) -> Future.UUIDSet.add r.Stateid.uuid e)
           Future.UUIDSet.empty l in
-  let cenv, seg, ast = Declaremods.end_library ~except dir in
+  let cenv, seg, ast = Declaremods.end_library ~output_native_objects ~except dir in
   let opaque_table, univ_table, disch_table, f2t_map = Opaqueproof.dump otab in
   let tasks, utab, dtab =
     match todo with
@@ -738,10 +714,9 @@ let save_library_to ?todo dir f otab =
     System.marshal_out_segment f' ch (opaque_table : seg_proofs);
     close_out ch;
     (* Writing native code files *)
-    if !Flags.output_native_objects then
+    if output_native_objects then
       let fn = Filename.dirname f'^"/"^Nativecode.mod_uid_of_dirpath dir in
-      if not (Nativelib.compile_library dir ast fn) then
-	user_err Pp.(str "Could not compile the library to native code.")
+      Nativelib.compile_library dir ast fn
    with reraise ->
     let reraise = CErrors.push reraise in
     let () = Feedback.msg_warning (str "Removed file " ++ str f') in
@@ -750,14 +725,13 @@ let save_library_to ?todo dir f otab =
     iraise reraise
 
 let save_library_raw f sum lib univs proofs =
-  let f' = f^"o" in
-  let ch = raw_extern_library f' in
-  System.marshal_out_segment f' ch (sum        : seg_sum);
-  System.marshal_out_segment f' ch (lib        : seg_lib);
-  System.marshal_out_segment f' ch (Some univs : seg_univ option);
-  System.marshal_out_segment f' ch (None       : seg_discharge option);
-  System.marshal_out_segment f' ch (None       : 'tasks option);
-  System.marshal_out_segment f' ch (proofs     : seg_proofs);
+  let ch = raw_extern_library f in
+  System.marshal_out_segment f ch (sum        : seg_sum);
+  System.marshal_out_segment f ch (lib        : seg_lib);
+  System.marshal_out_segment f ch (Some univs : seg_univ option);
+  System.marshal_out_segment f ch (None       : seg_discharge option);
+  System.marshal_out_segment f ch (None       : 'tasks option);
+  System.marshal_out_segment f ch (proofs     : seg_proofs);
   close_out ch
 
 module StringOrd = struct type t = string let compare = String.compare end

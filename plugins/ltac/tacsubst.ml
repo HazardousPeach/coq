@@ -30,7 +30,7 @@ let subst_quantified_hypothesis _ x = x
 let subst_declared_or_quantified_hypothesis _ x = x
 
 let subst_glob_constr_and_expr subst (c, e) =
-  (Detyping.subst_glob_constr subst c, e)
+  (Detyping.subst_glob_constr (Global.env()) subst c, e)
 
 let subst_glob_constr = subst_glob_constr_and_expr (* shortening *)
 
@@ -88,20 +88,9 @@ let subst_reference subst =
 (*CSC: subst_global_reference is used "only" for RefArgType, that propagates
   to the syntactic non-terminals "global", used in commands such as
   Print. It is also used for non-evaluable references. *)
-open Pp
-open Printer
 
 let subst_global_reference subst =
- let subst_global ref =
-  let ref',t' = subst_global subst ref in
-   if not (is_global ref' t') then
-    (let sigma, env = Pfedit.get_current_context () in
-     Feedback.msg_warning (strbrk "The reference " ++ pr_global ref ++ str " is not " ++
-          str " expanded to \"" ++ pr_lconstr_env env sigma t' ++ str "\", but to " ++
-          pr_global ref'));
-   ref'
- in
-  subst_or_var (subst_located subst_global)
+  subst_or_var (subst_located (subst_global_reference subst))
 
 let subst_evaluable subst =
   let subst_eval_ref = subst_evaluable_reference subst in
@@ -110,7 +99,9 @@ let subst_evaluable subst =
 let subst_constr_with_occurrences subst (l,c) = (l,subst_glob_constr subst c)
 
 let subst_glob_constr_or_pattern subst (bvars,c,p) =
-  (bvars,subst_glob_constr subst c,subst_pattern subst p)
+  let env = Global.env () in
+  let sigma = Evd.from_env env in
+  (bvars,subst_glob_constr subst c,subst_pattern env sigma subst p)
 
 let subst_redexp subst =
   Redops.map_red_expr_gen
@@ -167,8 +158,8 @@ let rec subst_atomic subst (t:glob_atomic_tactic_expr) = match t with
 
   (* Conversion *)
   | TacReduce (r,cl) -> TacReduce (subst_redexp subst r, cl)
-  | TacChange (op,c,cl) ->
-      TacChange (Option.map (subst_glob_constr_or_pattern subst) op,
+  | TacChange (check,op,c,cl) ->
+      TacChange (check,Option.map (subst_glob_constr_or_pattern subst) op,
         subst_glob_constr subst c, cl)
 
   (* Equality and inversion *)
@@ -184,7 +175,7 @@ let rec subst_atomic subst (t:glob_atomic_tactic_expr) = match t with
       TacInversion (InversionUsing (subst_glob_constr subst c,cl),hyp)
 
 and subst_tactic subst (t:glob_tactic_expr) = match t with
-  | TacAtom (_loc,t) -> TacAtom (Loc.tag @@ subst_atomic subst t)
+  | TacAtom { CAst.v=t } -> TacAtom (CAst.make @@ subst_atomic subst t)
   | TacFun tacfun -> TacFun (subst_tactic_fun subst tacfun)
   | TacLetIn (r,l,u) ->
       let l = List.map (fun (n,b) -> (n,subst_tacarg subst b)) l in
@@ -231,22 +222,22 @@ and subst_tactic subst (t:glob_tactic_expr) = match t with
   | TacFirst l -> TacFirst (List.map (subst_tactic subst) l)
   | TacSolve l -> TacSolve (List.map (subst_tactic subst) l)
   | TacComplete tac -> TacComplete (subst_tactic subst tac)
-  | TacArg (_,a) -> TacArg (Loc.tag @@ subst_tacarg subst a)
+  | TacArg { CAst.v=a } -> TacArg (CAst.make @@ subst_tacarg subst a)
   | TacSelect (s, tac) -> TacSelect (s, subst_tactic subst tac)
 
   (* For extensions *)
-  | TacAlias (_,(s,l)) ->
+  | TacAlias { CAst.v=(s,l) } ->
       let s = subst_kn subst s in
-      TacAlias (Loc.tag (s,List.map (subst_tacarg subst) l))
-  | TacML (loc,(opn,l)) -> TacML (loc, (opn,List.map (subst_tacarg subst) l))
+      TacAlias (CAst.make (s,List.map (subst_tacarg subst) l))
+  | TacML { CAst.loc; v=(opn,l)} -> TacML CAst.(make ?loc (opn,List.map (subst_tacarg subst) l))
 
 and subst_tactic_fun subst (var,body) = (var,subst_tactic subst body)
 
 and subst_tacarg subst = function
   | Reference r -> Reference (subst_reference subst r)
   | ConstrMayEval c -> ConstrMayEval (subst_raw_may_eval subst c)
-  | TacCall (loc,(f,l)) ->
-      TacCall (Loc.tag ?loc (subst_reference subst f, List.map (subst_tacarg subst) l))
+  | TacCall { CAst.loc; v=(f,l) } ->
+      TacCall CAst.(make ?loc (subst_reference subst f, List.map (subst_tacarg subst) l))
   | TacFreshId _ as x -> x
   | TacPretype c -> TacPretype (subst_glob_constr subst c)
   | TacNumgoals -> TacNumgoals

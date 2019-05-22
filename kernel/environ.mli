@@ -42,7 +42,7 @@ type link_info =
 
 type key = int CEphemeron.key option ref
 
-type constant_key = constant_body * (link_info ref * key)
+type constant_key = Opaqueproof.opaque constant_body * (link_info ref * key)
 
 type mind_key = mutual_inductive_body * link_info ref
 
@@ -51,7 +51,8 @@ type globals
 
 type stratification = {
   env_universes : UGraph.t;
-  env_engagement : engagement
+  env_engagement : engagement;
+  env_sprop_allowed : bool;
 }
 
 type named_context_val = private {
@@ -96,6 +97,10 @@ val typing_flags    : env -> typing_flags
 val is_impredicative_set : env -> bool
 val type_in_type : env -> bool
 val deactivated_guard : env -> bool
+val indices_matter : env -> bool
+
+val is_impredicative_sort : env -> Sorts.t -> bool
+val is_impredicative_univ : env -> Univ.Universe.t -> bool
 
 (** is the local context empty *)
 val empty_context : env -> bool
@@ -129,9 +134,9 @@ val ids_of_named_context_val : named_context_val -> Id.Set.t
 
 (** [map_named_val f ctxt] apply [f] to the body and the type of
    each declarations.
-   *** /!\ ***   [f t] should be convertible with t *)
+   *** /!\ ***   [f t] should be convertible with t, and preserve the name *)
 val map_named_val :
-   (constr -> constr) -> named_context_val -> named_context_val
+   (named_declaration -> named_declaration) -> named_context_val -> named_context_val
 
 val push_named : Constr.named_declaration -> env -> env
 val push_named_context : Constr.named_context -> env -> env
@@ -155,8 +160,6 @@ val named_body : variable -> env -> constr option
 val fold_named_context :
   (env -> Constr.named_declaration -> 'a -> 'a) -> env -> init:'a -> 'a
 
-val set_universes : env -> UGraph.t -> env
-
 (** Recurrence on [named_context] starting from younger decl *)
 val fold_named_context_reverse :
   ('a -> Constr.named_declaration -> 'a) -> init:'a -> env -> 'a
@@ -171,19 +174,19 @@ val reset_with_named_context : named_context_val -> env -> env
 val pop_rel_context : int -> env -> env
 
 (** Useful for printing *)
-val fold_constants : (Constant.t -> constant_body -> 'a -> 'a) -> env -> 'a -> 'a
+val fold_constants : (Constant.t -> Opaqueproof.opaque constant_body -> 'a -> 'a) -> env -> 'a -> 'a
 
 (** {5 Global constants }
   {6 Add entries to global environment } *)
 
-val add_constant : Constant.t -> constant_body -> env -> env
-val add_constant_key : Constant.t -> constant_body -> link_info ->
+val add_constant : Constant.t -> Opaqueproof.opaque constant_body -> env -> env
+val add_constant_key : Constant.t -> Opaqueproof.opaque constant_body -> link_info ->
   env -> env
 val lookup_constant_key :  Constant.t -> env -> constant_key
 
 (** Looks up in the context of global constant names 
    raises [Not_found] if the required path is not found *)
-val lookup_constant    : Constant.t -> env -> constant_body
+val lookup_constant    : Constant.t -> env -> Opaqueproof.opaque constant_body
 val evaluable_constant : Constant.t -> env -> bool
 
 (** New-style polymorphism *)
@@ -193,11 +196,15 @@ val type_in_type_constant : Constant.t -> env -> bool
 
 (** {6 ... } *)
 (** [constant_value env c] raises [NotEvaluableConst Opaque] if
-   [c] is opaque and [NotEvaluableConst NoBody] if it has no
-   body and [NotEvaluableConst IsProj] if [c] is a projection 
+   [c] is opaque, [NotEvaluableConst NoBody] if it has no
+   body, [NotEvaluableConst IsProj] if [c] is a projection,
+   [NotEvaluableConst (IsPrimitive p)] if [c] is primitive [p]
    and [Not_found] if it does not exist in [env] *)
 
-type const_evaluation_result = NoBody | Opaque
+type const_evaluation_result =
+  | NoBody
+  | Opaque
+  | IsPrimitive of CPrimitives.t
 exception NotEvaluableConst of const_evaluation_result
 
 val constant_type : env -> Constant.t puniverses -> types constrained
@@ -208,12 +215,20 @@ val constant_value_and_type : env -> Constant.t puniverses ->
     polymorphic *)
 val constant_context : env -> Constant.t -> Univ.AUContext.t
 
+(** Returns the body of the constant if it has any, and the polymorphic context
+    it lives in. For monomorphic constant, the latter is empty, and for
+    polymorphic constants, the term contains De Bruijn universe variables that
+    need to be instantiated. *)
+val body_of_constant_body : env -> Opaqueproof.opaque constant_body -> (Constr.constr * Univ.AUContext.t) option
+
 (* These functions should be called under the invariant that [env] 
    already contains the constraints corresponding to the constant 
    application. *)
 val constant_value_in : env -> Constant.t puniverses -> constr
 val constant_type_in : env -> Constant.t puniverses -> types
 val constant_opt_value_in : env -> Constant.t puniverses -> constr option
+
+val is_primitive : env -> Constant.t -> bool
 
 (** {6 Primitive projections} *)
 
@@ -231,6 +246,10 @@ val add_mind : MutInd.t -> mutual_inductive_body -> env -> env
 (** Looks up in the context of global inductive names 
    raises [Not_found] if the required path is not found *)
 val lookup_mind : MutInd.t -> env -> mutual_inductive_body
+
+(** The universe context associated to the inductive, empty if not
+    polymorphic *)
+val mind_context : env -> MutInd.t -> Univ.AUContext.t
 
 (** New-style polymorphism *)
 val polymorphic_ind  : inductive -> env -> bool
@@ -264,8 +283,17 @@ val push_context : ?strict:bool -> Univ.UContext.t -> env -> env
 val push_context_set : ?strict:bool -> Univ.ContextSet.t -> env -> env
 val push_constraints_to_env : 'a Univ.constrained -> env -> env
 
+val push_subgraph : Univ.ContextSet.t -> env -> env
+(** [push_subgraph univs env] adds the universes and constraints in
+   [univs] to [env] as [push_context_set ~strict:false univs env], and
+   also checks that they do not imply new transitive constraints
+   between pre-existing universes in [env]. *)
+
 val set_engagement : engagement -> env -> env
 val set_typing_flags : typing_flags -> env -> env
+val make_sprop_cumulative : env -> env
+val set_allow_sprop : bool -> env -> env
+val sprop_allowed : env -> bool
 
 val universes_of_global : env -> GlobRef.t -> AUContext.t
 
@@ -293,6 +321,10 @@ type ('constr, 'types) punsafe_judgment = {
   uj_val : 'constr;
   uj_type : 'types }
 
+val on_judgment       : ('a -> 'b) -> ('a, 'a) punsafe_judgment -> ('b, 'b) punsafe_judgment
+val on_judgment_value : ('c -> 'c) -> ('c, 't) punsafe_judgment -> ('c, 't) punsafe_judgment
+val on_judgment_type  : ('t -> 't) -> ('c, 't) punsafe_judgment -> ('c, 't) punsafe_judgment
+
 type unsafe_judgment = (constr, types) punsafe_judgment
 
 val make_judge : 'constr -> 'types -> ('constr, 'types) punsafe_judgment
@@ -317,14 +349,11 @@ val apply_to_hyp : named_context_val -> variable ->
 val remove_hyps : Id.Set.t -> (Constr.named_declaration -> Constr.named_declaration) -> (lazy_val -> lazy_val) -> named_context_val -> named_context_val
 
 val is_polymorphic : env -> Names.GlobRef.t -> bool
-
-open Retroknowledge
-(** functions manipulating the retroknowledge 
-    @author spiwack *)
-
-val registered : env -> field -> bool
-
-val register : env -> field -> GlobRef.t -> env
+val is_template_polymorphic : env -> GlobRef.t -> bool
+val is_type_in_type : env -> GlobRef.t -> bool
 
 (** Native compiler *)
 val no_link_info : link_info
+
+(** Primitives *)
+val set_retroknowledge : env -> Retroknowledge.retroknowledge -> env

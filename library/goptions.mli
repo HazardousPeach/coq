@@ -76,7 +76,7 @@ end
 
 (** The functor [MakeRefTable] declares a new table of objects of type
    [A.t] practically denoted by [reference]; the encoding function
-   [encode : reference -> A.t] is typically a globalization function,
+   [encode : env -> reference -> A.t] is typically a globalization function,
    possibly with some restriction checks; the function
    [member_message] say what to print when invoking the "Test Toto
    Titi foo." command; at the end [title] is the table name printed
@@ -89,8 +89,8 @@ module MakeRefTable :
     (A : sig
            type t
            val compare : t -> t -> int
-           val encode : qualid -> t
-	   val subst : substitution -> t -> t
+           val encode : Environ.env -> qualid -> t
+           val subst : substitution -> t -> t
            val printer : t -> Pp.t
            val key : option_name
            val title : string
@@ -122,35 +122,34 @@ type 'a option_sig = {
 (** The [preprocess] function is triggered before setting the option. It can be
     used to emit a warning on certain values, and clean-up the final value. *)
 
-type 'a write_function = 'a -> unit
-
 val declare_int_option   : ?preprocess:(int option -> int option) ->
-                           int option option_sig -> int option write_function
+                           int option option_sig -> unit
 val declare_bool_option  : ?preprocess:(bool -> bool) ->
-                           bool option_sig   -> bool write_function
+                           bool option_sig   -> unit
 val declare_string_option: ?preprocess:(string -> string) ->
-                           string option_sig -> string write_function
+                           string option_sig -> unit
 val declare_stringopt_option: ?preprocess:(string option -> string option) ->
-                              string option option_sig -> string option write_function
+                              string option option_sig -> unit
 
+(** Helper to declare a reference controlled by an option. Read-only
+   as to avoid races. *)
+val declare_bool_option_and_ref : depr:bool -> name:string -> key:option_name -> value:bool -> (unit -> bool)
 
 (** {6 Special functions supposed to be used only in vernacentries.ml } *)
 
 module OptionMap : CSig.MapS with type key = option_name
 
-val get_string_table :
-  option_name ->
-    < add : string -> unit;
-      remove : string -> unit;
-      mem : string -> unit;
-      print : unit >
+type 'a table_of_A =  {
+  add : Environ.env -> 'a -> unit;
+  remove : Environ.env -> 'a -> unit;
+  mem : Environ.env -> 'a -> unit;
+  print : unit -> unit;
+}
 
+val get_string_table :
+  option_name -> string table_of_A
 val get_ref_table :
-  option_name ->
-    < add : qualid -> unit;
-      remove : qualid -> unit;
-      mem : qualid -> unit;
-      print : unit >
+  option_name -> qualid table_of_A
 
 (** The first argument is a locality flag. *)
 val set_int_option_value_gen    : ?locality:option_locality -> option_name -> int option -> unit
@@ -170,6 +169,14 @@ type option_value =
   | IntValue    of int option
   | StringValue of string
   | StringOptValue of string option
+
+val set_option_value : ?locality:option_locality ->
+  ('a -> option_value -> option_value) -> option_name -> 'a -> unit
+(** [set_option_value ?locality f name v] sets [name] to the result of
+    applying [f] to [v] and [name]'s current value. Use for behaviour
+    depending on the type of the option, eg erroring when ['a] doesn't
+    match it. Changing the type will result in errors later so don't do
+    that. *)
 
 (** Summary of an option status *)
 type option_state = {

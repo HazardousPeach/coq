@@ -21,6 +21,7 @@ open CErrors
 open Util
 open Names
 open Constr
+open Context
 open Declarations
 open Mod_subst
 open Globnames
@@ -162,27 +163,6 @@ let label_of = function
   | ConstructRef ((kn,_),_) -> MutInd.label kn
   | VarRef id -> Label.of_id id
 
-let fold_constr_with_full_binders g f n acc c =
-  let open Context.Rel.Declaration in
-  match Constr.kind c with
-  | Rel _ | Meta _ | Var _   | Sort _ | Const _ | Ind _ | Construct _ -> acc
-  | Cast (c,_, t) -> f n (f n acc c) t
-  | Prod (na,t,c) -> f (g (LocalAssum (na,t)) n) (f n acc t) c
-  | Lambda (na,t,c) -> f (g (LocalAssum (na,t)) n) (f n acc t) c
-  | LetIn (na,b,t,c) -> f (g (LocalDef (na,b,t)) n) (f n (f n acc b) t) c
-  | App (c,l) -> Array.fold_left (f n) (f n acc c) l
-  | Proj (p,c) -> f n acc c
-  | Evar (_,l) -> Array.fold_left (f n) acc l
-  | Case (_,p,c,bl) -> Array.fold_left (f n) (f n (f n acc p) c) bl
-  | Fix (_,(lna,tl,bl)) ->
-      let n' = CArray.fold_left2 (fun c n t -> g (LocalAssum (n,t)) c) n lna tl in
-      let fd = Array.map2 (fun t b -> (t,b)) tl bl in
-      Array.fold_left (fun acc (t,b) -> f n' (f n acc t) b) acc fd
-  | CoFix (_,(lna,tl,bl)) ->
-      let n' = CArray.fold_left2 (fun c n t -> g (LocalAssum (n,t)) c) n lna tl in
-      let fd = Array.map2 (fun t b -> (t,b)) tl bl in
-      Array.fold_left (fun acc (t,b) -> f n' (f n acc t) b) acc fd
-
 let rec traverse current ctx accu t = match Constr.kind t with
 | Var id ->
   let body () = id |> Global.lookup_named |> NamedDecl.get_value in
@@ -205,10 +185,10 @@ let rec traverse current ctx accu t = match Constr.kind t with
         traverse_object
           ~inhabits:(current,ctx,Vars.subst1 mkProp oty) accu body (ConstRef kn)
     | _ ->
-        fold_constr_with_full_binders
+        Constr.fold_with_full_binders
           Context.Rel.add (traverse current) ctx accu t
     end
-| _ -> fold_constr_with_full_binders
+| _ -> Constr.fold_with_full_binders
           Context.Rel.add (traverse current) ctx accu t
 
 and traverse_object ?inhabits (curr, data, ax2ty) body obj =
@@ -259,8 +239,9 @@ and traverse_inductive (curr, data, ax2ty) mind obj =
        Array.fold_left (fun accu oib ->
           let pspecif = Univ.in_punivs (mib, oib) in
           let ind_type = Inductive.type_of_inductive global_env pspecif in
+          let indr = oib.mind_relevance in
           let ind_name = Name oib.mind_typename in
-          Context.Rel.add (Context.Rel.Declaration.LocalAssum (ind_name, ind_type)) accu)
+          Context.Rel.add (Context.Rel.Declaration.LocalAssum (make_annot ind_name indr, ind_type)) accu)
           Context.Rel.empty mib.mind_packets
      in
      (* For each inductive, collects references in their arity and in the type
@@ -315,8 +296,7 @@ let traverse current t =
 let type_of_constant cb = cb.Declarations.const_type
 
 let assumptions ?(add_opaque=false) ?(add_transparent=false) st gr t =
-  let (idts, knst) = st in
-  (** Only keep the transitive dependencies *)
+  (* Only keep the transitive dependencies *)
   let (_, graph, ax2ty) = traverse (label_of gr) t in
   let fold obj _ accu = match obj with
   | VarRef id ->
@@ -337,7 +317,7 @@ let assumptions ?(add_opaque=false) ?(add_transparent=false) st gr t =
       let t = type_of_constant cb in
       let l = try GlobRef.Map_env.find obj ax2ty with Not_found -> [] in
       ContextObjectMap.add (Axiom (Constant kn,l)) t accu
-    else if add_opaque && (Declareops.is_opaque cb || not (Cpred.mem kn knst)) then
+    else if add_opaque && (Declareops.is_opaque cb || not (TransparentState.is_transparent_constant st kn)) then
       let t = type_of_constant cb in
       ContextObjectMap.add (Opaque kn) t accu
     else if add_transparent then

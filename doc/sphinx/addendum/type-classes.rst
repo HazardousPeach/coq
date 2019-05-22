@@ -1,7 +1,7 @@
 .. _typeclasses:
 
-Type Classes
-============
+Typeclasses
+===========
 
 This chapter presents a quick reference of the commands related to type
 classes. For an actual introduction to typeclasses, there is a
@@ -15,24 +15,25 @@ Class and Instance declarations
 The syntax for class and instance declarations is the same as the record
 syntax of Coq:
 
-``Class Id (`` |p_1| ``:`` |t_1| ``) ⋯ (`` |p_n| ``:`` |t_n| ``) [:
-sort] := {`` |f_1| ``:`` |u_1| ``; ⋮`` |f_m| ``:`` |u_m| ``}.``
+.. coqdoc::
 
-``Instance ident : Id`` |p_1| ``⋯`` |p_n| ``:= {`` |f_1| ``:=`` |t_1| ``; ⋮`` |f_m| ``:=`` |t_m| ``}.``
+  Class classname (p1 : t1) ⋯ (pn : tn) [: sort] := { f1 : u1 ; ⋯ ; fm : um }.
 
-The |p_i| ``:`` |t_i| variables are called the *parameters* of the class and
-the |f_i| ``:`` |t_i| are called the *methods*. Each class definition gives
+  Instance instancename q1 ⋯ qm : classname p1 ⋯ pn := { f1 := t1 ; ⋯ ; fm := tm }.
+
+The ``pi : ti`` variables are called the *parameters* of the class and
+the ``fi : ti`` are called the *methods*. Each class definition gives
 rise to a corresponding record declaration and each instance is a
-regular definition whose name is given by ident and type is an
+regular definition whose name is given by `instancename` and type is an
 instantiation of the record type.
 
 We’ll use the following example class in the rest of the chapter:
 
 .. coqtop:: in
 
-   Class EqDec (A : Type) := {
-     eqb : A -> A -> bool ;
-     eqb_leibniz : forall x y, eqb x y = true -> x = y }.
+   Class EqDec (A : Type) :=
+     { eqb : A -> A -> bool ;
+       eqb_leibniz : forall x y, eqb x y = true -> x = y }.
 
 This class implements a boolean equality test which is compatible with
 Leibniz equality on some type. An example implementation is:
@@ -40,29 +41,26 @@ Leibniz equality on some type. An example implementation is:
 .. coqtop:: in
 
    Instance unit_EqDec : EqDec unit :=
-    { eqb x y := true ;
-      eqb_leibniz x y H :=
-            match x, y return x = y with tt, tt => eq_refl tt end }.
+     { eqb x y := true ;
+       eqb_leibniz x y H :=
+         match x, y return x = y with
+         | tt, tt => eq_refl tt
+         end }.
 
-If one does not give all the members in the Instance declaration, Coq
-enters the proof-mode and the user is asked to build inhabitants of
-the remaining fields, e.g.:
+Using :cmd:`Program Instance`, if one does not give all the members in
+the Instance declaration, Coq generates obligations for the remaining
+fields, e.g.:
 
 .. coqtop:: in
 
-   Instance eq_bool : EqDec bool :=
-   { eqb x y := if x then y else negb y }.
+   Require Import Program.Tactics.
+   Program Instance eq_bool : EqDec bool :=
+     { eqb x y := if x then y else negb y }.
 
 .. coqtop:: all
 
-   Proof. intros x y H.
-
-.. coqtop:: all
-
-   destruct x ; destruct y ; (discriminate || reflexivity).
-
-.. coqtop:: all
-
+   Next Obligation.
+     destruct x ; destruct y ; (discriminate || reflexivity).
    Defined.
 
 One has to take care that the transparency of every field is
@@ -131,48 +129,57 @@ the constraints as a binding context before the instance, e.g.:
 
 .. coqtop:: in
 
-   Instance prod_eqb `(EA : EqDec A, EB : EqDec B) : EqDec (A * B) :=
-   { eqb x y := match x, y with
-                | (la, ra), (lb, rb) => andb (eqb la lb) (eqb ra rb)
-                end }.
+   Program Instance prod_eqb `(EA : EqDec A, EB : EqDec B) : EqDec (A * B) :=
+     { eqb x y := match x, y with
+                  | (la, ra), (lb, rb) => andb (eqb la lb) (eqb ra rb)
+                  end }.
 
 .. coqtop:: none
 
-   Abort.
+   Admit Obligations.
 
 These instances are used just as well as lemmas in the instance hint
 database.
 
+.. _contexts:
+
 Sections and contexts
 ---------------------
 
-To ease the parametrization of developments by typeclasses, we provide a new
-way to introduce variables into section contexts, compatible with the implicit
-argument mechanism. The new command works similarly to the :cmd:`Variables`
-vernacular, except it accepts any binding context as argument. For example:
+To ease developments parameterized by many instances, one can use the
+:cmd:`Context` command to introduce these parameters into section contexts,
+it works similarly to the command :cmd:`Variable`, except it accepts any
+binding context as an argument, so variables can be implicit, and
+:ref:`implicit-generalization` can be used.
+For example:
 
 .. coqtop:: all
 
    Section EqDec_defs.
 
-     Context `{EA : EqDec A}.
+   Context `{EA : EqDec A}.
 
-     Global Instance option_eqb : EqDec (option A) :=
+.. coqtop:: in
+
+   Global Program Instance option_eqb : EqDec (option A) :=
      { eqb x y := match x, y with
             | Some x, Some y => eqb x y
             | None, None => true
             | _, _ => false
             end }.
-     Admitted.
+   Admit Obligations.
+
+.. coqtop:: all
 
    End EqDec_defs.
 
    About option_eqb.
 
-Here the Global modifier redeclares the instance at the end of the
+Here the :cmd:`Global` modifier redeclares the instance at the end of the
 section, once it has been generalized by the context variables it
 uses.
 
+.. seealso:: Section :ref:`section-mechanism`
 
 Building hierarchies
 --------------------
@@ -193,7 +200,7 @@ superclasses as a binding context:
 Contrary to Haskell, we have no special syntax for superclasses, but
 this declaration is equivalent to:
 
-::
+.. coqdoc::
 
     Class `(E : EqDec A) => Ord A :=
       { le : A -> A -> bool }.
@@ -228,6 +235,8 @@ mechanism if available, as shown in the example.
 Substructures
 ~~~~~~~~~~~~~
 
+.. index:: :> (substructure)
+
 Substructures are components of a class which are instances of a class
 themselves. They often arise when using classes for logical
 properties, e.g.:
@@ -251,14 +260,20 @@ explanation). These may be used as parts of other classes:
 .. coqtop:: all
 
    Class PreOrder (A : Type) (R : relation A) :=
-   { PreOrder_Reflexive :> Reflexive A R ;
-     PreOrder_Transitive :> Transitive A R }.
+     { PreOrder_Reflexive :> Reflexive A R ;
+       PreOrder_Transitive :> Transitive A R }.
 
 The syntax ``:>`` indicates that each ``PreOrder`` can be seen as a
 ``Reflexive`` relation. So each time a reflexive relation is needed, a
 preorder can be used instead. This is very similar to the coercion
 mechanism of ``Structure`` declarations. The implementation simply
 declares each projection as an instance.
+
+.. warn:: Ignored instance declaration for “@ident”: “@term” is not a class
+
+   Using this ``:>`` syntax with a right-hand-side that is not itself a Class
+   has no effect (apart from emitting this warning). In particular, is does not
+   declare a coercion.
 
 One can also declare existing objects or structure projections using
 the Existing Instance command to achieve the same effect.
@@ -270,91 +285,85 @@ Summary of the commands
 .. cmd:: Class @ident {? @binders} : {? @sort} := {? @ident} { {+; @ident :{? >} @term } }
 
    The :cmd:`Class` command is used to declare a typeclass with parameters
-   ``binders`` and fields the declared record fields.
+   :token:`binders` and fields the declared record fields.
 
-Variants:
+   .. _singleton-class:
 
-.. _singleton-class:
+   .. cmdv:: Class @ident {? @binders} : {? @sort} := @ident : @term
 
-.. cmd:: Class @ident {? @binders} : {? @sort} := @ident : @term
+      This variant declares a *singleton* class with a single method.  This
+      singleton class is a so-called definitional class, represented simply
+      as a definition ``ident binders := term`` and whose instances are
+      themselves objects of this type. Definitional classes are not wrapped
+      inside records, and the trivial projection of an instance of such a
+      class is convertible to the instance itself. This can be useful to
+      make instances of existing objects easily and to reduce proof size by
+      not inserting useless projections. The class constant itself is
+      declared rigid during resolution so that the class abstraction is
+      maintained.
 
-   This variant declares a *singleton* class with a single method.  This
-   singleton class is a so-called definitional class, represented simply
-   as a definition ``ident binders := term`` and whose instances are
-   themselves objects of this type. Definitional classes are not wrapped
-   inside records, and the trivial projection of an instance of such a
-   class is convertible to the instance itself. This can be useful to
-   make instances of existing objects easily and to reduce proof size by
-   not inserting useless projections. The class constant itself is
-   declared rigid during resolution so that the class abstraction is
-   maintained.
+   .. cmdv:: Existing Class @ident
 
-.. cmd:: Existing Class @ident
+      This variant declares a class a posteriori from a constant or
+      inductive definition. No methods or instances are defined.
 
-   This variant declares a class a posteriori from a constant or
-   inductive definition. No methods or instances are defined.
+      .. warn:: @ident is already declared as a typeclass
 
-   .. warn:: @ident is already declared as a typeclass
+         This command has no effect when used on a typeclass.
 
-      This command has no effect when used on a typeclass.
+.. cmd:: Instance @ident {? @binders} : @term__0 {+ @term} {? | @num} := { {*; @field_def} }
 
-.. cmd:: Instance @ident {? @binders} : Class t1 … tn [| priority] := { field1 := b1 ; …; fieldi := bi }
+   This command is used to declare a typeclass instance named
+   :token:`ident` of the class :n:`@term__0` with parameters :token:`term` and
+   fields defined by :token:`field_def`, where each field must be a declared field of
+   the class.
 
-The :cmd:`Instance` command is used to declare a typeclass instance named
-``ident`` of the class :cmd:`Class` with parameters ``t1`` to ``tn`` and
-fields ``b1`` to ``bi``, where each field must be a declared field of
-the class.  Missing fields must be filled in interactive proof mode.
+   An arbitrary context of :token:`binders` can be put after the name of the
+   instance and before the colon to declare a parameterized instance. An
+   optional priority can be declared, 0 being the highest priority as for
+   :tacn:`auto` hints. If the priority :token:`num` is not specified, it defaults to the number
+   of non-dependent binders of the instance.
 
-An arbitrary context of ``binders`` can be put after the name of the
-instance and before the colon to declare a parameterized instance. An
-optional priority can be declared, 0 being the highest priority as for
-:tacn:`auto` hints. If the priority is not specified, it defaults to the number
-of non-dependent binders of the instance.
+   .. cmdv:: Instance @ident {? @binders} : forall {? @binders}, @term__0 {+ @term} {? | @num } := @term
 
-.. cmdv:: Instance @ident {? @binders} : forall {? @binders}, Class t1 … tn [| priority] := @term
+      This syntax is used for declaration of singleton class instances or
+      for directly giving an explicit term of type :n:`forall @binders, @term__0
+      {+ @term}`.  One need not even mention the unique field name for
+      singleton classes.
 
-   This syntax is used for declaration of singleton class instances or
-   for directly giving an explicit term of type ``forall binders, Class
-   t1 … tn``.  One need not even mention the unique field name for
-   singleton classes.
+   .. cmdv:: Global Instance
+      :name: Global Instance
 
-.. cmdv:: Global Instance
+      One can use the :cmd:`Global` modifier on instances declared in a
+      section so that their generalization is automatically redeclared
+      after the section is closed.
 
-   One can use the ``Global`` modifier on instances declared in a
-   section so that their generalization is automatically redeclared
-   after the section is closed.
+   .. cmdv:: Program Instance
+      :name: Program Instance
 
-.. cmdv:: Program Instance
-   :name: Program Instance
+      Switches the type checking to `Program` (chapter :ref:`programs`) and
+      uses the obligation mechanism to manage missing fields.
 
-   Switches the type checking to Program (chapter :ref:`programs`) and
-   uses the obligation mechanism to manage missing fields.
+   .. cmdv:: Declare Instance
+      :name: Declare Instance
 
-.. cmdv:: Declare Instance
-   :name: Declare Instance
-
-   In a Module Type, this command states that a corresponding concrete
-   instance should exist in any implementation of this Module Type. This
-   is similar to the distinction between :cmd:`Parameter` vs. :cmd:`Definition`, or
-   between :cmd:`Declare Module` and :cmd:`Module`.
+      In a :cmd:`Module Type`, this command states that a corresponding concrete
+      instance should exist in any implementation of this :cmd:`Module Type`. This
+      is similar to the distinction between :cmd:`Parameter` vs. :cmd:`Definition`, or
+      between :cmd:`Declare Module` and :cmd:`Module`.
 
 
 Besides the :cmd:`Class` and :cmd:`Instance` vernacular commands, there are a
 few other commands related to typeclasses.
 
-.. cmd:: Existing Instance {+ @ident} [| priority]
+.. cmd:: Existing Instance {+ @ident} {? | @num}
 
    This command adds an arbitrary list of constants whose type ends with
    an applied typeclass to the instance database with an optional
-   priority.  It can be used for redeclaring instances at the end of
+   priority :token:`num`.  It can be used for redeclaring instances at the end of
    sections, or declaring structure projections as instances. This is
    equivalent to ``Hint Resolve ident : typeclass_instances``, except it
    registers instances for :cmd:`Print Instances`.
-
-.. cmd:: Context @binders
-
-   Declares variables according to the given binding context, which might
-   use :ref:`implicit-generalization`.
 
 .. tacn:: typeclasses eauto
    :name: typeclasses eauto
@@ -396,8 +405,10 @@ few other commands related to typeclasses.
      resolution with the local hypotheses use full conversion during
      unification.
 
+   + When considering local hypotheses, we use the union of all the modes
+     declared in the given databases.
 
-   .. cmdv:: typeclasses eauto @num
+   .. tacv:: typeclasses eauto @num
 
       .. warning::
          The semantics for the limit :n:`@num`
@@ -406,7 +417,7 @@ few other commands related to typeclasses.
          counted, which might result in larger limits being necessary when
          searching with ``typeclasses eauto`` than with :tacn:`auto`.
 
-   .. cmdv:: typeclasses eauto with {+ @ident}
+   .. tacv:: typeclasses eauto with {+ @ident}
 
       This variant runs resolution with the given hint databases. It treats
       typeclass subgoals the same as other subgoals (no shelving of
@@ -424,41 +435,42 @@ few other commands related to typeclasses.
 
 .. _TypeclassesTransparent:
 
-Typeclasses Transparent, Typclasses Opaque
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Typeclasses Transparent, Typeclasses Opaque
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. cmd:: Typeclasses Transparent {+ @ident}
 
    This command makes the identifiers transparent during typeclass
    resolution.
+   Shortcut for :n:`Hint Transparent {+ @ident } : typeclass_instances`.
 
 .. cmd:: Typeclasses Opaque {+ @ident}
 
-   Make the identifiers opaque for typeclass search. It is useful when some
-   constants prevent some unifications and make resolution fail. It is also
-   useful to declare constants which should never be unfolded during
-   proof-search, like fixpoints or anything which does not look like an
-   abbreviation. This can additionally speed up proof search as the typeclass
-   map can be indexed by such rigid constants (see
+   Make the identifiers opaque for typeclass search.
+   Shortcut for :n:`Hint Opaque {+ @ident } : typeclass_instances`.
+
+   It is useful when some constants prevent some unifications and make
+   resolution fail. It is also useful to declare constants which
+   should never be unfolded during proof-search, like fixpoints or
+   anything which does not look like an abbreviation. This can
+   additionally speed up proof search as the typeclass map can be
+   indexed by such rigid constants (see
    :ref:`thehintsdatabasesforautoandeauto`).
 
 By default, all constants and local variables are considered transparent. One
 should take care not to make opaque any constant that is used to abbreviate a
 type, like:
 
-::
-
-   relation A := A -> A -> Prop.
-
-This is equivalent to ``Hint Transparent, Opaque ident : typeclass_instances``.
+.. coqdoc::
+   Definition relation A := A -> A -> Prop.
 
 
-Options
-~~~~~~~
+Settings
+~~~~~~~~
 
 .. flag:: Typeclasses Dependency Order
 
-   This option (on by default since 8.6) respects the dependency order
+   This flag (on by default since 8.6) respects the dependency order
    between subgoals, meaning that subgoals on which other subgoals depend
    come first, while the non-dependent subgoals were put before
    the dependent ones previously (Coq 8.5 and below). This can result in
@@ -467,7 +479,7 @@ Options
 
 .. flag:: Typeclasses Filtered Unification
 
-   This option, available since Coq 8.6 and off by default, switches the
+   This flag, available since Coq 8.6 and off by default, switches the
    hint application procedure to a filter-then-unify strategy. To apply a
    hint, we first check that the goal *matches* syntactically the
    inferred or specified pattern of the hint, and only then try to
@@ -475,13 +487,13 @@ Options
    improve performance by calling unification less often, matching
    syntactic patterns being very quick. This also provides more control
    on the triggering of instances. For example, forcing a constant to
-   explicitely appear in the pattern will make it never apply on a goal
+   explicitly appear in the pattern will make it never apply on a goal
    where there is a hole in that place.
 
 
 .. flag:: Typeclasses Limit Intros
 
-   This option (on by default) controls the ability to apply hints while
+   This flag (on by default) controls the ability to apply hints while
    avoiding (functional) eta-expansions in the generated proof term. It
    does so by allowing hints that conclude in a product to apply to a
    goal with a matching product directly, avoiding an introduction.
@@ -495,16 +507,16 @@ Options
 
 .. flag:: Typeclass Resolution For Conversion
 
-   This option (on by default) controls the use of typeclass resolution
+   This flag (on by default) controls the use of typeclass resolution
    when a unification problem cannot be solved during elaboration/type
-   inference. With this option on, when a unification fails, typeclass
+   inference. With this flag on, when a unification fails, typeclass
    resolution is tried before launching unification once again.
 
 
 .. flag:: Typeclasses Strict Resolution
 
-   Typeclass declarations introduced when this option is set have a
-   stricter resolution behavior (the option is off by default). When
+   Typeclass declarations introduced when this flag is set have a
+   stricter resolution behavior (the flag is off by default). When
    looking for unifications of a goal with an instance of this class, we
    “freeze” all the existentials appearing in the goals, meaning that
    they are considered rigid during unification and cannot be
@@ -520,46 +532,53 @@ Options
 
 .. flag:: Typeclasses Unique Instances
 
-   Typeclass declarations introduced when this option is set have a more
-   efficient resolution behavior (the option is off by default). When a
+   Typeclass declarations introduced when this flag is set have a more
+   efficient resolution behavior (the flag is off by default). When a
    solution to the typeclass goal of this class is found, we never
    backtrack on it, assuming that it is canonical.
+
+.. flag:: Typeclasses Iterative Deepening
+
+   When this flag is set, the proof search strategy is breadth-first search.
+   Otherwise, the search strategy is depth-first search.  The default is off.
+   :cmd:`Typeclasses eauto` is another way to set this flag.
+
+.. opt:: Typeclasses Depth @num
+   :name: Typeclasses Depth
+
+   Sets the maximum proof search depth.  The default is unbounded.
+   :cmd:`Typeclasses eauto` is another way to set this option.
 
 .. flag:: Typeclasses Debug
 
    Controls whether typeclass resolution steps are shown during search.  Setting this flag
-   also sets :opt:`Typeclasses Debug Verbosity` to 1.
+   also sets :opt:`Typeclasses Debug Verbosity` to 1.  :cmd:`Typeclasses eauto`
+   is another way to set this flag.
 
 .. opt:: Typeclasses Debug Verbosity @num
    :name: Typeclasses Debug Verbosity
 
    Determines how much information is shown for typeclass resolution steps during search.
    1 is the default level.  2 shows additional information such as tried tactics and shelving
-   of goals.  Setting this option also sets :flag:`Typeclasses Debug`.
-
-.. flag:: Refine Instance Mode
-
-   This option allows to switch the behavior of instance declarations made through
-   the Instance command.
-
-   + When it is on (the default), instances that have unsolved holes in
-     their proof-term silently open the proof mode with the remaining
-     obligations to prove.
-
-   + When it is off, they fail with an error instead.
+   of goals.  Setting this option to 1 or 2 turns on :flag:`Typeclasses Debug`; setting this
+   option to 0 turns that option off.
 
 Typeclasses eauto `:=`
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. cmd:: Typeclasses eauto := {? debug} {? {dfs | bfs}} depth
+.. cmd:: Typeclasses eauto := {? debug} {? {| (dfs) | (bfs) } } @num
+   :name: Typeclasses eauto
 
    This command allows more global customization of the typeclass
    resolution tactic. The semantics of the options are:
 
-   + ``debug`` In debug mode, the trace of successfully applied tactics is
-     printed.
+   + ``debug`` This sets the debug mode. In debug mode, the trace of
+     successfully applied tactics is printed. The debug mode can also
+     be set with :flag:`Typeclasses Debug`.
 
-   + ``dfs, bfs`` This sets the search strategy to depth-first search (the
-     default) or breadth-first search.
+   + ``(dfs)``, ``(bfs)`` This sets the search strategy to depth-first
+     search (the default) or breadth-first search. The search strategy
+     can also be set with :flag:`Typeclasses Iterative Deepening`.
 
-   + ``depth`` This sets the depth limit of the search.
+   + :token:`num` This sets the depth limit of the search. The depth
+     limit can also be set with :opt:`Typeclasses Depth`.

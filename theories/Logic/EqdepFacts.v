@@ -125,8 +125,6 @@ Proof.
   apply eq_dep_intro.
 Qed.
 
-Notation eq_sigS_eq_dep := eq_sigT_eq_dep (compat "8.7"). (* Compatibility *)
-
 Lemma eq_dep_eq_sigT :
   forall (U:Type) (P:U -> Type) (p q:U) (x:P p) (y:P q),
     eq_dep p x q y -> existT P p x = existT P q y.
@@ -372,8 +370,7 @@ Proof.
   rewrite (UIP_refl y).
   intros z.
   assert (UIP:forall y' y'' : x = x, y' = y'').
-  { intros. apply eq_trans with (eq_refl x). apply UIP_refl.
-    symmetry. apply UIP_refl. }
+  { intros. apply eq_trans_r with (eq_refl x); apply UIP_refl. }
   transitivity (eq_trans (eq_trans (UIP (eq_refl x) (eq_refl x)) z)
                          (eq_sym (UIP (eq_refl x) (eq_refl x)))).
   - destruct z. destruct (UIP _ _). reflexivity.

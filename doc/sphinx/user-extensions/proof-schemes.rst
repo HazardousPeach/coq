@@ -12,7 +12,7 @@ The ``Scheme`` command is a high-level tool for generating automatically
 (possibly mutual) induction principles for given types and sorts. Its
 syntax follows the schema:
 
-.. cmd:: Scheme @ident__1 := Induction for @ident__2 Sort sort {* with @ident__i := Induction for @ident__j Sort sort}
+.. cmd:: Scheme @ident__1 := Induction for @ident__2 Sort @sort {* with @ident__i := Induction for @ident__j Sort @sort}
 
   This command is a high-level tool for generating automatically
   (possibly mutual) induction principles for given types and sorts.
@@ -22,10 +22,10 @@ syntax follows the schema:
   definitions. Each term :n:`@ident__i` proves a general principle of mutual
   induction for objects in type :n:`@ident__j`.
 
-.. cmdv:: Scheme @ident := Minimality for @ident Sort sort {* with @ident := Minimality for @ident' Sort sort}
+.. cmdv:: Scheme @ident := Minimality for @ident Sort @sort {* with @ident := Minimality for @ident' Sort @sort}
 
-  Same as before but defines a non-dependent elimination principle more
-  natural in case of inductively defined relations.
+   Same as before but defines a non-dependent elimination principle more
+   natural in case of inductively defined relations.
 
 .. cmdv:: Scheme Equality for @ident
    :name: Scheme Equality
@@ -33,7 +33,7 @@ syntax follows the schema:
    Tries to generate a Boolean equality and a proof of the decidability of the usual equality. If `ident`
    involves some other inductive types, their equality has to be defined first.
 
-.. cmdv:: Scheme Induction for @ident Sort sort {* with Induction for @ident Sort sort}
+.. cmdv:: Scheme Induction for @ident Sort @sort {* with Induction for @ident Sort @sort}
 
    If you do not provide the name of the schemes, they will be automatically computed from the
    sorts involved (works also with Minimality).
@@ -167,7 +167,7 @@ Combined Scheme
 
     Combined Scheme tree_forest_mutind from tree_forest_ind,forest_tree_ind.
 
-  The type of tree_forest_mutrec will be:
+  The type of tree_forest_mutind will be:
 
   .. coqtop:: all
 
@@ -195,19 +195,18 @@ Combined Scheme
 Generation of induction principles with ``Functional`` ``Scheme``
 -----------------------------------------------------------------
 
-The ``Functional Scheme`` command is a high-level experimental tool for
-generating automatically induction principles corresponding to
-(possibly mutually recursive) functions. First, it must be made
-available via ``Require Import FunInd``. Its syntax then follows the
-schema:
 
-.. cmd:: Functional Scheme @ident := Induction for ident' Sort sort {* with @ident := Induction for @ident Sort sort}
+.. cmd:: Functional Scheme @ident__0 := Induction for @ident' Sort @sort {* with @ident__i := Induction for @ident__i' Sort @sort}
 
-where each `ident'ᵢ` is a different mutually defined function
-name (the names must be in the same order as when they were defined). This
-command generates the induction principle for each `identᵢ`, following
-the recursive structure and case analyses of the corresponding function
-identᵢ’.
+   This command is a high-level experimental tool for
+   generating automatically induction principles corresponding to
+   (possibly mutually recursive) functions. First, it must be made
+   available via ``Require Import FunInd``.
+   Each :n:`@ident__i` is a different mutually defined function
+   name (the names must be in the same order as when they were defined). This
+   command generates the induction principle for each :n:`@ident__i`, following
+   the recursive structure and case analyses of the corresponding function
+   :n:`@ident__i'`.
 
 .. warning::
 
@@ -337,29 +336,32 @@ identᵢ’.
 Generation of inversion principles with ``Derive`` ``Inversion``
 -----------------------------------------------------------------
 
-.. cmd:: Derive Inversion @ident with forall (x : T), I t Sort sort
+.. cmd:: Derive Inversion @ident with @ident Sort @sort
+         Derive Inversion @ident with (forall @binders, @ident @term) Sort @sort
 
    This command generates an inversion principle for the
-   :tacn:`inversion ... using ...`  tactic. Let :g:`I` be an inductive
-   predicate and :g:`x` the variables occurring in t. This command
-   generates and stocks the inversion lemma for the sort :g:`sort`
-   corresponding to the instance :g:`∀ (x:T), I t` with the name
-   :n:`@ident` in the global environment. When applied, it is
-   equivalent to having inverted the instance with the tactic
-   :g:`inversion`.
+   :tacn:`inversion ... using ...` tactic.  The first :token:`ident` is the name
+   of the generated principle.  The second :token:`ident` should be an inductive
+   predicate, and :token:`binders` the variables occurring in the term
+   :token:`term`. This command generates the inversion lemma for the sort
+   :token:`sort` corresponding to the instance :n:`forall @binders, @ident @term`.
+   When applied, it is equivalent to having inverted the instance with the
+   tactic :g:`inversion`.
 
-
-.. cmdv:: Derive Inversion_clear @ident with forall (x:T), I t Sort sort
+.. cmdv:: Derive Inversion_clear @ident with @ident Sort @sort
+          Derive Inversion_clear @ident with (forall @binders, @ident @term) Sort @sort
 
    When applied, it is equivalent to having inverted the instance with the
    tactic inversion replaced by the tactic `inversion_clear`.
 
-.. cmdv:: Derive Dependent Inversion @ident with forall (x:T), I t Sort sort
+.. cmdv:: Derive Dependent Inversion @ident with @ident Sort @sort
+          Derive Dependent Inversion @ident with (forall @binders, @ident @term) Sort @sort
 
    When applied, it is equivalent to having inverted the instance with
    the tactic `dependent inversion`.
 
-.. cmdv:: Derive Dependent Inversion_clear @ident with forall(x:T), I t Sort sort
+.. cmdv:: Derive Dependent Inversion_clear @ident with @ident Sort @sort
+          Derive Dependent Inversion_clear @ident with (forall @binders, @ident @term) Sort @sort
 
    When applied, it is equivalent to having inverted the instance
    with the tactic `dependent inversion_clear`.
@@ -377,8 +379,8 @@ Generation of inversion principles with ``Derive`` ``Inversion``
 
     Parameter P : nat -> nat -> Prop.
 
-  To generate the inversion lemma for the instance `(Le (S n) m)` and the
-  sort `Prop`, we do:
+  To generate the inversion lemma for the instance :g:`(Le (S n) m)` and the
+  sort :g:`Prop`, we do:
 
   .. coqtop:: all
 

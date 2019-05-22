@@ -35,9 +35,10 @@ type inference_hook = env -> evar_map -> Evar.t -> evar_map * constr
 type inference_flags = {
   use_typeclasses : bool;
   solve_unification_constraints : bool;
-  use_hook : inference_hook option;
   fail_evar : bool;
-  expand_evars : bool
+  expand_evars : bool;
+  program_mode : bool;
+  polymorphic : bool;
 }
 
 val default_inference_flags : bool -> inference_flags
@@ -95,14 +96,14 @@ val understand : ?flags:inference_flags -> ?expected_type:typing_constraint ->
    with candidate and no other conversion problems that the one in
    [pending], however, it can contain more evars than the pending ones. *)
 
-val solve_remaining_evars : inference_flags ->
-  env -> (* current map *) evar_map -> (* initial map *) evar_map -> evar_map
+val solve_remaining_evars : ?hook:inference_hook -> inference_flags ->
+  env -> ?initial:evar_map -> (* current map *) evar_map -> evar_map
 
 (** Checking evars and pending conversion problems are all solved,
     reporting an appropriate error message *)
 
 val check_evars_are_solved :
-  env -> (* current map: *) evar_map -> (* initial map: *) evar_map -> unit
+  program_mode:bool -> env -> ?initial:evar_map -> (* current map: *) evar_map -> unit
 
 (** [check_evars env initial_sigma extended_sigma c] fails if some
    new unresolved evar remains in [c] *)

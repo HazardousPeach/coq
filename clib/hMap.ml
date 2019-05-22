@@ -290,6 +290,14 @@ struct
     in
     Int.Map.merge fm s1 s2
 
+  let union f s1 s2 =
+    let fm h m1 m2 =
+      let m = Map.union f m1 m2 in
+      if Map.is_empty m then None
+      else Some m
+    in
+    Int.Map.union fm s1 s2
+
   let compare f s1 s2 =
     let fc m1 m2 = Map.compare f m1 m2 in
     Int.Map.compare fc s1 s2
@@ -353,6 +361,12 @@ struct
     let m = Int.Map.find h s in
     Map.find k m
 
+  let find_opt k s =
+    let h = M.hash k in
+    match Int.Map.find_opt h s with
+    | None -> None
+    | Some m -> Map.find_opt k m
+
   let get k s = try find k s with Not_found -> assert false
 
   let split k s = assert false (** Cannot be implemented efficiently *)
@@ -397,6 +411,22 @@ struct
   end
 
   let height s = Int.Map.height s
+
+  (* Not as efficient as the original version *)
+  let filter_range f s =
+    filter (fun x _ -> f x = 0) s
+
+  let update k f m =
+    let aux = function
+      | None -> (match f None with
+          | None -> None
+          | Some v -> Some (Map.singleton k v))
+      | Some m ->
+        let m = Map.update k f m in
+        if Map.is_empty m then None
+        else Some m
+    in
+    Int.Map.update (M.hash k) aux m
 
   module Unsafe =
   struct

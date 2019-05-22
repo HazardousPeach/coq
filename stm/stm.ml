@@ -25,6 +25,12 @@ open CErrors
 open Names
 open Feedback
 open Vernacexpr
+open Vernacextend
+
+module PG_compat = Vernacstate.Proof_global [@@ocaml.warning "-3"]
+
+let is_vtkeep = function VtKeep _ -> true | _ -> false
+let get_vtkeep = function VtKeep x -> x | _ -> assert false
 
 module AsyncOpts = struct
 
@@ -40,7 +46,6 @@ module AsyncOpts = struct
     async_proofs_mode : async_proofs;
 
     async_proofs_private_flags : string option;
-    async_proofs_full : bool;
     async_proofs_never_reopen_branch : bool;
 
     async_proofs_tac_error_resilience : tac_error_filter;
@@ -57,7 +62,6 @@ module AsyncOpts = struct
     async_proofs_mode = APoff;
 
     async_proofs_private_flags = None;
-    async_proofs_full = false;
     async_proofs_never_reopen_branch = false;
 
     async_proofs_tac_error_resilience = `Only [ "curly" ];
@@ -73,18 +77,6 @@ open AsyncOpts
 let async_proofs_is_master opt =
   opt.async_proofs_mode = APon &&
   !Flags.async_proofs_worker_id = "master"
-
-(* Protect against state changes *)
-let stm_purify f x =
-  let st = Vernacstate.freeze_interp_state `No in
-  try
-    let res = f x in
-    Vernacstate.unfreeze_interp_state st;
-    res
-  with e ->
-    let e = CErrors.push e in
-    Vernacstate.unfreeze_interp_state st;
-    Exninfo.iraise e
 
 let execution_error ?loc state_id msg =
     feedback ~id:state_id (Message (Error, loc, msg))
@@ -129,14 +121,11 @@ let async_proofs_workers_extra_env = ref [||]
 
 type aast = {
   verbose : bool;
-  loc : Loc.t option;
   indentation : int;
   strlen : int;
   mutable expr : vernac_control; (* mutable: Proof using hinted by aux file *)
 }
 let pr_ast { expr; indentation } = Pp.(int indentation ++ str " " ++ Ppvernac.pr_vernac expr)
-
-let default_proof_mode () = Proof_global.get_default_proof_mode_name () [@ocaml.warning "-3"]
 
 (* Commands piercing opaque *)
 let may_pierce_opaque = function
@@ -151,18 +140,18 @@ let may_pierce_opaque = function
   | _ -> false
 
 let update_global_env () =
-  if Proof_global.there_are_pending_proofs () then
-    Proof_global.update_global_env ()
+  if PG_compat.there_are_pending_proofs () then
+    PG_compat.update_global_env ()
 
 module Vcs_ = Vcs.Make(Stateid.Self)
 type future_proof = Proof_global.closed_proof_output Future.computation
-type proof_mode = string
+
 type depth = int
 type branch_type =
   [ `Master
-  | `Proof of proof_mode * depth
+  | `Proof of depth
   | `Edit of
-      proof_mode * Stateid.t * Stateid.t  * vernac_qed_type * Vcs_.Branch.t ]
+      Stateid.t * Stateid.t  * Vernacextend.vernac_qed_type * Vcs_.Branch.t ]
 (* TODO 8.7 : split commands and tactics, since this type is too messy now *)
 type cmd_t = {
   ctac : bool; (* is a tactic *)
@@ -174,7 +163,7 @@ type cmd_t = {
            | `TacQueue of solving_tac * anon_abstracting_tac * AsyncTaskQueue.cancel_switch
            | `QueryQueue of AsyncTaskQueue.cancel_switch
            | `SkipQueue ] }
-type fork_t = aast * Vcs_.Branch.t * Vernacexpr.opacity_guarantee * Names.Id.t list
+type fork_t = aast * Vcs_.Branch.t * opacity_guarantee * Names.Id.t list
 type qed_t = {
   qast : aast;
   keep : vernac_qed_type;
@@ -213,10 +202,10 @@ let summary_pstate = Evarutil.meta_counter_summary_tag,
                      Obligations.program_tcc_summary_tag
 
 type cached_state =
-  | Empty
-  | Error of Exninfo.iexn
-  | Valid of Vernacstate.t
-
+  | EmptyState
+  | ParsingState of Vernacstate.Parser.state
+  | FullState of Vernacstate.t
+  | ErrorState of Vernacstate.Parser.state option * Exninfo.iexn
 type branch = Vcs_.Branch.t * branch_type Vcs_.branch_info
 type backup = { mine : branch; others : branch list }
 
@@ -224,10 +213,16 @@ type 'vcs state_info = { (* TODO: Make this record private to VCS *)
   mutable n_reached : int;      (* debug cache: how many times was computed *)
   mutable n_goals : int;        (* open goals: indentation *)
   mutable state : cached_state; (* state value *)
+  mutable proof_mode : Pvernac.proof_mode option;
   mutable vcs_backup : 'vcs option * backup option;
 }
-let default_info () =
-  { n_reached = 0; n_goals = 0; state = Empty; vcs_backup = None,None }
+let default_info proof_mode =
+  {
+    n_reached = 0; n_goals = 0;
+    state = EmptyState;
+    proof_mode;
+    vcs_backup = (None,None);
+  }
 
 module DynBlockData : Dyn.S = Dyn.Make ()
 
@@ -266,15 +261,15 @@ end = struct (* {{{ *)
     List.fold_left max 0
       (CList.map_filter
         (function
-         | { Vcs_.kind = `Proof (_,n) } -> Some n
+         | { Vcs_.kind = `Proof n } -> Some n
          | { Vcs_.kind = `Edit _ } -> Some 1
          | _ -> None)
         (List.map (Vcs_.get_branch vcs) (Vcs_.branches vcs)))
 
   let find_proof_at_depth vcs pl =
     try List.find (function
-          | _, { Vcs_.kind = `Proof(m, n) } -> Int.equal n pl
-          | _, { Vcs_.kind = `Edit _ } -> anomaly(Pp.str "find_proof_at_depth.")
+          | _, { Vcs_.kind = `Proof n } -> Int.equal n pl
+          | _, { Vcs_.kind = `Edit _ } -> anomaly(Pp.str "find_proof_at_depth")
           | _ -> false)
         (List.map (fun h -> h, Vcs_.get_branch vcs h) (Vcs_.branches vcs))
     with Not_found -> failwith "find_proof_at_depth"
@@ -308,11 +303,13 @@ end (* }}} *)
 (*************************** THE DOCUMENT *************************************)
 (******************************************************************************)
 
+type interactive_top = TopLogical of DirPath.t | TopPhysical of string
+
 (* The main document type associated to a VCS *)
 type stm_doc_type =
   | VoDoc       of string
   | VioDoc      of string
-  | Interactive of Names.DirPath.t
+  | Interactive of interactive_top
 
 (* Dummy until we land the functional interp patch + fixed start_library *)
 type doc = int
@@ -334,12 +331,12 @@ module VCS : sig
 
   type vcs = (branch_type, transaction, vcs state_info, box) Vcs_.t
 
-  val init : stm_doc_type -> id -> doc
+  val init : stm_doc_type -> id -> Vernacstate.Parser.state -> doc
   (* val get_type : unit -> stm_doc_type *)
   val set_ldir : Names.DirPath.t -> unit
   val get_ldir : unit -> Names.DirPath.t
 
-  val is_interactive : unit -> [`Yes | `No | `Shallow]
+  val is_interactive : unit -> bool
   val is_vio_doc : unit -> bool
 
   val current_branch : unit -> Branch.t
@@ -347,7 +344,7 @@ module VCS : sig
   val branches : unit -> Branch.t list
   val get_branch : Branch.t -> branch_type branch_info
   val get_branch_pos : Branch.t -> id
-  val new_node : ?id:Stateid.t -> unit -> id
+  val new_node : ?id:Stateid.t -> Pvernac.proof_mode option -> unit -> id
   val merge : id -> ours:transaction -> ?into:Branch.t -> Branch.t -> unit
   val rewrite_merge : id -> ours:transaction -> at:id -> Branch.t -> unit
   val delete_branch : Branch.t -> unit
@@ -364,6 +361,9 @@ module VCS : sig
   val goals : id -> int -> unit
   val set_state : id -> cached_state -> unit
   val get_state : id -> cached_state
+  val set_parsing_state : id -> Vernacstate.Parser.state -> unit
+  val get_parsing_state : id -> Vernacstate.Parser.state option
+  val get_proof_mode : id -> Pvernac.proof_mode option
 
   (* cuts from start -> stop, raising Expired if some nodes are not there *)
   val slice : block_start:id -> block_stop:id -> vcs
@@ -377,7 +377,8 @@ module VCS : sig
 
   val proof_nesting : unit -> int
   val checkout_shallowest_proof_branch : unit -> unit
-  val propagate_sideff : action:seff_t -> unit
+  val propagate_sideff : action:seff_t -> Stateid.t list
+  val propagate_qed : unit -> unit
 
   val gc : unit -> unit
 
@@ -419,11 +420,11 @@ end = struct (* {{{ *)
       | Qed { qast } -> Pp.string_of_ppcmds (pr_ast qast) in
     let is_green id =
       match get_info vcs id with
-      | Some { state = Valid _ } -> true
+      | Some { state = FullState _ } -> true
       | _ -> false in
     let is_red id =
       match get_info vcs id with
-      | Some { state = Error _ } -> true
+      | Some { state = ErrorState _ } -> true
       | _ -> false in
     let head = current_branch vcs in
     let heads =
@@ -522,13 +523,14 @@ end = struct (* {{{ *)
   type vcs = (branch_type, transaction, vcs state_info, box) t
   let vcs : vcs ref = ref (empty Stateid.dummy)
 
-  let doc_type = ref (Interactive (Names.DirPath.make []))
+  let doc_type = ref (Interactive (TopLogical (Names.DirPath.make [])))
   let ldir = ref Names.DirPath.empty
 
-  let init dt id =
+  let init dt id ps =
     doc_type := dt;
     vcs := empty id;
-    vcs := set_info !vcs id (default_info ());
+    let info = { (default_info None) with state = ParsingState ps } in
+    vcs := set_info !vcs id info;
     dummy_doc
 
   let set_ldir ld =
@@ -539,8 +541,8 @@ end = struct (* {{{ *)
 
   let is_interactive () =
     match !doc_type with
-    | Interactive _ -> `Yes
-    | _ -> `No
+    | Interactive _ -> true
+    | _ -> false
 
   let is_vio_doc () =
     match !doc_type with
@@ -553,9 +555,9 @@ end = struct (* {{{ *)
   let branches () = branches !vcs
   let get_branch head = get_branch !vcs head
   let get_branch_pos head = (get_branch head).pos
-  let new_node ?(id=Stateid.fresh ()) () =
+  let new_node ?(id=Stateid.fresh ()) proof_mode () =
     assert(Vcs_.get_info !vcs id = None);
-    vcs := set_info !vcs id (default_info ());
+    vcs := set_info !vcs id (default_info proof_mode);
     id
   let merge id ~ours ?into branch =
     vcs := merge !vcs id ~ours ~theirs:Noop ?into branch
@@ -569,6 +571,7 @@ end = struct (* {{{ *)
     (match Vernacprop.under_control x with
     | VernacDefinition (_,({CAst.v=Name i},_),_) -> Id.to_string i
     | VernacStartTheoremProof (_,[({CAst.v=i},_),_]) -> Id.to_string i
+    | VernacInstance (_,(({CAst.v=Name i},_),_,_),_,_) -> Id.to_string i
     | _ -> "branch")
   let edit_branch = Branch.make "edit"
   let branch ?root ?pos name kind = vcs := branch !vcs ?root ?pos name kind
@@ -577,9 +580,38 @@ end = struct (* {{{ *)
     | Some x -> x
     | None -> raise Vcs_aux.Expired
   let set_state id s =
-    (get_info id).state <- s;
-    if async_proofs_is_master !cur_opt then Hooks.(call state_ready ~doc:dummy_doc (* XXX should be taken in input *) id)
+    let info = get_info id in
+    info.state <- s;
+    let is_full_state_valid = match s with
+      | FullState _ -> true
+      | EmptyState | ErrorState _ | ParsingState _ -> false
+    in
+    if async_proofs_is_master !cur_opt && is_full_state_valid then
+      Hooks.(call state_ready ~doc:dummy_doc (* XXX should be taken in input *) id)
+
   let get_state id = (get_info id).state
+
+  let get_parsing_state id =
+    stm_pperr_endline (fun () -> str "retrieve parsing state state " ++ str (Stateid.to_string id) ++ str " }}}");
+    match (get_info id).state with
+    | FullState s -> Some s.Vernacstate.parsing
+    | ParsingState s -> Some s
+    | ErrorState (s,_) -> s
+    | EmptyState -> None
+
+  let set_parsing_state id ps =
+    let info = get_info id in
+    let new_state =
+      match info.state with
+      | FullState s -> assert false
+      | ParsingState s -> assert false
+      | ErrorState _ -> assert false
+      | EmptyState -> ParsingState ps
+    in
+    info.state <- new_state
+
+  let get_proof_mode id = (get_info id).proof_mode
+
   let reached id =
     let info = get_info id in
     info.n_reached <- info.n_reached + 1
@@ -590,28 +622,33 @@ end = struct (* {{{ *)
 
   let checkout_shallowest_proof_branch () =
     if List.mem edit_branch (Vcs_.branches !vcs) then begin
-      checkout edit_branch;
-      match get_branch edit_branch with
-      | { kind = `Edit (mode, _,_,_,_) } -> Proof_global.activate_proof_mode mode [@ocaml.warning "-3"]
-      | _ -> assert false
+      checkout edit_branch
     end else
       let pl = proof_nesting () in
       try
-        let branch, mode = match Vcs_aux.find_proof_at_depth !vcs pl with
-          | h, { Vcs_.kind = `Proof (m, _) } -> h, m | _ -> assert false in
-        checkout branch;
-        stm_prerr_endline (fun () -> "mode:" ^ mode);
-        Proof_global.activate_proof_mode mode [@ocaml.warning "-3"]
+        let branch = fst @@ Vcs_aux.find_proof_at_depth !vcs pl in
+        checkout branch
       with Failure _ ->
-        checkout Branch.master;
-        Proof_global.disactivate_current_proof_mode () [@ocaml.warning "-3"]
+        checkout Branch.master
 
   (* copies the transaction on every open branch *)
   let propagate_sideff ~action =
+    List.map (fun b ->
+      checkout b;
+      let proof_mode = get_proof_mode @@ get_branch_pos b in
+      let id = new_node proof_mode () in
+      merge id ~ours:(Sideff action) ~into:b Branch.master;
+      id)
+    (List.filter (fun b -> not (Branch.equal b Branch.master)) (branches ()))
+
+  let propagate_qed () =
     List.iter (fun b ->
       checkout b;
-      let id = new_node () in
-      merge id ~ours:(Sideff action) ~into:b Branch.master)
+      let proof_mode = get_proof_mode @@ get_branch_pos b in
+      let id = new_node proof_mode () in
+      let parsing = Option.get @@ get_parsing_state (get_branch_pos b) in
+      merge id ~ours:(Sideff CherryPickEnv) ~into:b Branch.master;
+      set_parsing_state id parsing)
     (List.filter (fun b -> not (Branch.equal b Branch.master)) (branches ()))
 
   let visit id = Vcs_aux.visit !vcs id
@@ -628,13 +665,22 @@ end = struct (* {{{ *)
                          " to "^Stateid.to_string block_stop^"."))
     in aux block_stop
 
+  (* [slice] copies a slice of the DAG, keeping only the last known valid state.
+     When it copies a state, it drops the libobjects and keeps only the structure. *)
   let slice ~block_start ~block_stop =
     let l = nodes_in_slice ~block_start ~block_stop in
     let copy_info v id =
+      let info = get_info id in
       Vcs_.set_info v id
-        { (get_info id) with state = Empty; vcs_backup = None,None } in
+        { info with state = EmptyState;
+                    vcs_backup = None,None } in
+    let make_shallow = function
+      | FullState st -> FullState (Vernacstate.make_shallow st)
+      | x -> x
+    in
     let copy_info_w_state v id =
-      Vcs_.set_info v id { (get_info id) with vcs_backup = None,None } in
+      let info = get_info id in
+      Vcs_.set_info v id { info with state = make_shallow info.state; vcs_backup = None,None } in
     let copy_proof_blockes v =
       let nodes = Vcs_.Dag.all_nodes (Vcs_.dag v) in
       let props =
@@ -652,12 +698,14 @@ end = struct (* {{{ *)
       let v = copy_info v id in
       v) l v in
     (* Stm should have reached the beginning of proof *)
-    assert (match (get_info block_start).state with Valid _ -> true | _ -> false);
+    assert (match get_state block_start
+            with FullState _ -> true | _  -> false);
     (* We put in the new dag the most recent state known to master *)
     let rec fill id =
-      match (get_info id).state with
-      | Empty | Error _ -> fill (Vcs_aux.visit v id).next
-      | Valid _ -> copy_info_w_state v id in
+      match get_state id with
+      | EmptyState | ErrorState _ | ParsingState _ -> fill (Vcs_aux.visit v id).next
+      | FullState _ -> copy_info_w_state v id
+    in
     let v = fill block_stop in
     (* We put in the new dag the first state (since Qed shall run on it,
      * see check_task_aux) *)
@@ -740,13 +788,13 @@ end = struct (* {{{ *)
       else begin
         set_last_job job;
         if Option.is_empty !worker then
-          worker := Some (Thread.create run_command ())
+          worker := Some (CThread.create run_command ())
       end
 
   end
 
   let print ?(now=false) () =
-    if not !Flags.debug && not now then () else NB.command ~now (print_dag !vcs)
+    if !Flags.debug then NB.command ~now (print_dag !vcs)
 
   let backup () = !vcs
   let restore v = vcs := v
@@ -754,15 +802,19 @@ end = struct (* {{{ *)
 end (* }}} *)
 
 let state_of_id ~doc id =
-  try match (VCS.get_info id).state with
-    | Valid s -> `Valid (Some s)
-    | Error (e,_) -> `Error e
-    | Empty -> `Valid None
+  try match VCS.get_state id with
+    | FullState s -> `Valid (Some s)
+    | ErrorState (_,(e,_)) -> `Error e
+    | EmptyState | ParsingState _ -> `Valid None
   with VCS.Expired -> `Expired
-
 
 (****** A cache: fills in the nodes of the VCS document with their value ******)
 module State : sig
+
+  type t
+
+  val freeze : unit -> t
+  val unfreeze : t -> unit
 
   (** The function is from unit, so it uses the current state to define
       a new one.  I.e. one may been to install the right state before
@@ -772,14 +824,15 @@ module State : sig
   val define :
     doc:doc ->
     ?safe_id:Stateid.t ->
-    ?redefine:bool -> ?cache:Summary.marshallable ->
+    ?redefine:bool -> ?cache:bool ->
     ?feedback_processed:bool -> (unit -> unit) -> Stateid.t -> unit
 
   val fix_exn_ref : (Exninfo.iexn -> Exninfo.iexn) ref
 
   val install_cached : Stateid.t -> unit
-  val is_cached : ?cache:Summary.marshallable -> Stateid.t -> bool
-  val is_cached_and_valid : ?cache:Summary.marshallable -> Stateid.t -> bool
+  (* val install_parsing_state : Stateid.t -> unit *)
+  val is_cached : ?cache:bool -> Stateid.t -> bool
+  val is_cached_and_valid : ?cache:bool -> Stateid.t -> bool
 
   val exn_on : Stateid.t -> valid:Stateid.t -> Exninfo.iexn -> Exninfo.iexn
 
@@ -800,19 +853,26 @@ module State : sig
   val register_root_state : unit -> unit
   val restore_root_state : unit -> unit
 
-  (* Only for internal use to catch problems in parse_sentence, should
-     be removed in the state handling refactoring.  *)
-  val cur_id : Stateid.t ref
+  val purify : ('a -> 'b) -> 'a -> 'b
 
 end = struct (* {{{ *)
+
+  type t = { id : Stateid.t; vernac_state : Vernacstate.t }
 
   (* cur_id holds Stateid.dummy in case the last attempt to define a state
    * failed, so the global state may contain garbage *)
   let cur_id = ref Stateid.dummy
   let fix_exn_ref = ref (fun x -> x)
 
+  let freeze () = { id = !cur_id; vernac_state = Vernacstate.freeze_interp_state ~marshallable:false }
+  let unfreeze st =
+    Vernacstate.unfreeze_interp_state st.vernac_state;
+    cur_id := st.id
+
+  let invalidate_cur_state () = cur_id := Stateid.dummy
+
   type proof_part =
-    Proof_global.t *
+    Proof_global.t option *
     int *                                   (* Evarutil.meta_counter_summary_tag *)
     int *                                   (* Evd.evar_counter_summary_tag *)
     Obligations.program_info Names.Id.Map.t (* Obligations.program_tcc_summary_tag *)
@@ -828,52 +888,59 @@ end = struct (* {{{ *)
     Summary.project_from_summary st Util.(pi2 summary_pstate),
     Summary.project_from_summary st Util.(pi3 summary_pstate)
 
-  let freeze marshallable id =
-    VCS.set_state id (Valid (Vernacstate.freeze_interp_state marshallable))
+  let cache_state ~marshallable id =
+    VCS.set_state id (FullState (Vernacstate.freeze_interp_state ~marshallable))
 
-  let freeze_invalid id iexn = VCS.set_state id (Error iexn)
+  let freeze_invalid id iexn =
+    let ps = VCS.get_parsing_state id in
+    VCS.set_state id (ErrorState (ps,iexn))
 
-  let is_cached ?(cache=`No) id only_valid =
+  let is_cached ?(cache=false) id only_valid =
     if Stateid.equal id !cur_id then
       try match VCS.get_info id with
-        | { state = Empty } when cache = `Yes -> freeze `No id; true
-        | { state = Empty } when cache = `Shallow -> freeze `Shallow id; true
+        | ({ state = EmptyState } | { state = ParsingState _ }) when cache -> cache_state ~marshallable:false id; true
         | _ -> true
       with VCS.Expired -> false
     else
-      try match VCS.get_info id with
-        | { state = Empty } -> false
-        | { state = Valid _ } -> true
-        | { state = Error _ } -> not only_valid
+      try match VCS.get_state id with
+        | EmptyState | ParsingState _ -> false
+        | FullState _ -> true
+        | ErrorState _ -> not only_valid
       with VCS.Expired -> false
 
   let is_cached_and_valid ?cache id = is_cached ?cache id true
   let is_cached ?cache id = is_cached ?cache id false
 
   let install_cached id =
-    match VCS.get_info id with
-    | { state = Valid s } ->
+    match VCS.get_state id with
+    | FullState s ->
        Vernacstate.unfreeze_interp_state s;
        cur_id := id
 
-    | { state = Error ie } ->
-       cur_id := id;
+    | ErrorState (_,ie) ->
        Exninfo.iraise ie
 
-    | _ ->
-        (* coqc has a 1 slot cache and only for valid states *)
-        if VCS.is_interactive () = `No && Stateid.equal id !cur_id then ()
-        else anomaly Pp.(str "installing a non cached state.")
+    | EmptyState | ParsingState _ ->
+      (* coqc has a 1 slot cache and only for valid states *)
+      if (VCS.is_interactive ()) || not (Stateid.equal id !cur_id) then
+        anomaly Pp.(str "installing a non cached state.")
+
+  (*
+  let install_parsing_state id =
+    if not (Stateid.equal id !cur_id) then begin
+      Vernacstate.Parser.install @@ VCS.get_parsing_state id
+    end
+     *)
 
   let get_cached id =
-    try match VCS.get_info id with
-    | { state = Valid s } -> s
+    try match VCS.get_state id with
+    | FullState s -> s
     | _ -> anomaly Pp.(str "not a cached state.")
     with VCS.Expired -> anomaly Pp.(str "not a cached state (expired).")
 
   let assign id what =
     let open Vernacstate in
-    if VCS.get_state id <> Empty then () else
+    if VCS.get_state id <> EmptyState then () else
     try match what with
     | `Full s ->
          let s =
@@ -881,16 +948,16 @@ end = struct (* {{{ *)
             let prev = (VCS.visit id).next in
             if is_cached_and_valid prev
             then { s with proof =
-              Proof_global.copy_terminators
-                ~src:(get_cached prev).proof ~tgt:s.proof }
+                PG_compat.copy_terminators
+                  ~src:((get_cached prev).proof) ~tgt:s.proof }
             else s
            with VCS.Expired -> s in
-         VCS.set_state id (Valid s)
+         VCS.set_state id (FullState s)
     | `ProofOnly(ontop,(pstate,c1,c2,c3)) ->
          if is_cached_and_valid ontop then
            let s = get_cached ontop in
            let s = { s with proof =
-             Proof_global.copy_terminators ~src:s.proof ~tgt:pstate } in
+             PG_compat.copy_terminators ~src:s.proof ~tgt:pstate } in
            let s = { s with system =
              States.replace_summary s.system
                begin
@@ -901,7 +968,7 @@ end = struct (* {{{ *)
                  st
                end
                 } in
-           VCS.set_state id (Valid s)
+           VCS.set_state id (FullState s)
     with VCS.Expired -> ()
 
   let exn_on id ~valid (e, info) =
@@ -920,7 +987,9 @@ end = struct (* {{{ *)
     let e2 = Summary.project_from_summary s2 Global.global_env_summary_tag in
     e1 == e2
 
-  let define ~doc ?safe_id ?(redefine=false) ?(cache=`No) ?(feedback_processed=true)
+  (* [define] puts the system in state [id] calling [f ()] *)
+  (* [safe_id] is the last known valid state before execution *)
+  let define ~doc ?safe_id ?(redefine=false) ?(cache=false) ?(feedback_processed=true)
         f id
   =
     feedback ~id:id (ProcessingIn !Flags.async_proofs_worker_id);
@@ -929,24 +998,23 @@ end = struct (* {{{ *)
       anomaly Pp.(str"defining state "++str str_id++str" twice.");
     try
       stm_prerr_endline (fun () -> "defining "^str_id^" (cache="^
-        if cache = `Yes then "Y)" else if cache = `Shallow then "S)" else "N)");
+        if cache then "Y)" else "N)");
       let good_id = match safe_id with None -> !cur_id | Some id -> id in
       fix_exn_ref := exn_on id ~valid:good_id;
       f ();
       fix_exn_ref := (fun x -> x);
-      if cache = `Yes then freeze `No id
-      else if cache = `Shallow then freeze `Shallow id;
+      if cache then cache_state ~marshallable:false id;
       stm_prerr_endline (fun () -> "setting cur id to "^str_id);
       cur_id := id;
       if feedback_processed then
         Hooks.(call state_computed ~doc id ~in_cache:false);
       VCS.reached id;
-      if Proof_global.there_are_pending_proofs () then
-        VCS.goals id (Proof_global.get_open_goals ())
+      if PG_compat.there_are_pending_proofs () then
+        VCS.goals id (PG_compat.get_open_goals ())
     with e ->
       let (e, info) = CErrors.push e in
       let good_id = !cur_id in
-      cur_id := Stateid.dummy;
+      invalidate_cur_state ();
       VCS.reached id;
       let ie =
         match Stateid.get info, safe_id with
@@ -954,18 +1022,32 @@ end = struct (* {{{ *)
         | None, Some good_id -> (exn_on id ~valid:good_id (e, info))
         | Some _, None -> (e, info)
         | Some (_,at), Some id -> (e, Stateid.add info ~valid:id at) in
-      if cache = `Yes || cache = `Shallow then freeze_invalid id ie;
+      if cache then freeze_invalid id ie;
       Hooks.(call unreachable_state ~doc id ie);
       Exninfo.iraise ie
 
   let init_state = ref None
 
   let register_root_state () =
-    init_state := Some (Vernacstate.freeze_interp_state `No)
+    init_state := Some (Vernacstate.freeze_interp_state ~marshallable:false)
 
   let restore_root_state () =
     cur_id := Stateid.dummy;
-    Vernacstate.unfreeze_interp_state (Option.get !init_state);
+    Vernacstate.unfreeze_interp_state (Option.get !init_state)
+
+  (* Protect against state changes *)
+  let purify f x =
+    let st = freeze () in
+    try
+      let res = f x in
+      Vernacstate.invalidate_cache ();
+      unfreeze st;
+      res
+    with e ->
+      let e = CErrors.push e in
+      Vernacstate.invalidate_cache ();
+      unfreeze st;
+      Exninfo.iraise e
 
 end (* }}} *)
 
@@ -1039,13 +1121,18 @@ let get_script prf =
     in
   find [] (VCS.get_branch_pos branch)
 
+let warn_show_script_deprecated =
+  CWarnings.create ~name:"deprecated-show-script" ~category:"deprecated"
+    (fun () -> Pp.str "The “Show Script” command is deprecated.")
+
 let show_script ?proof () =
+  warn_show_script_deprecated ();
   try
     let prf =
       try match proof with
-      | None -> Some (Proof_global.get_current_proof_name ())
+      | None -> Some (PG_compat.get_current_proof_name ())
       | Some (p,_) -> Some (p.Proof_global.id)
-      with Proof_global.NoCurrentProof -> None
+      with PG_compat.NoCurrentProof -> None
     in
     let cmds = get_script prf in
     let _,_,_,indented_cmds =
@@ -1060,12 +1147,12 @@ end
 (* Wrapper for Vernacentries.interp to set the feedback id *)
 (* It is currently called 19 times, this number should be certainly
    reduced... *)
-let stm_vernac_interp ?proof ?route id st { verbose; loc; expr } : Vernacstate.t =
+let stm_vernac_interp ?proof ?route id st { verbose; expr } : Vernacstate.t =
   (* The Stm will gain the capability to interpret commmads affecting
      the whole document state, such as backtrack, etc... so we start
      to design the stm command interpreter now *)
   set_id_for_feedback ?route dummy_doc id;
-  Aux_file.record_in_aux_set_at ?loc ();
+  Aux_file.record_in_aux_set_at ?loc:expr.CAst.loc ();
   (* We need to check if a command should be filtered from
    * vernac_entries, as it cannot handle it. This should go away in
    * future refactorings.
@@ -1077,15 +1164,16 @@ let stm_vernac_interp ?proof ?route id st { verbose; loc; expr } : Vernacstate.t
     | _ -> false
   in
   let aux_interp st expr =
+    (* XXX unsupported attributes *)
     let cmd = Vernacprop.under_control expr in
     if is_filtered_command cmd then
       (stm_pperr_endline Pp.(fun () -> str "ignoring " ++ Ppvernac.pr_vernac expr); st)
     else
       match cmd with
-      | VernacShow ShowScript -> ShowScript.show_script (); st (** XX we are ignoring control here *)
+      | VernacShow ShowScript -> ShowScript.show_script (); st (* XX we are ignoring control here *)
       | _ ->
         stm_pperr_endline Pp.(fun () -> str "interpreting " ++ Ppvernac.pr_vernac expr);
-        try Vernacentries.interp ?verbosely:(Some verbose) ?proof ~st (CAst.make ?loc expr)
+        try Vernacentries.interp ?verbosely:(Some verbose) ?proof ~st expr
         with e ->
           let e = CErrors.push e in
           Exninfo.iraise Hooks.(call_process_error_once e)
@@ -1103,7 +1191,7 @@ module Backtrack : sig
   val branches_of : Stateid.t -> backup
 
   (* Returns the state that the command should backtract to *)
-  val undo_vernac_classifier : vernac_control -> doc:doc -> Stateid.t * vernac_when
+  val undo_vernac_classifier : vernac_control -> doc:doc -> Stateid.t
   val get_prev_proof : doc:doc -> Stateid.t -> Proof.t option
 
 end = struct (* {{{ *)
@@ -1167,62 +1255,61 @@ end = struct (* {{{ *)
     if Int.equal n 0 then `Stop id else `Cont (n-value)
 
   let get_proof ~doc id =
-    let open Vernacstate in
     match state_of_id ~doc id with
-    | `Valid (Some vstate) -> Some (Proof_global.proof_of_state vstate.proof)
+    | `Valid (Some vstate) -> Option.map Proof_global.give_me_the_proof vstate.Vernacstate.proof
     | _ -> None
 
   let undo_vernac_classifier v ~doc =
-    if VCS.is_interactive () = `No && !cur_opt.async_proofs_cache <> Some Force
+    if not (VCS.is_interactive ()) && !cur_opt.async_proofs_cache <> Some Force
     then undo_costly_in_batch_mode v;
     try
       match Vernacprop.under_control v with
       | VernacResetInitial ->
-          Stateid.initial, VtNow
+          Stateid.initial
       | VernacResetName {CAst.v=name} ->
-          let id = VCS.get_branch_pos (VCS.current_branch ()) in
+          let id = VCS.cur_tip () in
           (try
             let oid =
               fold_until (fun b (id,_,label,_,_) ->
                 if b then `Stop id else `Cont (List.mem name label))
               false id in
-            oid, VtNow
+            oid
           with Not_found ->
-            id, VtNow)
+            id)
       | VernacBack n ->
-          let id = VCS.get_branch_pos (VCS.current_branch ()) in
+          let id = VCS.cur_tip () in
           let oid = fold_until (fun n (id,_,_,_,_) ->
             if Int.equal n 0 then `Stop id else `Cont (n-1)) n id in
-          oid, VtNow
+          oid
       | VernacUndo n ->
-          let id = VCS.get_branch_pos (VCS.current_branch ()) in
+          let id = VCS.cur_tip () in
           let oid = fold_until back_tactic n id in
-          oid, VtLater
+          oid
       | VernacUndoTo _
       | VernacRestart as e ->
           let m = match e with VernacUndoTo m -> m | _ -> 0 in
-          let id = VCS.get_branch_pos (VCS.current_branch ()) in
+          let id = VCS.cur_tip () in
           let vcs =
             match (VCS.get_info id).vcs_backup with
             | None, _ -> anomaly Pp.(str"Backtrack: tip with no vcs_backup.")
             | Some vcs, _ -> vcs in
           let cb, _ =
             try Vcs_aux.find_proof_at_depth vcs (Vcs_aux.proof_nesting vcs)
-            with Failure _ -> raise Proof_global.NoCurrentProof in
+            with Failure _ -> raise PG_compat.NoCurrentProof in
           let n = fold_until (fun n (_,vcs,_,_,_) ->
             if List.mem cb (Vcs_.branches vcs) then `Cont (n+1) else `Stop n)
             0 id in
           let oid = fold_until (fun n (id,_,_,_,_) ->
             if Int.equal n 0 then `Stop id else `Cont (n-1)) (n-m-1) id in
-          oid, VtLater
+          oid
       | VernacAbortAll ->
-          let id = VCS.get_branch_pos (VCS.current_branch ()) in
+          let id = VCS.cur_tip () in
           let oid = fold_until (fun () (id,vcs,_,_,_) ->
             match Vcs_.branches vcs with [_] -> `Stop id | _ -> `Cont ())
             () id in
-          oid, VtLater
+          oid
       | VernacBackTo id ->
-          Stateid.of_int id, VtNow
+          Stateid.of_int id
       | _ -> anomaly Pp.(str "incorrect VtMeta classification")
     with
     | Not_found ->
@@ -1246,7 +1333,7 @@ end = struct (* {{{ *)
             | None -> true
         done;
         !rv
-    with Not_found | Proof_global.NoCurrentProof -> None
+    with Not_found | PG_compat.NoCurrentProof -> None
 
 end (* }}} *)
 
@@ -1435,11 +1522,14 @@ end = struct (* {{{ *)
   let perspective = ref []
   let set_perspective l = perspective := l
 
+  let is_inside_perspective st = true
+    (* This code is now disabled. If an IDE needs this feature, make it accessible again.
+    List.exists (fun x -> CList.mem_f Stateid.equal x !perspective) st
+    *)
+
   let task_match age t =
     match age, t with
-    | Fresh, BuildProof { t_states } ->
-        not !cur_opt.async_proofs_full ||
-        List.exists (fun x -> CList.mem_f Stateid.equal x !perspective) t_states
+    | Fresh, BuildProof { t_states } -> is_inside_perspective t_states
     | Old my_states, States l ->
         List.for_all (fun x -> CList.mem_f Stateid.equal x my_states) l
     | _ -> false
@@ -1475,8 +1565,7 @@ end = struct (* {{{ *)
         feedback (InProgress ~-1);
         t_assign (`Val pl);
         record_pb_time ?loc:t_loc t_name time;
-        if !cur_opt.async_proofs_full || t_drop
-        then `Stay(t_states,[States t_states])
+        if t_drop then `Stay(t_states,[States t_states])
         else `End
     | Fresh, BuildProof { t_assign; t_loc; t_name; t_states },
             RespError { e_error_at; e_safe_id = valid; e_msg; e_safe_states } ->
@@ -1501,13 +1590,11 @@ end = struct (* {{{ *)
   let build_proof_here ~doc ?loc ~drop_pt (id,valid) eop =
     Future.create (State.exn_on id ~valid) (fun () ->
       let wall_clock1 = Unix.gettimeofday () in
-      if VCS.is_interactive () = `No
-      then Reach.known_state ~doc ~cache:`No eop
-      else Reach.known_state ~doc ~cache:`Shallow eop;
+      Reach.known_state ~doc ~cache:(VCS.is_interactive ()) eop;
       let wall_clock2 = Unix.gettimeofday () in
       Aux_file.record_in_aux_at ?loc "proof_build_time"
         (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1));
-      let p = Proof_global.return_proof ~allow_partial:drop_pt () in
+      let p = PG_compat.return_proof ~allow_partial:drop_pt () in
       if drop_pt then feedback ~id Complete;
       p)
 
@@ -1525,27 +1612,28 @@ end = struct (* {{{ *)
        * a bad fixpoint *)
       let fix_exn = Future.fix_exn_of future_proof in
       (* STATE: We use the current installed imperative state *)
-      let st = Vernacstate.freeze_interp_state `No in
+      let st = State.freeze () in
       if not drop then begin
         let checked_proof = Future.chain future_proof (fun p ->
+          let opaque = Proof_global.Opaque in
 
           (* Unfortunately close_future_proof and friends are not pure so we need
              to set the state manually here *)
-          Vernacstate.unfreeze_interp_state st;
+          State.unfreeze st;
           let pobject, _ =
-            Proof_global.close_future_proof ~feedback_id:stop (Future.from_val ~fix_exn p) in
+            PG_compat.close_future_proof ~opaque ~feedback_id:stop (Future.from_val ~fix_exn p) in
           let terminator = (* The one sent by master is an InvalidKey *)
-            Lemmas.(standard_proof_terminator [] (mk_hook (fun _ _ -> ()))) in
+            Lemmas.(standard_proof_terminator []) in
 
-          let st = Vernacstate.freeze_interp_state `No in
+          let st = Vernacstate.freeze_interp_state ~marshallable:false in
           stm_vernac_interp stop
             ~proof:(pobject, terminator) st
-            { verbose = false; loc; indentation = 0; strlen = 0;
-              expr = VernacExpr ([], VernacEndProof (Proved (Proof_global.Opaque,None))) }) in
+            { verbose = false; indentation = 0; strlen = 0;
+              expr = CAst.make ?loc @@ VernacExpr ([], VernacEndProof (Proved (opaque,None))) }) in
         ignore(Future.join checked_proof);
       end;
       (* STATE: Restore the state XXX: handle exn *)
-      Vernacstate.unfreeze_interp_state st;
+      State.unfreeze st;
       RespBuiltProof(proof,time)
     with
     | e when CErrors.noncritical e || e = Stack_overflow ->
@@ -1587,7 +1675,7 @@ end = struct (* {{{ *)
         when is_tac expr && State.same_env o n -> (* A pure tactic *)
           Some (id, `ProofOnly (prev, State.proof_part_of_frozen n))
       | Some _, Some s ->
-          msg_debug (Pp.str "STM: sending back a fat state");
+        if !Flags.debug then msg_debug (Pp.str "STM: sending back a fat state");
           Some (id, `Full s)
       | _, Some s -> Some (id, `Full s) in
     let rec aux seen = function
@@ -1668,30 +1756,30 @@ end = struct (* {{{ *)
         with VCS.Expired -> cur in
       aux stop in
     try
-      Reach.known_state ~doc:dummy_doc (* XXX should be document *) ~cache:`No stop;
+      Reach.known_state ~doc:dummy_doc (* XXX should be document *) ~cache:false stop;
       if drop then
-        let _proof = Proof_global.return_proof ~allow_partial:true () in
+        let _proof = PG_compat.return_proof ~allow_partial:true () in
         `OK_ADMITTED
       else begin
       (* The original terminator, a hook, has not been saved in the .vio*)
-      Proof_global.set_terminator
-        (Lemmas.standard_proof_terminator []
-          (Lemmas.mk_hook (fun _ _ -> ())));
+      PG_compat.set_terminator (Lemmas.standard_proof_terminator []);
+
+      let opaque = Proof_global.Opaque in
       let proof =
-        Proof_global.close_proof ~keep_body_ucst_separate:true (fun x -> x) in
+        PG_compat.close_proof ~opaque ~keep_body_ucst_separate:true (fun x -> x) in
       (* We jump at the beginning since the kernel handles side effects by also
        * looking at the ones that happen to be present in the current env *)
-      Reach.known_state ~doc:dummy_doc (* XXX should be document *) ~cache:`No start;
+      Reach.known_state ~doc:dummy_doc (* XXX should be document *) ~cache:false start;
       (* STATE SPEC:
        * - start: First non-expired state! [This looks very fishy]
        * - end  : start + qed
        * => takes nothing from the itermediate states.
        *)
       (* STATE We use the state resulting from reaching start. *)
-      let st = Vernacstate.freeze_interp_state `No in
+      let st = Vernacstate.freeze_interp_state ~marshallable:false in
       ignore(stm_vernac_interp stop ~proof st
-        { verbose = false; loc; indentation = 0; strlen = 0;
-          expr = VernacExpr ([], VernacEndProof (Proved (Proof_global.Opaque,None))) });
+        { verbose = false; indentation = 0; strlen = 0;
+          expr = CAst.make ?loc @@ VernacExpr ([], VernacEndProof (Proved (opaque,None))) });
       `OK proof
       end
     with e ->
@@ -1703,10 +1791,11 @@ end = struct (* {{{ *)
             spc () ++ iprint (e, info))
       | Some (_, cur) ->
           match VCS.visit cur with
-          | { step = `Cmd { cast = { loc } } }
-          | { step = `Fork (( { loc }, _, _, _), _) }
-          | { step = `Qed ( { qast = { loc } }, _) }
-          | { step = `Sideff (ReplayCommand { loc }, _) } ->
+          | { step = `Cmd { cast } }
+          | { step = `Fork (( cast, _, _, _), _) }
+          | { step = `Qed ( { qast = cast }, _) }
+          | { step = `Sideff (ReplayCommand cast, _) } ->
+              let loc = cast.expr.CAst.loc in
               let start, stop = Option.cata Loc.unloc (0,0) loc in
               msg_warning Pp.(
                 str"File " ++ str name ++ str ": proof of " ++ str r_name ++
@@ -1742,7 +1831,7 @@ end = struct (* {{{ *)
         let uc =
           Option.get
             (Opaqueproof.get_constraints (Global.opaque_tables ()) o) in
-        (** We only manipulate monomorphic terms here. *)
+        (* We only manipulate monomorphic terms here. *)
         let map (c, ctx) = assert (Univ.AUContext.is_empty ctx); c in
         let pr =
           Future.from_val (map (Option.get (Global.body_of_constant_body c))) in
@@ -1926,9 +2015,9 @@ end = struct (* {{{ *)
   let perform { r_state = id; r_state_fb; r_document = vcs; r_ast; r_goal } =
     Option.iter VCS.restore vcs;
     try
-      Reach.known_state ~doc:dummy_doc (* XXX should be vcs *) ~cache:`No id;
-      stm_purify (fun () ->
-       let _,_,_,_,sigma0 = Proof.proof (Proof_global.give_me_the_proof ()) in
+      Reach.known_state ~doc:dummy_doc (* XXX should be vcs *) ~cache:false id;
+      State.purify (fun () ->
+       let Proof.{sigma=sigma0} = Proof.data (PG_compat.give_me_the_proof ()) in
        let g = Evd.find sigma0 r_goal in
        let is_ground c = Evarutil.is_ground_term sigma0 c in
        if not (
@@ -1940,16 +2029,16 @@ end = struct (* {{{ *)
            "goals only"))
        else begin
         let (i, ast) = r_ast in
-        Proof_global.simple_with_current_proof (fun _ p -> Proof.focus focus_cond () i p);
+        PG_compat.simple_with_current_proof (fun _ p -> Proof.focus focus_cond () i p);
         (* STATE SPEC:
          * - start : id
          * - return: id
          * => captures state id in a future closure, which will
            discard execution state but for the proof + univs.
         *)
-        let st = Vernacstate.freeze_interp_state `No in
+        let st = Vernacstate.freeze_interp_state ~marshallable:false in
         ignore(stm_vernac_interp r_state_fb st ast);
-        let _,_,_,_,sigma = Proof.proof (Proof_global.give_me_the_proof ()) in
+        let Proof.{sigma} = Proof.data (PG_compat.give_me_the_proof ()) in
         match Evd.(evar_body (find sigma r_goal)) with
         | Evd.Evar_empty -> RespNoProgress
         | Evd.Evar_defined t ->
@@ -1976,29 +2065,35 @@ end = struct (* {{{ *)
 
   module TaskQueue = AsyncTaskQueue.MakeQueue(TacTask) ()
 
+  let stm_fail ~st fail f =
+    if fail then
+      Vernacentries.with_fail ~st f
+    else
+      f ()
+
   let vernac_interp ~solve ~abstract ~cancel_switch nworkers safe_id id
-    { indentation; verbose; loc; expr = e; strlen }
+    { indentation; verbose; expr = e; strlen } : unit
   =
     let e, time, batch, fail =
-      let rec find ~time ~batch ~fail = function
-        | VernacTime (batch,{CAst.v=e}) -> find ~time:true ~batch ~fail e
-        | VernacRedirect (_,{CAst.v=e}) -> find ~time ~batch ~fail e
+      let rec find ~time ~batch ~fail v = CAst.with_loc_val (fun ?loc -> function
+        | VernacTime (batch,e) -> find ~time:true ~batch ~fail e
+        | VernacRedirect (_,e) -> find ~time ~batch ~fail e
         | VernacFail e -> find ~time ~batch ~fail:true e
-        | e -> e, time, batch, fail in
+        | e -> CAst.make ?loc e, time, batch, fail) v in
       find ~time:false ~batch:false ~fail:false e in
-    let st = Vernacstate.freeze_interp_state `No in
-    Vernacentries.with_fail st fail (fun () ->
-    (if time then System.with_time ~batch else (fun x -> x)) (fun () ->
-    ignore(TaskQueue.with_n_workers nworkers (fun queue ->
-    Proof_global.with_current_proof (fun _ p ->
-      let goals, _, _, _, _ = Proof.proof p in
+    let st = Vernacstate.freeze_interp_state ~marshallable:false in
+    stm_fail ~st fail (fun () ->
+    (if time then System.with_time ~batch ~header:(Pp.mt ()) else (fun x -> x)) (fun () ->
+    TaskQueue.with_n_workers nworkers (fun queue ->
+    PG_compat.simple_with_current_proof (fun _ p ->
+      let Proof.{goals} = Proof.data p in
       let open TacTask in
       let res = CList.map_i (fun i g ->
         let f, assign =
           Future.create_delegate
             ~name:(Printf.sprintf "subgoal %d" i)
             (State.exn_on id ~valid:safe_id) in
-        let t_ast = (i, { indentation; verbose; loc; expr = e; strlen }) in
+        let t_ast = (i, { indentation; verbose; expr = e; strlen }) in
         let t_name = Goal.uid g in
         TaskQueue.enqueue_task queue
           { t_state = safe_id; t_state_fb = id;
@@ -2023,19 +2118,20 @@ end = struct (* {{{ *)
           let open Notations in
           match Future.join f with
           | Some (pt, uc) ->
-            let sigma, env = Pfedit.get_current_context () in
+            let sigma, env = PG_compat.get_current_context () in
             stm_pperr_endline (fun () -> hov 0 (
               str"g=" ++ int (Evar.repr gid) ++ spc () ++
               str"t=" ++ (Printer.pr_constr_env env sigma pt) ++ spc () ++
               str"uc=" ++ Termops.pr_evar_universe_context uc));
-            (if abstract then Tactics.tclABSTRACT None else (fun x -> x))
+            (if abstract then Abstract.tclABSTRACT None else (fun x -> x))
               (V82.tactic (Refiner.tclPUSHEVARUNIVCONTEXT uc) <*>
               Tactics.exact_no_check (EConstr.of_constr pt))
           | None ->
             if solve then Tacticals.New.tclSOLVE [] else tclUNIT ()
         end)
       in
-      Proof.run_tactic (Global.env()) assign_tac p)))) ())
+      let p,_,() = Proof.run_tactic (Global.env()) assign_tac p in
+      p))) ())
 
 end (* }}} *)
 
@@ -2081,9 +2177,9 @@ end = struct (* {{{ *)
   let perform { r_where; r_doc; r_what; r_for } =
     VCS.restore r_doc;
     VCS.print ();
-    Reach.known_state ~doc:dummy_doc (* XXX should be r_doc *) ~cache:`No r_where;
+    Reach.known_state ~doc:dummy_doc (* XXX should be r_doc *) ~cache:false r_where;
     (* STATE *)
-    let st = Vernacstate.freeze_interp_state `No in
+    let st = Vernacstate.freeze_interp_state ~marshallable:false in
     try
       (* STATE SPEC:
        * - start: r_where
@@ -2117,8 +2213,7 @@ end = struct (* {{{ *)
     TaskQueue.enqueue_task (Option.get !queue)
       QueryTask.({ t_where = prev; t_for = id; t_what = q }) ~cancel_switch
 
-  let init () = queue := Some (TaskQueue.create
-    (if !cur_opt.async_proofs_full then 1 else 0))
+  let init () = queue := Some (TaskQueue.create 0)
 
 end (* }}} *)
 
@@ -2126,14 +2221,14 @@ end (* }}} *)
 and Reach : sig
 
   val known_state :
-    doc:doc -> ?redefine_qed:bool -> cache:Summary.marshallable ->
+    doc:doc -> ?redefine_qed:bool -> cache:bool ->
       Stateid.t -> unit
 
 end = struct (* {{{ *)
 
 let async_policy () =
-  if Flags.is_universe_polymorphism () then false
-  else if VCS.is_interactive () = `Yes then
+  if Attributes.is_universe_polymorphism () then false (* FIXME this makes no sense, it is the default value of the attribute *)
+  else if VCS.is_interactive () then
     (async_proofs_is_master !cur_opt || !cur_opt.async_proofs_mode = APonLazy)
   else
     (VCS.is_vio_doc () || !cur_opt.async_proofs_mode <> APoff)
@@ -2141,7 +2236,6 @@ let async_policy () =
 let delegate name =
      get_hint_bp_time name >= !cur_opt.async_proofs_delegation_threshold
   || VCS.is_vio_doc ()
-  || !cur_opt.async_proofs_full
 
 let collect_proof keep cur hd brkind id =
  stm_prerr_endline (fun () -> "Collecting proof ending at "^Stateid.to_string id);
@@ -2149,7 +2243,7 @@ let collect_proof keep cur hd brkind id =
  let name = function
    | [] -> no_name
    | id :: _ -> Names.Id.to_string id in
- let loc = (snd cur).loc in
+ let loc = (snd cur).expr.CAst.loc in
  let is_defined_expr = function
    | VernacEndProof (Proved (Proof_global.Transparent,_)) -> true
    | _ -> false in
@@ -2215,7 +2309,7 @@ let collect_proof keep cur hd brkind id =
         (try
           let name, hint = name ids, get_hint_ctx loc  in
           let t, v = proof_no_using last in
-          v.expr <- VernacExpr([], VernacProof(t, Some hint));
+          v.expr <- CAst.map (fun _ -> VernacExpr([], VernacProof(t, Some hint))) v.expr;
           `ASync (parent last,accn,name,delegate name)
         with Not_found ->
           let name = name ids in
@@ -2248,8 +2342,7 @@ let collect_proof keep cur hd brkind id =
      else
        let rc = collect (Some cur) [] id in
        if is_empty rc then make_sync `AlreadyEvaluated rc
-       else if (keep == VtKeep || keep == VtKeepAsAxiom) &&
-          (not(State.is_cached_and_valid id) || !cur_opt.async_proofs_full)
+       else if (is_vtkeep keep) && (not(State.is_cached_and_valid id))
        then check_policy rc
        else make_sync `AlreadyEvaluated rc
 
@@ -2307,9 +2400,9 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
              Proofview.give_up else Proofview.tclUNIT ()
               end in
            match (VCS.get_info base_state).state with
-           | Valid { Vernacstate.proof } ->
-               Proof_global.unfreeze proof;
-               Proof_global.with_current_proof (fun _ p ->
+           | FullState { Vernacstate.proof } ->
+               Option.iter PG_compat.unfreeze proof;
+               PG_compat.with_current_proof (fun _ p ->
                  feedback ~id:id Feedback.AddedAxiom;
                  fst (Pfedit.solve Goal_select.SelectAll None tac p), ());
                (* STATE SPEC:
@@ -2317,9 +2410,9 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
                 * - end  : maybe after recovery command.
                *)
                (* STATE: We use an updated state with proof *)
-               let st = Vernacstate.freeze_interp_state `No in
+               let st = Vernacstate.freeze_interp_state ~marshallable:false in
                Option.iter (fun expr -> ignore(stm_vernac_interp id st {
-                  verbose = true; loc = None; expr; indentation = 0;
+                  verbose = true; expr; indentation = 0;
                   strlen = 0 } ))
                recovery_command
            | _ -> assert false
@@ -2353,17 +2446,17 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
   (* ugly functions to process nested lemmas, i.e. hard to reproduce
    * side effects *)
   let cherry_pick_non_pstate () =
-    let st = Summary.freeze_summaries ~marshallable:`No in
+    let st = Summary.freeze_summaries ~marshallable:false in
     let st = Summary.remove_from_summary st Util.(pi1 summary_pstate) in
     let st = Summary.remove_from_summary st Util.(pi2 summary_pstate) in
     let st = Summary.remove_from_summary st Util.(pi3 summary_pstate) in
-    st, Lib.freeze ~marshallable:`No in
+    st, Lib.freeze ~marshallable:false in
 
   let inject_non_pstate (s,l) =
     Summary.unfreeze_summaries ~partial:true s; Lib.unfreeze l; update_global_env ()
   in
   let rec pure_cherry_pick_non_pstate safe_id id =
-    stm_purify (fun id ->
+    State.purify (fun id ->
         stm_prerr_endline (fun () -> "cherry-pick non pstate " ^ Stateid.to_string id);
         reach ~safe_id id;
         cherry_pick_non_pstate ())
@@ -2388,7 +2481,7 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
       | `Cmd { cast = x; cqueue = `TacQueue (solve,abstract,cancel_switch); cblock } ->
           (fun () ->
             resilient_tactic id cblock (fun () ->
-              reach ~cache:`Shallow view.next;
+              reach ~cache:true view.next;
               Partac.vernac_interp ~solve ~abstract ~cancel_switch
                 !cur_opt.async_proofs_n_tacworkers view.next id x)
           ), cache, true
@@ -2401,56 +2494,56 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
             resilient_tactic id cblock (fun () ->
               reach view.next;
               (* State resulting from reach *)
-              let st = Vernacstate.freeze_interp_state `No in
+              let st = Vernacstate.freeze_interp_state ~marshallable:false in
               ignore(stm_vernac_interp id st x)
             );
 	    if eff then update_global_env ()
-          ), (if eff then `Yes else cache), true
+          ), eff || cache, true
       | `Cmd { cast = x; ceff = eff } -> (fun () ->
           (match !cur_opt.async_proofs_mode with
            | APon | APonLazy ->
              resilient_command reach view.next
            | APoff -> reach view.next);
-          let st = Vernacstate.freeze_interp_state `No in
+          let st = Vernacstate.freeze_interp_state ~marshallable:false in
           ignore(stm_vernac_interp id st x);
           if eff then update_global_env ()
-        ), (if eff then `Yes else cache), true
+        ), eff || cache, true
       | `Fork ((x,_,_,_), None) -> (fun () ->
             resilient_command reach view.next;
-            let st = Vernacstate.freeze_interp_state `No in
+            let st = Vernacstate.freeze_interp_state ~marshallable:false in
             ignore(stm_vernac_interp id st x);
             wall_clock_last_fork := Unix.gettimeofday ()
-          ), `Yes, true
+          ), true, true
       | `Fork ((x,_,_,_), Some prev) -> (fun () -> (* nested proof *)
-            reach ~cache:`Shallow prev;
+            reach ~cache:true prev;
             reach view.next;
 
             (try
-               let st = Vernacstate.freeze_interp_state `No in
+               let st = Vernacstate.freeze_interp_state ~marshallable:false in
                ignore(stm_vernac_interp id st x);
             with e when CErrors.noncritical e ->
               let (e, info) = CErrors.push e in
               let info = Stateid.add info ~valid:prev id in
               Exninfo.iraise (e, info));
             wall_clock_last_fork := Unix.gettimeofday ()
-          ), `Yes, true
+          ), true, true
       | `Qed ({ qast = x; keep; brinfo; brname } as qed, eop) ->
           let rec aux = function
-          | `ASync (block_start, nodes, name, delegate) -> (fun () ->
-                assert(keep == VtKeep || keep == VtKeepAsAxiom);
-                let drop_pt = keep == VtKeepAsAxiom in
-                let block_stop, exn_info, loc = eop, (id, eop), x.loc in
+            | `ASync (block_start, nodes, name, delegate) -> (fun () ->
+                let keep' = get_vtkeep keep in
+                let drop_pt = keep' == VtKeepAxiom in
+                let block_stop, exn_info, loc = eop, (id, eop), x.expr.CAst.loc in
                 log_processing_async id name;
                 VCS.create_proof_task_box nodes ~qed:id ~block_start;
                 begin match brinfo, qed.fproof with
                 | { VCS.kind = `Edit _ }, None -> assert false
-                | { VCS.kind = `Edit (_,_,_, okeep, _) }, Some (ofp, cancel) ->
+                | { VCS.kind = `Edit (_,_, okeep, _) }, Some (ofp, cancel) ->
                     assert(redefine_qed = true);
-                    if okeep != keep then
+                    if okeep <> keep then
                       msg_warning(strbrk("The command closing the proof changed. "
                         ^"The kernel cannot take this into account and will "
-                        ^(if keep == VtKeep then "not check " else "reject ")
-                        ^"the "^(if keep == VtKeep then "new" else "incomplete")
+                        ^(if not drop_pt then "not check " else "reject ")
+                        ^"the "^(if not drop_pt then "new" else "incomplete")
                         ^" proof. Reprocess the command declaring "
                         ^"the proof's statement to avoid that."));
                     let fp, cancel =
@@ -2463,7 +2556,7 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
                     State.install_cached id
                 | { VCS.kind = `Proof _ }, Some _ -> assert false
                 | { VCS.kind = `Proof _ }, None ->
-                    reach ~cache:`Shallow block_start;
+                    reach ~cache:true block_start;
                     let fp, cancel =
                       if delegate then
                         Slaves.build_proof ~doc
@@ -2473,61 +2566,70 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
                           ~drop_pt exn_info block_stop, ref false
                     in
                     qed.fproof <- Some (fp, cancel);
+                    let opaque = match keep' with
+                      | VtKeepAxiom | VtKeepOpaque ->
+                        Proof_global.Opaque (* Admitted -> Opaque should be OK. *)
+                      | VtKeepDefined -> Proof_global.Transparent
+                    in
                     let proof =
-                      Proof_global.close_future_proof ~feedback_id:id fp in
+                      PG_compat.close_future_proof ~opaque ~feedback_id:id fp in
                     if not delegate then ignore(Future.compute fp);
                     reach view.next;
-                    let st = Vernacstate.freeze_interp_state `No in
+                    let st = Vernacstate.freeze_interp_state ~marshallable:false in
                     ignore(stm_vernac_interp id ~proof st x);
                     feedback ~id:id Incomplete
                 | { VCS.kind = `Master }, _ -> assert false
                 end;
-                Proof_global.discard_all ()
-              ), (if redefine_qed then `No else `Yes), true
+                PG_compat.discard_all ()
+              ), not redefine_qed, true
           | `Sync (name, `Immediate) -> (fun () ->
                 reach eop;
-                let st = Vernacstate.freeze_interp_state `No in
+                let st = Vernacstate.freeze_interp_state ~marshallable:false in
                 ignore(stm_vernac_interp id st x);
-                Proof_global.discard_all ()
-              ), `Yes, true
+                PG_compat.discard_all ()
+              ), true, true
           | `Sync (name, reason) -> (fun () ->
                 log_processing_sync id name reason;
                 reach eop;
                 let wall_clock = Unix.gettimeofday () in
-                record_pb_time name ?loc:x.loc (wall_clock -. !wall_clock_last_fork);
+                record_pb_time name ?loc:x.expr.CAst.loc (wall_clock -. !wall_clock_last_fork);
                 let proof =
                   match keep with
                   | VtDrop -> None
-                  | VtKeepAsAxiom ->
+                  | VtKeep VtKeepAxiom ->
                       let ctx = UState.empty in
                       let fp = Future.from_val ([],ctx) in
                       qed.fproof <- Some (fp, ref false); None
-                  | VtKeep ->
-                      Some(Proof_global.close_proof
+                  | VtKeep opaque ->
+                    let opaque = let open Proof_global in  match opaque with
+                      | VtKeepOpaque -> Opaque | VtKeepDefined -> Transparent
+                      | VtKeepAxiom -> assert false
+                    in
+                      Some(PG_compat.close_proof ~opaque
                                 ~keep_body_ucst_separate:false
                                 (State.exn_on id ~valid:eop)) in
-                if keep != VtKeepAsAxiom then
+                if keep <> VtKeep VtKeepAxiom then
                   reach view.next;
                 let wall_clock2 = Unix.gettimeofday () in
-                let st = Vernacstate.freeze_interp_state `No in
+                let st = Vernacstate.freeze_interp_state ~marshallable:false in
                 ignore(stm_vernac_interp id ?proof st x);
                 let wall_clock3 = Unix.gettimeofday () in
-                Aux_file.record_in_aux_at ?loc:x.loc "proof_check_time"
+                Aux_file.record_in_aux_at ?loc:x.expr.CAst.loc "proof_check_time"
                   (Printf.sprintf "%.3f" (wall_clock3 -. wall_clock2));
-                Proof_global.discard_all ()
-              ), `Yes, true
+                PG_compat.discard_all ()
+              ), true, true
           | `MaybeASync (start, nodes, name, delegate) -> (fun () ->
-                reach ~cache:`Shallow start;
+                reach ~cache:true start;
                 (* no sections *)
                 if CList.is_empty (Environ.named_context (Global.env ()))
                 then Util.pi1 (aux (`ASync (start, nodes, name, delegate))) ()
                 else Util.pi1 (aux (`Sync (name, `NoPU_NoHint_NoES))) ()
-              ), (if redefine_qed then `No else `Yes), true
+              ), not redefine_qed, true
           in
           aux (collect_proof keep (view.next, x) brname brinfo eop)
       | `Sideff (ReplayCommand x,_) -> (fun () ->
             reach view.next;
-            let st = Vernacstate.freeze_interp_state `No in
+            let st = Vernacstate.freeze_interp_state ~marshallable:false in
             ignore(stm_vernac_interp id st x);
             update_global_env ()
           ), cache, true
@@ -2537,8 +2639,8 @@ let known_state ~doc ?(redefine_qed=false) ~cache id =
           ), cache, true
     in
     let cache_step =
-      if !cur_opt.async_proofs_cache = Some Force then `Yes
-      else cache_step in
+      !cur_opt.async_proofs_cache = Some Force || cache_step
+    in
     State.define ~doc ?safe_id
       ~cache:cache_step ~redefine:redefine_qed ~feedback_processed step id;
     stm_prerr_endline (fun () -> "reached: "^ Stateid.to_string id) in
@@ -2582,7 +2684,7 @@ let doc_type_module_name (std : stm_doc_type) =
 
 (* Document edit notifiers *)
 type document_edit_notifiers =
-  { add_hook  : Vernacexpr.vernac_control CAst.t -> Stateid.t -> unit
+  { add_hook  : Vernacexpr.vernac_control -> Stateid.t -> unit
   (** User adds a sentence to the document (after parsing) *)
   ; edit_hook : Stateid.t -> unit
   (** User edits a sentence in the document *)
@@ -2600,6 +2702,18 @@ let init_core () =
   if !cur_opt.async_proofs_mode = APon then Control.enable_thread_delay := true;
   State.register_root_state ()
 
+let dirpath_of_file f =
+  let ldir0 =
+    try
+      let lp = Loadpath.find_load_path (Filename.dirname f) in
+      Loadpath.logical lp
+    with Not_found -> Libnames.default_root_prefix
+  in
+  let file = Filename.chop_extension (Filename.basename f) in
+  let id = Id.of_string file in
+  let ldir = Libnames.add_dirpath_suffix ldir0 id in
+  ldir
+
 let new_doc { doc_type ; iload_path; require_libs; stm_options } =
 
   let load_objs libs =
@@ -2616,35 +2730,41 @@ let new_doc { doc_type ; iload_path; require_libs; stm_options } =
   (* We must reset the whole state before creating a document! *)
   State.restore_root_state ();
 
-  let doc = VCS.init doc_type Stateid.initial in
+  let doc = VCS.init doc_type Stateid.initial (Vernacstate.Parser.init ()) in
 
   (* Set load path; important, this has to happen before we declare
      the library below as [Declaremods/Library] will infer the module
      name by looking at the load path! *)
   List.iter Mltop.add_coq_path iload_path;
 
+  Safe_typing.allow_delayed_constants := !cur_opt.async_proofs_mode <> APoff;
+
   begin match doc_type with
-  | Interactive ln ->
-    Safe_typing.allow_delayed_constants := true;
-    Declaremods.start_library ln
+    | Interactive ln ->
+      let dp = match ln with
+        | TopLogical dp -> dp
+        | TopPhysical f -> dirpath_of_file f
+      in
+      Declaremods.start_library dp
 
-  | VoDoc ln ->
-    let ldir = Flags.verbosely Library.start_library ln in
-    VCS.set_ldir ldir;
-    set_compilation_hints ln
+    | VoDoc f ->
+      let ldir = dirpath_of_file f in
+      let () = Flags.verbosely Declaremods.start_library ldir in
+      VCS.set_ldir ldir;
+      set_compilation_hints f
 
-  | VioDoc ln ->
-    Safe_typing.allow_delayed_constants := true;
-    let ldir = Flags.verbosely Library.start_library ln in
-    VCS.set_ldir ldir;
-    set_compilation_hints ln
+    | VioDoc f ->
+      let ldir = dirpath_of_file f in
+      let () = Flags.verbosely Declaremods.start_library ldir in
+      VCS.set_ldir ldir;
+      set_compilation_hints f
   end;
 
   (* Import initial libraries. *)
   load_objs require_libs;
 
   (* We record the state at this point! *)
-  State.define ~doc ~cache:`Yes ~redefine:true (fun () -> ()) Stateid.initial;
+  State.define ~doc ~cache:true ~redefine:true (fun () -> ()) Stateid.initial;
   Backtrack.record ();
   Slaves.init ();
   if async_proofs_is_master !cur_opt then begin
@@ -2677,19 +2797,11 @@ let observe ~doc id =
 
 let finish ~doc =
   let head = VCS.current_branch () in
-  let doc =observe ~doc (VCS.get_branch_pos head) in
-  VCS.print ();
-  (* EJGA: Setting here the proof state looks really wrong, and it
-     hides true bugs cf bug #5363. Also, what happens with observe? *)
-  (* Some commands may by side effect change the proof mode *)
-  (match VCS.get_branch head with
-  | { VCS.kind = `Edit (mode,_,_,_,_) } -> Proof_global.activate_proof_mode mode [@ocaml.warning "-3"]
-  | { VCS.kind = `Proof (mode, _) } -> Proof_global.activate_proof_mode mode [@ocaml.warning "-3"]
-  | _ -> ()
-  ); doc
+  let doc = observe ~doc (VCS.get_branch_pos head) in
+  VCS.print (); doc
 
 let wait ~doc =
-  let doc = finish ~doc in
+  let doc = observe ~doc (VCS.get_branch_pos VCS.Branch.master) in
   Slaves.wait_all_done ();
   VCS.print ();
   doc
@@ -2698,17 +2810,34 @@ let rec join_admitted_proofs id =
   if Stateid.equal id Stateid.initial then () else
   let view = VCS.visit id in
   match view.step with
-  | `Qed ({ keep = VtKeepAsAxiom; fproof = Some (fp,_) },_) ->
+  | `Qed ({ keep = VtKeep VtKeepAxiom; fproof = Some (fp,_) },_) ->
        ignore(Future.force fp);
        join_admitted_proofs view.next
   | _ -> join_admitted_proofs view.next
+
+(* Error resiliency may have tolerated some broken commands *)
+let rec check_no_err_states ~doc visited id =
+  let open Stateid in
+  if Set.mem id visited then visited else
+  match state_of_id ~doc id with
+  | `Error e -> raise e
+  | _ ->
+     let view = VCS.visit id in
+     match view.step with
+     | `Qed(_,id) ->
+         let visited = check_no_err_states ~doc (Set.add id visited) id in
+         check_no_err_states ~doc visited view.next
+     | _ -> check_no_err_states ~doc (Set.add id visited) view.next
 
 let join ~doc =
   let doc = wait ~doc in
   stm_prerr_endline (fun () -> "Joining the environment");
   Global.join_safe_environment ();
   stm_prerr_endline (fun () -> "Joining Admitted proofs");
-  join_admitted_proofs (VCS.get_branch_pos (VCS.current_branch ()));
+  join_admitted_proofs (VCS.get_branch_pos VCS.Branch.master);
+  stm_prerr_endline (fun () -> "Checking no error states");
+  ignore(check_no_err_states ~doc (Stateid.Set.singleton Stateid.initial)
+    (VCS.get_branch_pos VCS.Branch.master));
   VCS.print ();
   doc
 
@@ -2719,7 +2848,7 @@ let check_task name (tasks,rcbackup) i =
   RemoteCounter.restore rcbackup;
   let vcs = VCS.backup () in
   try
-    let rc = stm_purify (Slaves.check_task name tasks) i in
+    let rc = State.purify (Slaves.check_task name tasks) i in
     VCS.restore vcs;
     rc
   with e when CErrors.noncritical e -> VCS.restore vcs; false
@@ -2729,7 +2858,7 @@ let finish_tasks name u d p (t,rcbackup as tasks) =
   RemoteCounter.restore rcbackup;
   let finish_task u (_,_,i) =
     let vcs = VCS.backup () in
-    let u = stm_purify (Slaves.finish_task name u d p t) i in
+    let u = State.purify (Slaves.finish_task name u d p t) i in
     VCS.restore vcs;
     u in
   try
@@ -2746,12 +2875,14 @@ let merge_proof_branch ~valid ?id qast keep brname =
   match brinfo with
   | { VCS.kind = `Proof _ } ->
       VCS.checkout VCS.Branch.master;
-      let id = VCS.new_node ?id () in
+      let id = VCS.new_node ?id None () in
+      let parsing = Option.get @@ VCS.get_parsing_state (VCS.cur_tip ()) in
       VCS.merge id ~ours:(Qed (qed None)) brname;
+      VCS.set_parsing_state id parsing;
       VCS.delete_branch brname;
-      VCS.propagate_sideff ~action:CherryPickEnv;
+      VCS.propagate_qed ();
       `Ok
-  | { VCS.kind = `Edit (mode, qed_id, master_id, _,_) } ->
+  | { VCS.kind = `Edit (qed_id, master_id, _,_) } ->
       let ofp =
         match VCS.visit qed_id with
         | { step = `Qed ({ fproof }, _) } -> fproof
@@ -2759,139 +2890,125 @@ let merge_proof_branch ~valid ?id qast keep brname =
       VCS.rewrite_merge qed_id ~ours:(Qed (qed ofp)) ~at:master_id brname;
       VCS.delete_branch brname;
       VCS.gc ();
-      let _st : unit = Reach.known_state ~doc:dummy_doc (* XXX should be taken in input *) ~redefine_qed:true ~cache:`No qed_id in
+      let _st : unit = Reach.known_state ~doc:dummy_doc (* XXX should be taken in input *) ~redefine_qed:true ~cache:false qed_id in
       VCS.checkout VCS.Branch.master;
       `Unfocus qed_id
   | { VCS.kind = `Master } ->
-       Exninfo.iraise (State.exn_on ~valid Stateid.dummy (Proof_global.NoCurrentProof, Exninfo.null))
+       Exninfo.iraise (State.exn_on ~valid Stateid.dummy (PG_compat.NoCurrentProof, Exninfo.null))
 
 (* When tty is true, this code also does some of the job of the user interface:
    jump back to a state that is valid *)
 let handle_failure (e, info) vcs =
-  match Stateid.get info with
-  | None ->
-      VCS.restore vcs;
-      VCS.print ();
-      anomaly(str"error with no safe_id attached:" ++ spc() ++
-        CErrors.iprint_no_report (e, info) ++ str".")
-  | Some (safe_id, id) ->
-      stm_prerr_endline (fun () -> "Failed at state " ^ Stateid.to_string id);
-      VCS.restore vcs;
-      VCS.print ();
-      Exninfo.iraise (e, info)
+  VCS.restore vcs;
+  VCS.print ();
+  Exninfo.iraise (e, info)
 
-let snapshot_vio ~doc ldir long_f_dot_vo =
+let snapshot_vio ~doc ~output_native_objects ldir long_f_dot_vo =
   let doc = finish ~doc in
   if List.length (VCS.branches ()) > 1 then
     CErrors.user_err ~hdr:"stm" (str"Cannot dump a vio with open proofs");
-  Library.save_library_to ~todo:(dump_snapshot ()) ldir long_f_dot_vo
+  Library.save_library_to ~todo:(dump_snapshot ()) ~output_native_objects
+    ldir long_f_dot_vo
     (Global.opaque_tables ());
   doc
 
 let reset_task_queue = Slaves.reset_task_queue
 
 (* Document building *)
-let process_back_meta_command ~newtip ~head oid aast w =
-    let id = VCS.new_node ~id:newtip () in
-    let { mine; others } = Backtrack.branches_of oid in
+
+(* We process a meta command found in the document *)
+let process_back_meta_command ~newtip ~head oid aast =
     let valid = VCS.get_branch_pos head in
+    let old_parsing = Option.get @@ VCS.get_parsing_state oid in
+
+    (* Merge in and discard all the branches currently open that were not open in `oid` *)
+    let { mine; others } = Backtrack.branches_of oid in
     List.iter (fun branch ->
         if not (List.mem_assoc branch (mine::others)) then
           ignore(merge_proof_branch ~valid aast VtDrop branch))
       (VCS.branches ());
+
+    (* We add a node on top of every branch, to represent state aliasing *)
     VCS.checkout_shallowest_proof_branch ();
     let head = VCS.current_branch () in
     List.iter (fun b ->
-        if not(VCS.Branch.equal b head) then begin
-          VCS.checkout b;
-          VCS.commit (VCS.new_node ()) (Alias (oid,aast));
-        end)
+        VCS.checkout b;
+        let id = if (VCS.Branch.equal b head) then Some newtip else None in
+        let proof_mode = VCS.get_proof_mode @@ VCS.cur_tip () in
+        let id = VCS.new_node ?id proof_mode () in
+        VCS.commit id (Alias (oid,aast));
+        VCS.set_parsing_state id old_parsing)
       (VCS.branches ());
     VCS.checkout_shallowest_proof_branch ();
-    VCS.commit id (Alias (oid,aast));
-    Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc); `Ok
+    Backtrack.record (); `Ok
 
-let allow_nested_proofs = ref false
-let _ = Goptions.declare_bool_option
-    { Goptions.optdepr  = false;
-      Goptions.optname  = "Nested Proofs Allowed";
-      Goptions.optkey   = Vernac_classifier.stm_allow_nested_proofs_option_name;
-      Goptions.optread  = (fun () -> !allow_nested_proofs);
-      Goptions.optwrite = (fun b -> allow_nested_proofs := b) }
+let get_allow_nested_proofs =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"Nested Proofs Allowed"
+    ~key:Vernac_classifier.stm_allow_nested_proofs_option_name
+    ~value:false
 
+(** [process_transaction] adds a node in the document *)
 let process_transaction ~doc ?(newtip=Stateid.fresh ())
-  ({ verbose; loc; expr } as x) c =
+  ({ verbose; expr } as x) c =
   stm_pperr_endline (fun () -> str "{{{ processing: " ++ pr_ast x);
   let vcs = VCS.backup () in
   try
     let head = VCS.current_branch () in
     VCS.checkout head;
+    let head_parsing =
+      Option.get @@ VCS.(get_parsing_state (get_branch_pos head)) in
+    let proof_mode = VCS.(get_proof_mode (get_branch_pos head)) in
     let rc = begin
       stm_prerr_endline (fun () ->
         "  classified as: " ^ Vernac_classifier.string_of_vernac_classification c);
       match c with
       (* Meta *)
       | VtMeta, _ ->
-        let id, w = Backtrack.undo_vernac_classifier expr ~doc in
-        process_back_meta_command ~newtip ~head id x w
+        let id = Backtrack.undo_vernac_classifier expr ~doc in
+        process_back_meta_command ~newtip ~head id x
 
       (* Query *)
       | VtQuery, w ->
-          let id = VCS.new_node ~id:newtip () in
+          let id = VCS.new_node ~id:newtip proof_mode () in
           let queue =
-            if !cur_opt.async_proofs_full then `QueryQueue (ref false)
-            else if VCS.is_vio_doc () &&
-                    VCS.((get_branch head).kind = `Master) &&
-                    may_pierce_opaque (Vernacprop.under_control x.expr)
-                 then `SkipQueue
+            if VCS.is_vio_doc () &&
+               VCS.((get_branch head).kind = `Master) &&
+               may_pierce_opaque (Vernacprop.under_control x.expr)
+            then `SkipQueue
             else `MainQueue in
           VCS.commit id (mkTransCmd x [] false queue);
-          Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc); `Ok
+          VCS.set_parsing_state id head_parsing;
+          Backtrack.record (); assert (w == VtLater); `Ok
 
       (* Proof *)
-      | VtStartProof (mode, guarantee, names), w ->
+      | VtStartProof (guarantee, names), w ->
 
-         if not !allow_nested_proofs && VCS.proof_nesting () > 0 then
+         if not (get_allow_nested_proofs ()) && VCS.proof_nesting () > 0 then
            "Nested proofs are not allowed unless you turn option Nested Proofs Allowed on."
            |> Pp.str
            |> (fun s -> (UserError (None, s), Exninfo.null))
-           |> State.exn_on ~valid:Stateid.dummy Stateid.dummy
+           |> State.exn_on ~valid:Stateid.dummy newtip
            |> Exninfo.iraise
          else
 
-          let id = VCS.new_node ~id:newtip () in
+          let proof_mode = Some (Vernacentries.get_default_proof_mode ()) in
+          let id = VCS.new_node ~id:newtip proof_mode () in
           let bname = VCS.mk_branch_name x in
           VCS.checkout VCS.Branch.master;
           if VCS.Branch.equal head VCS.Branch.master then begin
             VCS.commit id (Fork (x, bname, guarantee, names));
-            VCS.branch bname (`Proof (mode, VCS.proof_nesting () + 1))
+            VCS.branch bname (`Proof (VCS.proof_nesting () + 1))
           end else begin
-            VCS.branch bname (`Proof (mode, VCS.proof_nesting () + 1));
+            VCS.branch bname (`Proof (VCS.proof_nesting () + 1));
             VCS.merge id ~ours:(Fork (x, bname, guarantee, names)) head
           end;
-          Proof_global.activate_proof_mode mode [@ocaml.warning "-3"];
-          Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc); `Ok
-      | VtProofMode _, VtLater ->
-          anomaly(str"VtProofMode must be executed VtNow.")
-      | VtProofMode mode, VtNow ->
-          let id = VCS.new_node ~id:newtip () in
-          VCS.commit id (mkTransCmd x [] false `MainQueue);
-          List.iter
-            (fun bn -> match VCS.get_branch bn with
-            | { VCS.root; kind = `Master; pos } -> ()
-            | { VCS.root; kind = `Proof(_,d); pos } ->
-                VCS.delete_branch bn;
-                VCS.branch ~root ~pos bn (`Proof(mode,d))
-            | { VCS.root; kind = `Edit(_,f,q,k,ob); pos } ->
-                VCS.delete_branch bn;
-                VCS.branch ~root ~pos bn (`Edit(mode,f,q,k,ob)))
-            (VCS.branches ());
-          VCS.checkout_shallowest_proof_branch ();
-          Backtrack.record ();
-          ignore(finish ~doc:dummy_doc);
-          `Ok
+          VCS.set_parsing_state id head_parsing;
+          Backtrack.record (); assert (w == VtLater); `Ok
+
       | VtProofStep { parallel; proof_block_detection = cblock }, w ->
-          let id = VCS.new_node ~id:newtip () in
+          let id = VCS.new_node ~id:newtip proof_mode () in
           let queue =
             match parallel with
             | `Yes(solve,abstract) -> `TacQueue (solve, abstract, ref false)
@@ -2901,21 +3018,25 @@ let process_transaction ~doc ?(newtip=Stateid.fresh ())
              If/when and UI will make something useful with this piece of info,
              detection should occur here.
           detect_proof_block id cblock; *)
-          Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc); `Ok
+          VCS.set_parsing_state id head_parsing;
+          Backtrack.record (); assert (w == VtLater); `Ok
+
       | VtQed keep, w ->
           let valid = VCS.get_branch_pos head in
-          let rc = merge_proof_branch ~valid ~id:newtip x keep head in
+          let rc =
+            merge_proof_branch ~valid ~id:newtip x keep head in
           VCS.checkout_shallowest_proof_branch ();
-          Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc);
+          Backtrack.record (); assert (w == VtLater);
           rc
 
       (* Side effect in a (still open) proof is replayed on all branches*)
       | VtSideff l, w ->
-          let id = VCS.new_node ~id:newtip () in
-          begin match (VCS.get_branch head).VCS.kind with
-          | `Edit _ -> VCS.commit id (mkTransCmd x l true `MainQueue);
-          | `Master -> VCS.commit id (mkTransCmd x l false `MainQueue);
-          | `Proof _ ->
+          let id = VCS.new_node ~id:newtip proof_mode () in
+          let new_ids =
+            match (VCS.get_branch head).VCS.kind with
+            | `Edit _ -> VCS.commit id (mkTransCmd x l true `MainQueue); []
+            | `Master -> VCS.commit id (mkTransCmd x l false `MainQueue); []
+            | `Proof _ ->
               VCS.checkout VCS.Branch.master;
               VCS.commit id (mkTransCmd x l true `MainQueue);
               (* We can't replay a Definition since universes may be differently
@@ -2923,51 +3044,37 @@ let process_transaction ~doc ?(newtip=Stateid.fresh ())
               let action = match Vernacprop.under_control x.expr with
                 | VernacDefinition(_, _, DefineBody _) -> CherryPickEnv
                 | _ -> ReplayCommand x in
-              VCS.propagate_sideff ~action;
-          end;
+              VCS.propagate_sideff ~action
+          in
           VCS.checkout_shallowest_proof_branch ();
-          Backtrack.record (); if w == VtNow then ignore(finish ~doc:dummy_doc); `Ok
+          Backtrack.record ();
+          let parsing_state =
+            begin match w with
+              | VtNow ->
+                (* We need to execute to get the new parsing state *)
+                ignore(finish ~doc:dummy_doc);
+                let parsing = Vernacstate.Parser.cur_state () in
+                (* If execution has not been put in cache, we need to save the parsing state *)
+                if (VCS.get_info id).state == EmptyState then VCS.set_parsing_state id parsing;
+                parsing
+              | VtLater -> VCS.set_parsing_state id head_parsing; head_parsing
+            end
+          in
+          (* We save the parsing state on non-master branches *)
+          List.iter (fun id ->
+              if (VCS.get_info id).state == EmptyState then
+              VCS.set_parsing_state id parsing_state) new_ids;
+          `Ok
 
-      (* Unknown: we execute it, check for open goals and propagate sideeff *)
-      | VtUnknown, VtNow ->
-          let in_proof = not (VCS.Branch.equal head VCS.Branch.master) in
-          let id = VCS.new_node ~id:newtip () in
-          let head_id = VCS.get_branch_pos head in
-          let _st : unit = Reach.known_state ~doc ~cache:`Yes head_id in (* ensure it is ok *)
-          let step () =
-            VCS.checkout VCS.Branch.master;
-            let mid = VCS.get_branch_pos VCS.Branch.master in
-            let _st' : unit = Reach.known_state ~doc ~cache:(VCS.is_interactive ()) mid in
-            let st = Vernacstate.freeze_interp_state `No in
-            ignore(stm_vernac_interp id st x);
-            (* Vernac x may or may not start a proof *)
-            if not in_proof && Proof_global.there_are_pending_proofs () then
-            begin
-              let bname = VCS.mk_branch_name x in
-              let opacity_of_produced_term = function
-                (* This AST is ambiguous, hence we check it dynamically *)
-                | VernacInstance (false, _,_ , None, _) -> GuaranteesOpacity
-                | _ -> Doesn'tGuaranteeOpacity in
-              VCS.commit id (Fork (x,bname,opacity_of_produced_term (Vernacprop.under_control x.expr),[]));
-              let proof_mode = default_proof_mode () in
-              VCS.branch bname (`Proof (proof_mode, VCS.proof_nesting () + 1));
-              Proof_global.activate_proof_mode proof_mode [@ocaml.warning "-3"];
-            end else begin
-              begin match (VCS.get_branch head).VCS.kind with
-              | `Edit _ -> VCS.commit id (mkTransCmd x [] in_proof `MainQueue);
-              | `Master -> VCS.commit id (mkTransCmd x [] in_proof `MainQueue);
-              | `Proof _ ->
-                  VCS.commit id (mkTransCmd x [] in_proof `MainQueue);
-                  (* We hope it can be replayed, but we can't really know *)
-                  VCS.propagate_sideff ~action:(ReplayCommand x);
-              end;
-              VCS.checkout_shallowest_proof_branch ();
-            end in
-          State.define ~doc ~safe_id:head_id ~cache:`Yes step id;
-          Backtrack.record (); `Ok
+      | VtProofMode pm, VtNow ->
+        let proof_mode = Pvernac.lookup_proof_mode pm in
+        let id = VCS.new_node ~id:newtip proof_mode () in
+        VCS.commit id (mkTransCmd x [] false `MainQueue);
+        VCS.set_parsing_state id head_parsing;
+        Backtrack.record (); `Ok
 
-      | VtUnknown, VtLater ->
-          anomaly(str"classifier: VtUnknown must imply VtNow.")
+      | VtProofMode _, VtLater ->
+          anomaly(str"classifier: VtProofMode must imply VtNow.")
     end in
     let pr_rc rc = match rc with
       | `Ok -> Pp.(seq [str "newtip ("; str (Stateid.to_string (VCS.cur_tip ())); str ")"])
@@ -2982,54 +3089,19 @@ let process_transaction ~doc ?(newtip=Stateid.fresh ())
 
 let get_ast ~doc id =
   match VCS.visit id with
-  | { step = `Cmd { cast = { loc; expr } } }
-  | { step = `Fork (({ loc; expr }, _, _, _), _) }
-  | { step = `Sideff ((ReplayCommand {loc; expr}) , _) }
-  | { step = `Qed ({ qast = { loc; expr } }, _) } ->
-         Some (Loc.tag ?loc expr)
+  | { step = `Cmd { cast = { expr } } }
+  | { step = `Fork (({ expr }, _, _, _), _) }
+  | { step = `Sideff ((ReplayCommand { expr }) , _) }
+  | { step = `Qed ({ qast = { expr } }, _) } ->
+    Some expr
   | _ -> None
 
 let stop_worker n = Slaves.cancel_worker n
 
-(* We must parse on top of a state id, it should be something like:
-
-   - get parsing information for that state.
-   - feed the parsable / parser with the right parsing information.
-   - call the parser
-
-   Now, the invariant in ensured by the callers, but this is a bit
-   problematic.
-*)
-exception End_of_input
-
-let parse_sentence ~doc sid pa =
-  (* XXX: Should this restore the previous state?
-     Using reach here to try to really get to the
-     proper state makes the error resilience code fail *)
-  (* Reach.known_state ~cache:`Yes sid; *)
-  let cur_tip = VCS.cur_tip () in
-  let real_tip = !State.cur_id in
-  if not (Stateid.equal sid cur_tip) then
-    user_err ~hdr:"Stm.parse_sentence"
-      (str "Currently, the parsing api only supports parsing at the tip of the document." ++ fnl () ++
-       str "You wanted to parse at: "  ++ str (Stateid.to_string sid) ++
-       str " but the current tip is: " ++ str (Stateid.to_string cur_tip)) ;
-  if not (Stateid.equal sid real_tip) && !Flags.debug && !stm_debug then
-    Feedback.msg_debug
-      (str "Warning, the real tip doesn't match the current tip." ++
-       str "You wanted to parse at: "  ++ str (Stateid.to_string sid) ++
-       str " but the real tip is: " ++ str (Stateid.to_string real_tip) ++ fnl () ++
-       str "This is usually due to use of Stm.observe to evaluate a state different than the tip. " ++
-       str "All is good if not parsing changes occur between the two states, however if they do, a problem might occur.");
-  Flags.with_option Flags.we_are_parsing (fun () ->
-      try
-        match Pcoq.Entry.parse Pvernac.main_entry pa with
-        | None            -> raise End_of_input
-        | Some (loc, cmd) -> CAst.make ~loc cmd
-      with e when CErrors.noncritical e ->
-        let (e, info) = CErrors.push e in
-        Exninfo.iraise (e, info))
-    ()
+let parse_sentence ~doc sid ~entry pa =
+  let ps = Option.get @@ VCS.get_parsing_state sid in
+  let proof_mode = VCS.get_proof_mode sid in
+  Vernacstate.Parser.parse ps (entry proof_mode) pa
 
 (* You may need to know the len + indentation of previous command to compute
  * the indentation of the current one.
@@ -3038,8 +3110,8 @@ let parse_sentence ~doc sid pa =
 let ind_len_loc_of_id sid =
   if Stateid.equal sid Stateid.initial then None
   else match (VCS.visit sid).step with
-  | `Cmd { ctac = true; cast = { indentation; strlen; loc } } ->
-         Some (indentation, strlen, loc)
+  | `Cmd { ctac = true; cast = { indentation; strlen; expr } } ->
+    Some (indentation, strlen, expr.CAst.loc)
   | _ -> None
 
 (* the indentation logic works like this: if the beginning of the
@@ -3066,8 +3138,9 @@ let compute_indentation ?loc sid = Option.cata (fun loc ->
     eff_indent, len
   ) (0, 0) loc
 
-let add ~doc ~ontop ?newtip verb ({ CAst.loc; v=ast } as last) =
-  Hook.(get document_edit_notify).add_hook last ontop;
+let add ~doc ~ontop ?newtip verb ast =
+  Hook.(get document_edit_notify).add_hook ast ontop;
+  let loc = ast.CAst.loc in
   let cur_tip = VCS.cur_tip () in
   if not (Stateid.equal ontop cur_tip) then
     user_err ?loc ~hdr:"Stm.add"
@@ -3077,7 +3150,7 @@ let add ~doc ~ontop ?newtip verb ({ CAst.loc; v=ast } as last) =
   let indentation, strlen = compute_indentation ?loc ontop in
   (* XXX: Classifiy vernac should be moved inside process transaction *)
   let clas = Vernac_classifier.classify_vernac ast in
-  let aast = { verbose = verb; indentation; strlen; loc; expr = ast } in
+  let aast = { verbose = verb; indentation; strlen; expr = ast } in
   match process_transaction ~doc ?newtip aast clas with
   | `Ok -> doc, VCS.cur_tip (), `NewTip
   | `Unfocus qed_id -> doc, qed_id, `Unfocus (VCS.cur_tip ())
@@ -3091,23 +3164,24 @@ type focus = {
 }
 
 let query ~doc ~at ~route s =
-  stm_purify (fun s ->
+  State.purify (fun s ->
     if Stateid.equal at Stateid.dummy then ignore(finish ~doc:dummy_doc)
-    else Reach.known_state ~doc ~cache:`Yes at;
-    try
-      while true do
-        let { CAst.loc; v=ast } = parse_sentence ~doc at s in
-        let indentation, strlen = compute_indentation ?loc at in
-        let st = State.get_cached at in
-        let aast = { verbose = true; indentation; strlen; loc; expr = ast } in
-        ignore(stm_vernac_interp ~route at st aast)
-      done;
-    with
-    | End_of_input -> ()
-    | exn ->
-      let iexn = CErrors.push exn in
-      Exninfo.iraise iexn
-    )
+    else Reach.known_state ~doc ~cache:true at;
+      let rec loop () =
+        match parse_sentence ~doc at ~entry:Pvernac.main_entry s with
+        | None -> ()
+        | Some ast ->
+          let loc = ast.CAst.loc in
+          let indentation, strlen = compute_indentation ?loc at in
+          let st = State.get_cached at in
+          let aast = {
+            verbose = true; indentation; strlen;
+            expr = ast } in
+          ignore(stm_vernac_interp ~route at st aast);
+          loop ()
+      in
+      loop ()
+  )
   s
 
 let edit_at ~doc id =
@@ -3116,10 +3190,9 @@ let edit_at ~doc id =
   let vcs = VCS.backup () in
   let on_cur_branch id =
     let rec aux cur =
-      if id = cur then true
-      else match VCS.visit cur with
+      match VCS.visit cur with
       | { step = `Fork _ } -> false
-      | { next } -> aux next in
+      | { next } -> if id = cur then true else aux next in
     aux (VCS.get_branch_pos (VCS.current_branch ())) in
   let rec is_pure_aux id =
     let view = VCS.visit id in
@@ -3146,21 +3219,21 @@ let edit_at ~doc id =
       | { step = `Sideff (ReplayCommand _,id) } -> id
       | { step = `Sideff _ } -> tip
       | { next } -> master_for_br root next in
-  let reopen_branch start at_id mode qed_id tip old_branch =
+  let reopen_branch start at_id qed_id tip old_branch =
     let master_id, cancel_switch, keep =
       (* Hum, this should be the real start_id in the cluster and not next *)
       match VCS.visit qed_id with
       | { step = `Qed ({ fproof = Some (_,cs); keep },_) } -> start, cs, keep
       | _ -> anomaly (str "ProofTask not ending with Qed.") in
     VCS.branch ~root:master_id ~pos:id
-      VCS.edit_branch (`Edit (mode, qed_id, master_id, keep, old_branch));
+      VCS.edit_branch (`Edit (qed_id, master_id, keep, old_branch));
     VCS.delete_boxes_of id;
     cancel_switch := true;
     Reach.known_state ~doc ~cache:(VCS.is_interactive ()) id;
     VCS.checkout_shallowest_proof_branch ();
     `Focus { stop = qed_id; start = master_id; tip } in
   let no_edit = function
-   | `Edit (pm, _,_,_,_) -> `Proof(pm,1)
+   | `Edit (_,_,_,_) -> `Proof 1
    | x -> x in
   let backto id bn =
     List.iter VCS.delete_branch (VCS.branches ());
@@ -3178,8 +3251,7 @@ let edit_at ~doc id =
     VCS.delete_boxes_of id;
     VCS.gc ();
     VCS.print ();
-    if not !cur_opt.async_proofs_full then
-      Reach.known_state ~doc ~cache:(VCS.is_interactive ()) id;
+    Reach.known_state ~doc ~cache:(VCS.is_interactive ()) id;
     VCS.checkout_shallowest_proof_branch ();
     `NewTip in
   try
@@ -3187,17 +3259,17 @@ let edit_at ~doc id =
       let focused = List.exists ((=) VCS.edit_branch) (VCS.branches ()) in
       let branch_info =
         match snd (VCS.get_info id).vcs_backup with
-        | Some{ mine = bn, { VCS.kind = `Proof(m,_) }} -> Some(m,bn)
-        | Some{ mine = _, { VCS.kind = `Edit(m,_,_,_,bn) }} -> Some (m,bn)
+        | Some{ mine = bn, { VCS.kind = `Proof _ }} -> Some bn
+        | Some{ mine = _, { VCS.kind = `Edit(_,_,_,bn) }} -> Some bn
         | _ -> None in
       match focused, VCS.proof_task_box_of id, branch_info with
       | _, Some _, None -> assert false
-      | false, Some { qed = qed_id ; lemma = start }, Some(mode,bn) ->
+      | false, Some { qed = qed_id ; lemma = start }, Some bn ->
           let tip = VCS.cur_tip () in
           if has_failed qed_id && is_pure qed_id && not !cur_opt.async_proofs_never_reopen_branch
-          then reopen_branch start id mode qed_id tip bn
+          then reopen_branch start id qed_id tip bn
           else backto id (Some bn)
-      | true, Some { qed = qed_id }, Some(mode,bn) ->
+      | true, Some { qed = qed_id }, Some bn ->
           if on_cur_branch id then begin
             assert false
           end else if is_ancestor_of_cur_branch id then begin
@@ -3216,7 +3288,7 @@ let edit_at ~doc id =
           end else begin
             anomaly(str"Cannot leave an `Edit branch open.")
           end
-      | false, None, Some(_,bn) -> backto id (Some bn)
+      | false, None, Some bn -> backto id (Some bn)
       | false, None, None -> backto id None
     in
     VCS.print ();

@@ -60,7 +60,6 @@ let init () =
 \n    <menuitem action='Find' />\
 \n    <menuitem action='Find Next' />\
 \n    <menuitem action='Find Previous' />\
-\n    <menuitem action='Complete Word' />\
 \n    <separator />\
 \n    <menuitem action='External editor' />\
 \n    <separator />\
@@ -141,6 +140,8 @@ let init () =
 \n    <menuitem action='Uncomment' />\
 \n    <separator />\
 \n    <menuitem action='Coqtop arguments' />\
+\n    <separator />\
+\n    <menuitem action='LaTeX-to-unicode' />\
 \n  </menu>\
 \n  <menu action='Compile'>\
 \n    <menuitem action='Compile buffer' />\

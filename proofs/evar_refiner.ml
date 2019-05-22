@@ -10,7 +10,6 @@
 
 open CErrors
 open Util
-open Names
 open Evd
 open Evarutil
 open Evarsolve
@@ -38,8 +37,8 @@ let define_and_solve_constraints evk c env evd =
   match
     List.fold_left
       (fun p (pbty,env,t1,t2) -> match p with
-        | Success evd -> Evarconv.evar_conv_x full_transparent_state env evd pbty t1 t2
-	| UnifFailure _ as x -> x) (Success evd)
+        | Success evd -> Evarconv.evar_conv_x (Evarconv.default_flags_of TransparentState.full) env evd pbty t1 t2
+        | UnifFailure _ as x -> x) (Success evd)
       pbs
   with
     | Success evd -> evd
@@ -53,9 +52,11 @@ let w_refine (evk,evi) (ltac_var,rawc) sigma =
     let flags = {
       Pretyping.use_typeclasses = true;
       Pretyping.solve_unification_constraints = true;
-      Pretyping.use_hook = None;
       Pretyping.fail_evar = false;
-      Pretyping.expand_evars = true } in
+      Pretyping.expand_evars = true;
+      Pretyping.program_mode = false;
+      Pretyping.polymorphic = false;
+    } in
     try Pretyping.understand_ltac flags
       env sigma ltac_var (Pretyping.OfType evi.evar_concl) rawc
     with e when CErrors.noncritical e ->

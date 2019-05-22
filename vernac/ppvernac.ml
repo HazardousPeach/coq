@@ -33,7 +33,10 @@ open Pputils
 
   let pr_constr = pr_constr_expr
   let pr_lconstr = pr_lconstr_expr
-  let pr_spc_lconstr = pr_sep_com spc pr_lconstr_expr
+  let pr_spc_lconstr =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    pr_sep_com spc @@ pr_lconstr_expr env sigma
 
   let pr_uconstraint (l, d, r) =
     pr_glob_level l ++ spc () ++ Univ.pr_constraint_type d ++ spc () ++
@@ -92,7 +95,10 @@ open Pputils
     | VernacEndSubproof -> str""
     | _ -> str"."
 
-  let pr_gen t = Pputils.pr_raw_generic (Global.env ()) t
+  let pr_gen t =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    Pputils.pr_raw_generic env sigma t
 
   let sep = fun _ -> spc()
   let sep_v2 = fun _ -> str"," ++ spc()
@@ -142,7 +148,10 @@ open Pputils
   let pr_search_about (b,c) =
     (if b then str "-" else mt()) ++
       match c with
-        | SearchSubPattern p -> pr_constr_pattern_expr p
+        | SearchSubPattern p ->
+          let env = Global.env () in
+          let sigma = Evd.from_env env in
+          pr_constr_pattern_expr env sigma p
         | SearchString (s,sc) -> qs s ++ pr_opt (fun sc -> str "%" ++ str sc) sc
 
   let pr_search a gopt b pr_p =
@@ -164,15 +173,10 @@ open Pputils
       pr_opt (prlist_with_sep sep pr_option_ref_value) b
 
   let pr_set_option a b =
-    let pr_opt_value = function
-      | IntValue None -> assert false
-    (* This should not happen because of the grammar *)
-      | IntValue (Some n) -> spc() ++ int n
-      | StringValue s -> spc() ++ str s
-      | StringOptValue None -> mt()
-      | StringOptValue (Some s) -> spc() ++ str s
-      | BoolValue b -> mt()
-    in pr_printoption a None ++ pr_opt_value b
+    pr_printoption a None ++ (match b with
+        | OptionUnset | OptionSetTrue -> mt()
+        | OptionSetInt n -> spc() ++ int n
+        | OptionSetString s -> spc() ++ quote (str s))
 
   let pr_opt_hintbases l = match l with
     | [] -> mt()
@@ -225,8 +229,10 @@ open Pputils
           ++ spc() ++ prlist_with_sep spc pr_qualid c
         | HintsExtern (n,c,tac) ->
           let pat = match c with None -> mt () | Some pat -> pr_pat pat in
+          let env = Global.env () in
+          let sigma = Evd.from_env env in
           keyword "Extern" ++ spc() ++ int n ++ spc() ++ pat ++ str" =>" ++
-            spc() ++ Pputils.pr_raw_generic (Global.env ()) tac
+            spc() ++ Pputils.pr_raw_generic env sigma tac
     in
     hov 2 (keyword "Hint "++ pph ++ opth)
 
@@ -298,7 +304,9 @@ open Pputils
       pr_opt (fun sc -> str ": " ++ str sc) scopt
 
   let pr_binders_arg =
-    pr_non_empty_arg pr_binders
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    pr_non_empty_arg @@ pr_binders env sigma
 
   let pr_and_type_binders_arg bl =
     pr_binders_arg bl
@@ -312,7 +320,7 @@ open Pputils
         ) ++
           hov 0 ((if dep then keyword "Induction for" else keyword "Minimality for")
                  ++ spc() ++ pr_smart_global ind) ++ spc() ++
-          hov 0 (keyword "Sort" ++ spc() ++ Termops.pr_sort_family s)
+          hov 0 (keyword "Sort" ++ spc() ++ Sorts.pr_sort_family s)
       | CaseScheme (dep,ind,s) ->
         (match idop with
           | Some id -> hov 0 (pr_lident id ++ str" :=") ++ spc()
@@ -320,7 +328,7 @@ open Pputils
         ) ++
           hov 0 ((if dep then keyword "Elimination for" else keyword "Case for")
                  ++ spc() ++ pr_smart_global ind) ++ spc() ++
-          hov 0 (keyword "Sort" ++ spc() ++ Termops.pr_sort_family s)
+          hov 0 (keyword "Sort" ++ spc() ++ Sorts.pr_sort_family s)
       | EqualityScheme ind ->
         (match idop with
           | Some id -> hov 0 (pr_lident id ++ str" :=") ++ spc()
@@ -363,7 +371,7 @@ open Pputils
       match factorize l with
         | (xl,((c', t') as r))::l'
             when (c : bool) == c' && Pervasives.(=) t t' ->
-          (** FIXME: we need equality on constr_expr *)
+          (* FIXME: we need equality on constr_expr *)
           (idl@xl,r)::l'
         | l' -> (idl,(c,t))::l'
 
@@ -380,7 +388,7 @@ open Pputils
 
   let pr_thm_token k = keyword (Kindops.string_of_theorem_kind k)
 
-  let pr_syntax_modifier = function
+  let pr_syntax_modifier = let open Gramlib.Gramext in function
     | SetItemLevel (l,bko,n) ->
       prlist_with_sep sep_v2 str l ++ spc () ++ pr_at_level_opt n ++
       pr_opt pr_constr_as_binder_kind bko
@@ -402,25 +410,35 @@ open Pputils
       hov 1 (str"(" ++ prlist_with_sep sep_v2 pr_syntax_modifier l ++ str")")
 
   let pr_rec_definition ((iddecl,ro,bl,type_,def),ntn) =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
     let pr_pure_lconstr c = Flags.without_option Flags.beautify pr_lconstr c in
-    let annot = pr_guard_annot pr_lconstr_expr bl ro in
+    let annot = pr_guard_annot (pr_lconstr_expr env sigma) bl ro in
     pr_ident_decl iddecl ++ pr_binders_arg bl ++ annot
-    ++ pr_type_option (fun c -> spc() ++ pr_lconstr_expr c) type_
-    ++ pr_opt (fun def -> str":=" ++ brk(1,2) ++ pr_pure_lconstr def) def
-    ++ prlist (pr_decl_notation pr_constr) ntn
+    ++ pr_type_option (fun c -> spc() ++ pr_lconstr_expr env sigma c) type_
+    ++ pr_opt (fun def -> str":=" ++ brk(1,2) ++ pr_pure_lconstr env sigma def) def
+    ++ prlist (pr_decl_notation @@ pr_constr env sigma) ntn
 
   let pr_statement head (idpl,(bl,c)) =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
     hov 2
       (head ++ spc() ++ pr_ident_decl idpl ++ spc() ++
-         (match bl with [] -> mt() | _ -> pr_binders bl ++ spc()) ++
+         (match bl with [] -> mt() | _ -> pr_binders env sigma bl ++ spc()) ++
          str":" ++ pr_spc_lconstr c)
 
 (**************************************)
 (* Pretty printer for vernac commands *)
 (**************************************)
 
-  let pr_constrarg c = spc () ++ pr_constr c
-  let pr_lconstrarg c = spc () ++ pr_lconstr c
+  let pr_constrarg c =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    spc () ++ pr_constr env sigma c
+  let pr_lconstrarg c =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
+    spc () ++ pr_lconstr env sigma c
   let pr_intarg n = spc () ++ int n
 
   let pr_oc = function
@@ -428,22 +446,24 @@ open Pputils
     | Some true -> str" :>"
     | Some false -> str" :>>"
 
-  let pr_record_field ((x, pri), ntn) =
+  let pr_record_field (x, { rf_subclass = oc ; rf_priority = pri ; rf_notation = ntn }) =
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
     let prx = match x with
-      | (oc,AssumExpr (id,t)) ->
+      | AssumExpr (id,t) ->
         hov 1 (pr_lname id ++
                  pr_oc oc ++ spc() ++
-                 pr_lconstr_expr t)
-      | (oc,DefExpr(id,b,opt)) -> (match opt with
+                 pr_lconstr_expr env sigma t)
+      | DefExpr(id,b,opt) -> (match opt with
           | Some t ->
             hov 1 (pr_lname id ++
                      pr_oc oc ++ spc() ++
-                     pr_lconstr_expr t ++ str" :=" ++ pr_lconstr b)
+                     pr_lconstr_expr env sigma t ++ str" :=" ++ pr_lconstr env sigma b)
           | None ->
             hov 1 (pr_lname id ++ str" :=" ++ spc() ++
-                     pr_lconstr b)) in
+                     pr_lconstr env sigma b)) in
     let prpri = match pri with None -> mt() | Some i -> str "| " ++ int i in
-    prx ++ prpri ++ prlist (pr_decl_notation pr_constr) ntn
+    prx ++ prpri ++ prlist (pr_decl_notation @@ pr_constr env sigma) ntn
 
   let pr_record_decl b c fs =
     pr_opt pr_lident c ++ (if c = None then str"{" else str" {") ++
@@ -456,6 +476,8 @@ open Pputils
       keyword "Print Section" ++ spc() ++ Libnames.pr_qualid s
     | PrintGrammar ent ->
       keyword "Print Grammar" ++ spc() ++ str ent
+    | PrintCustomGrammar ent ->
+      keyword "Print Custom Grammar" ++ spc() ++ str ent
     | PrintLoadPath dir ->
       keyword "Print LoadPath" ++ pr_opt DirPath.print dir
     | PrintModules ->
@@ -492,12 +514,13 @@ open Pputils
       keyword "Print Hint *"
     | PrintHintDbName s ->
       keyword "Print HintDb" ++ spc () ++ str s
-    | PrintUniverses (b, fopt) ->
+    | PrintUniverses (b, g, fopt) ->
       let cmd =
         if b then "Print Sorted Universes"
         else "Print Universes"
       in
-      keyword cmd ++ pr_opt str fopt
+      let pr_subgraph = prlist_with_sep spc pr_qualid in
+      keyword cmd ++ pr_opt pr_subgraph g ++ pr_opt str fopt
     | PrintName (qid,udecl) ->
       keyword "Print" ++ spc()  ++ pr_smart_global qid ++ pr_univ_name_list udecl
     | PrintModuleType qid ->
@@ -565,6 +588,8 @@ open Pputils
 
   let pr_vernac_expr v =
     let return = tag_vernac v in
+    let env = Global.env () in
+    let sigma = Evd.from_env env in
     match v with
       | VernacLoad (f,s) ->
         return (
@@ -699,7 +724,7 @@ open Pputils
           | None -> mt()
           | Some r ->
             keyword "Eval" ++ spc() ++
-              pr_red_expr (pr_constr, pr_lconstr, pr_smart_global, pr_constr) keyword r ++
+              Ppred.pr_red_expr_env env sigma (pr_constr, pr_lconstr, pr_smart_global, pr_constr) keyword r ++
               keyword " in" ++ spc()
         in
         let pr_def_body = function
@@ -708,7 +733,7 @@ open Pputils
               | None -> mt()
               | Some ty -> spc() ++ str":" ++ pr_spc_lconstr ty
             in
-            (pr_binders_arg bl,ty,Some (pr_reduce red ++ pr_lconstr body))
+            (pr_binders_arg bl,ty,Some (pr_reduce red ++ pr_lconstr env sigma body))
           | ProveBody (bl,t) ->
             let typ u = if (fst id).v = Anonymous then (assert (bl = []); u) else (str" :" ++ u) in
             (pr_binders_arg bl, typ (pr_spc_lconstr t), None) in
@@ -745,7 +770,7 @@ open Pputils
         let n = List.length (List.flatten (List.map fst (List.map snd l))) in
         let pr_params (c, (xl, t)) =
           hov 2 (prlist_with_sep sep pr_ident_decl xl ++ spc() ++
-            (if c then str":>" else str":" ++ spc() ++ pr_lconstr_expr t)) in
+            (if c then str":>" else str":" ++ spc() ++ pr_lconstr_expr env sigma t)) in
         let assumptions = prlist_with_sep spc (fun p -> hov 1 (str "(" ++ pr_params p ++ str ")")) l in
         return (hov 2 (pr_assumption_token (n > 1) discharge kind ++
                        pr_non_empty_arg pr_assumption_inline t ++ spc() ++ assumptions))
@@ -770,9 +795,9 @@ open Pputils
             str key ++ spc() ++
               (if coe then str"> " else str"") ++ pr_ident_decl iddecl ++
               pr_and_type_binders_arg indpar ++
-              pr_opt (fun s -> str":" ++ spc() ++ pr_lconstr_expr s) s ++
+              pr_opt (fun s -> str":" ++ spc() ++ pr_lconstr_expr env sigma s) s ++
               str" :=") ++ pr_constructor_list k lc ++
-            prlist (pr_decl_notation pr_constr) ntn
+            prlist (pr_decl_notation @@ pr_constr env sigma) ntn
         in
         let key =
           let (_,_,_,k,_),_ = List.hd l in
@@ -813,10 +838,10 @@ open Pputils
           | NoDischarge -> str ""
         in
         let pr_onecorec ((iddecl,bl,c,def),ntn) =
-          pr_ident_decl iddecl ++ spc() ++ pr_binders bl ++ spc() ++ str":" ++
-            spc() ++ pr_lconstr_expr c ++
-            pr_opt (fun def -> str":=" ++ brk(1,2) ++ pr_lconstr def) def ++
-            prlist (pr_decl_notation pr_constr) ntn
+          pr_ident_decl iddecl ++ spc() ++ pr_binders env sigma bl ++ spc() ++ str":" ++
+            spc() ++ pr_lconstr_expr env sigma c ++
+            pr_opt (fun def -> str":=" ++ brk(1,2) ++ pr_lconstr env sigma def) def ++
+            prlist (pr_decl_notation @@ pr_constr env sigma) ntn
         in
         return (
           hov 0 (local ++ keyword "CoFixpoint" ++ spc() ++
@@ -886,10 +911,9 @@ open Pputils
               spc() ++ pr_class_rawexpr c2)
         )
 
-      | VernacInstance (abst, sup, (instid, bk, cl), props, info) ->
+      | VernacInstance (sup, (instid, bk, cl), props, info) ->
         return (
           hov 1 (
-            (if abst then keyword "Declare" ++ spc () else mt ()) ++
             keyword "Instance" ++
             (match instid with
              | {loc; v = Name id}, l -> spc () ++ pr_ident_decl (CAst.(make ?loc id),l) ++ spc ()
@@ -897,12 +921,22 @@ open Pputils
             pr_and_type_binders_arg sup ++
               str":" ++ spc () ++
               (match bk with Implicit -> str "! " | Explicit -> mt ()) ++
-              pr_constr cl ++ pr_hint_info pr_constr_pattern_expr info ++
+              pr_constr env sigma cl ++ pr_hint_info (pr_constr_pattern_expr env sigma) info ++
               (match props with
                 | Some (true, { v = CRecord l}) -> spc () ++ str":=" ++ spc () ++ str"{" ++ pr_record_body l ++ str "}"
                 | Some (true,_) -> assert false
-                | Some (false,p) -> spc () ++ str":=" ++ spc () ++ pr_constr p
+                | Some (false,p) -> spc () ++ str":=" ++ spc () ++ pr_constr env sigma p
                 | None -> mt()))
+        )
+
+      | VernacDeclareInstance (sup, (instid, bk, cl), info) ->
+        return (
+          hov 1 (
+            keyword "Declare Instance" ++ spc () ++ pr_ident_decl instid ++ spc () ++
+            pr_and_type_binders_arg sup ++
+              str":" ++ spc () ++
+              (match bk with Implicit -> str "! " | Explicit -> mt ()) ++
+              pr_constr env sigma cl ++ pr_hint_info (pr_constr_pattern_expr env sigma) info)
         )
 
       | VernacContext l ->
@@ -911,9 +945,9 @@ open Pputils
             keyword "Context" ++ pr_and_type_binders_arg l)
         )
 
-      | VernacDeclareInstances insts ->
-         let pr_inst (id, info) =
-           pr_qualid id ++ pr_hint_info pr_constr_pattern_expr info
+      | VernacExistingInstance insts ->
+        let pr_inst (id, info) =
+           pr_qualid id ++ pr_hint_info (pr_constr_pattern_expr env sigma) info
          in
          return (
           hov 1 (keyword "Existing" ++ spc () ++
@@ -921,32 +955,32 @@ open Pputils
                  spc () ++ prlist_with_sep (fun () -> str", ") pr_inst insts)
         )
 
-      | VernacDeclareClass id ->
+      | VernacExistingClass id ->
         return (
           hov 1 (keyword "Existing" ++ spc () ++ keyword "Class" ++ spc () ++ pr_qualid id)
         )
 
       (* Modules and Module Types *)
       | VernacDefineModule (export,m,bl,tys,bd) ->
-        let b = pr_module_binders bl pr_lconstr in
+        let b = pr_module_binders bl (pr_lconstr env sigma) in
         return (
           hov 2 (keyword "Module" ++ spc() ++ pr_require_token export ++
                    pr_lident m ++ b ++
-                   pr_of_module_type pr_lconstr tys ++
+                   pr_of_module_type (pr_lconstr env sigma) tys ++
                    (if List.is_empty bd then mt () else str ":= ") ++
                    prlist_with_sep (fun () -> str " <+")
-                   (pr_module_ast_inl true pr_lconstr) bd)
+                   (pr_module_ast_inl true (pr_lconstr env sigma)) bd)
         )
       | VernacDeclareModule (export,id,bl,m1) ->
-        let b = pr_module_binders bl pr_lconstr in
+        let b = pr_module_binders bl (pr_lconstr env sigma) in
         return (
           hov 2 (keyword "Declare Module" ++ spc() ++ pr_require_token export ++
                    pr_lident id ++ b ++ str " :" ++
-                   pr_module_ast_inl true pr_lconstr m1)
+                   pr_module_ast_inl true (pr_lconstr env sigma) m1)
         )
       | VernacDeclareModuleType (id,bl,tyl,m) ->
-        let b = pr_module_binders bl pr_lconstr in
-        let pr_mt = pr_module_ast_inl true pr_lconstr in
+        let b = pr_module_binders bl (pr_lconstr env sigma) in
+        let pr_mt = pr_module_ast_inl true (pr_lconstr env sigma) in
         return (
           hov 2 (keyword "Module Type " ++ pr_lident id ++ b ++
                    prlist_strict (fun m -> str " <:" ++ pr_mt m) tyl ++
@@ -954,7 +988,7 @@ open Pputils
                    prlist_with_sep (fun () -> str " <+ ") pr_mt m)
         )
       | VernacInclude (mexprs) ->
-        let pr_m = pr_module_ast_inl false pr_lconstr in
+        let pr_m = pr_module_ast_inl false (pr_lconstr env sigma) in
         return (
           hov 2 (keyword "Include" ++ spc() ++
                    prlist_with_sep (fun () -> str " <+ ") pr_m mexprs)
@@ -1003,7 +1037,7 @@ open Pputils
                    pr_opt_hintbases dbnames)
         )
       | VernacHints (dbnames,h) ->
-        return (pr_hints dbnames h pr_constr pr_constr_pattern_expr)
+        return (pr_hints dbnames h (pr_constr env sigma) (pr_constr_pattern_expr env sigma))
       | VernacSyntacticDefinition (id,(ids,c),compat) ->
         return (
           hov 2
@@ -1023,9 +1057,9 @@ open Pputils
               let pr_s = function None -> str"" | Some {v=s} -> str "%" ++ str s in
               let pr_if b x = if b then x else str "" in
               let pr_br imp x = match imp with
-                | Vernacexpr.Implicit -> str "[" ++ x ++ str "]"
-                | Vernacexpr.MaximallyImplicit -> str "{" ++ x ++ str "}"
-                | Vernacexpr.NotImplicit -> x in
+                | Impargs.Implicit -> str "[" ++ x ++ str "]"
+                | Impargs.MaximallyImplicit -> str "{" ++ x ++ str "}"
+                | Impargs.NotImplicit -> x in
               let rec print_arguments n l =
                 match n, l with
                   | Some 0, l -> spc () ++ str"/" ++ print_arguments None l
@@ -1061,7 +1095,7 @@ open Pputils
         let n = List.length (List.flatten (List.map fst bl)) in
         return (
           hov 2 (tag_keyword (str"Implicit Type" ++ str (if n > 1 then "s " else " "))
-                 ++ pr_ne_params_list pr_lconstr_expr (List.map (fun sb -> false,sb) bl))
+                 ++ pr_ne_params_list (pr_lconstr_expr env sigma) (List.map (fun sb -> false,sb) bl))
         )
       | VernacGeneralizable g ->
         return (
@@ -1103,15 +1137,11 @@ open Pputils
           hov 1 (keyword "Strategy" ++ spc() ++
                    hv 0 (prlist_with_sep sep pr_line l))
         )
-      | VernacUnsetOption (export, na) ->
-        let export = if export then keyword "Export" ++ spc () else mt () in
-        return (
-          hov 1 (export ++ keyword "Unset" ++ spc() ++ pr_printoption na None)
-        )
       | VernacSetOption (export, na,v) ->
         let export = if export then keyword "Export" ++ spc () else mt () in
+        let set = if v == OptionUnset then "Unset" else "Set" in
         return (
-          hov 2 (export ++ keyword "Set" ++ spc() ++ pr_set_option na v)
+          hov 2 (export ++ keyword set ++ spc() ++ pr_set_option na v)
         )
       | VernacAddOption (na,l) ->
         return (
@@ -1133,9 +1163,9 @@ open Pputils
         let pr_mayeval r c = match r with
           | Some r0 ->
             hov 2 (keyword "Eval" ++ spc() ++
-                     pr_red_expr (pr_constr,pr_lconstr,pr_smart_global, pr_constr) keyword r0 ++
-                     spc() ++ keyword "in" ++ spc () ++ pr_lconstr c)
-          | None -> hov 2 (keyword "Check" ++ spc() ++ pr_lconstr c)
+                     Ppred.pr_red_expr_env env sigma (pr_constr,pr_lconstr,pr_smart_global, pr_constr) keyword r0 ++
+                     spc() ++ keyword "in" ++ spc () ++ pr_lconstr env sigma c)
+          | None -> hov 2 (keyword "Check" ++ spc() ++ pr_lconstr env sigma c)
         in
         let pr_i = match io with None -> mt ()
                                | Some i -> Goal_select.pr_goal_selector i ++ str ": " in
@@ -1145,12 +1175,12 @@ open Pputils
       | VernacDeclareReduction (s,r) ->
         return (
           keyword "Declare Reduction" ++ spc () ++ str s ++ str " := " ++
-            pr_red_expr (pr_constr,pr_lconstr,pr_smart_global, pr_constr) keyword r
+            Ppred.pr_red_expr_env env sigma (pr_constr,pr_lconstr,pr_smart_global, pr_constr) keyword r
         )
       | VernacPrint p ->
         return (pr_printable p)
       | VernacSearch (sea,g,sea_r) ->
-        return (pr_search sea g sea_r pr_constr_pattern_expr)
+        return (pr_search sea g sea_r @@ pr_constr_pattern_expr env sigma)
       | VernacLocate loc ->
         let pr_locate =function
           | LocateAny qid -> pr_smart_global qid
@@ -1172,11 +1202,17 @@ open Pputils
           hov 2
             (keyword "Register Inline" ++ spc() ++ pr_qualid qid)
         )
+      | VernacPrimitive(id,r,typopt) ->
+         hov 2
+             (keyword "Primitive" ++ spc() ++ pr_lident id ++
+                (Option.cata (fun ty -> spc() ++ str":" ++ pr_spc_lconstr ty) (mt()) typopt) ++ spc() ++
+                str ":=" ++ spc() ++
+                str (CPrimitives.op_or_type_to_string r))
       | VernacComments l ->
         return (
           hov 2
             (keyword "Comments" ++ spc()
-             ++ prlist_with_sep sep (pr_comment pr_constr) l)
+             ++ prlist_with_sep sep (pr_comment (pr_constr env sigma)) l)
         )
 
       (* For extension *)
@@ -1188,12 +1224,12 @@ open Pputils
         return (keyword "Proof " ++ spc () ++
             keyword "using" ++ spc() ++ pr_using e)
       | VernacProof (Some te, None) ->
-        return (keyword "Proof with" ++ spc() ++ Pputils.pr_raw_generic (Global.env ()) te)
+        return (keyword "Proof with" ++ spc() ++ Pputils.pr_raw_generic env sigma te)
       | VernacProof (Some te, Some e) ->
         return (
           keyword "Proof" ++ spc () ++
             keyword "using" ++ spc() ++ pr_using e ++ spc() ++
-            keyword "with" ++ spc() ++ Pputils.pr_raw_generic (Global.env ()) te
+            keyword "with" ++ spc() ++ Pputils.pr_raw_generic env sigma te
         )
       | VernacProofMode s ->
         return (keyword "Proof Mode" ++ str s)
@@ -1213,6 +1249,7 @@ open Pputils
 
 let rec pr_vernac_flag (k, v) =
   let k = keyword k in
+  let open Attributes in
   match v with
   | VernacFlagEmpty -> k
   | VernacFlagLeaf v -> k ++ str " = " ++ qs v
@@ -1227,15 +1264,15 @@ let pr_vernac_attributes =
 
   let rec pr_vernac_control v =
     let return = tag_vernac v in
-    match v with
+    match v.v with
     | VernacExpr (f, v') -> pr_vernac_attributes f ++ pr_vernac_expr v' ++ sep_end v'
-    | VernacTime (_,{v}) ->
+    | VernacTime (_,v) ->
       return (keyword "Time" ++ spc() ++ pr_vernac_control v)
-    | VernacRedirect (s, {v}) ->
+    | VernacRedirect (s, v) ->
       return (keyword "Redirect" ++ spc() ++ qs s ++ spc() ++ pr_vernac_control v)
     | VernacTimeout(n,v) ->
       return (keyword "Timeout " ++ int n ++ spc() ++ pr_vernac_control v)
-    | VernacFail v ->
+    | VernacFail v->
       return (keyword "Fail" ++ spc() ++ pr_vernac_control v)
 
     let pr_vernac v =

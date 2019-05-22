@@ -4,17 +4,19 @@ stages:
   - docker
   - build
   - test
+  - deploy
 
 # some default values
 variables:
   # Format: $IMAGE-V$DATE [Cache is not used as of today but kept here
   # for reference]
-  CACHEKEY: "bionic_coq-V2018-10-04-V1"
+  CACHEKEY: "bionic_coq-V2019-04-20-V1"
   IMAGE: "$CI_REGISTRY_IMAGE:$CACHEKEY"
   # By default, jobs run in the base switch; override to select another switch
   OPAM_SWITCH: "base"
   # Used to select special compiler switches such as flambda, 32bits, etc...
   OPAM_VARIANT: ""
+  GIT_DEPTH: "10"
 
 docker-boot:
   stage: docker
@@ -45,15 +47,12 @@ before_script:
   - opam list
   - opam config list
 
-after_script:
-  - echo "The build completed normally (not a runner failure)."
-
 ################ GITLAB CACHING ######################
 # - use artifacts between jobs                       #
 ######################################################
 
 # TODO figure out how to build doc for installed Coq
-.build-template: &build-template
+.build-template:
   stage: build
   artifacts:
     name: "$CI_JOB_NAME"
@@ -63,6 +62,8 @@ after_script:
       - config/coq_config.py
       - test-suite/misc/universes/all_stdlib.v
     expire_in: 1 week
+  variables:
+    timeout: ""
   script:
     - set -e
 
@@ -75,43 +76,64 @@ after_script:
     - echo 'end:coq.config'
 
     - echo 'start:coq.build'
-    - make -j "$NJOBS" byte
-    - make -j "$NJOBS" world $EXTRA_TARGET
+    - $timeout make -j "$NJOBS" byte
+    - $timeout make -j "$NJOBS" world $EXTRA_TARGET
     - make test-suite/misc/universes/all_stdlib.v
     - echo 'end:coq:build'
 
     - echo 'start:coq.install'
-    - make install
+    - make install install-byte $EXTRA_INSTALL
     - make install-byte
     - cp bin/fake_ide _install_ci/bin/
     - echo 'end:coq.install'
 
     - set +e
 
-.dune-template: &dune-template
-  dependencies: []
+# Template for building Coq + stdlib, typical use: overload the switch
+.dune-template:
   stage: build
+  dependencies: []
+  script:
+    - set -e
+    - make -f Makefile.dune world
+    - set +e
+  variables:
+    OPAM_SWITCH: edge
+    OPAM_VARIANT: "+flambda"
   artifacts:
     name: "$CI_JOB_NAME"
     paths:
       - _build/
     expire_in: 1 week
+
+.dune-ci-template:
+  stage: test
+  dependencies:
+    - build:edge+flambda:dune:dev
   script:
     - set -e
+    - echo 'start:coq.test'
     - make -f Makefile.dune "$DUNE_TARGET"
+    - echo 'end:coq.test'
     - set +e
+  variables:
+    OPAM_SWITCH: edge
+    OPAM_VARIANT: "+flambda"
+  artifacts:
+    name: "$CI_JOB_NAME"
+    expire_in: 1 month
 
 # every non build job must set dependencies otherwise all build
 # artifacts are used together and we may get some random Coq. To that
 # purpose, we add a spurious dependency `not-a-real-job` that must be
 # overridden otherwise the CI will fail.
 
-.doc-template: &doc-template
+.doc-template:
   stage: test
   dependencies:
     - not-a-real-job
   script:
-    - SPHINXENV='COQBIN="'"$PWD"'/_install_ci/bin/" COQBOOT=no'
+    - SPHINXENV='COQBIN="'"$PWD"'/_install_ci/bin/"'
     - make -j "$NJOBS" SPHINXENV="$SPHINXENV" SPHINX_DEPS= refman
     - make install-doc-sphinx
   artifacts:
@@ -120,7 +142,7 @@ after_script:
       - _install_ci/share/doc/coq/
 
 # set dependencies when using
-.test-suite-template: &test-suite-template
+.test-suite-template:
   stage: test
   dependencies:
     - not-a-real-job
@@ -131,47 +153,52 @@ after_script:
     - BIN=$(readlink -f ../_install_ci/bin)/
     - LIB=$(readlink -f ../_install_ci/lib/coq)/
     - export OCAMLPATH=$(readlink -f ../_install_ci/lib/):"$OCAMLPATH"
-    - make -j "$NJOBS" BIN="$BIN" LIB="$LIB" all
+    - $timeout make -j "$NJOBS" BIN="$BIN" COQLIB="$LIB" COQFLAGS="${COQFLAGS}" all
   artifacts:
     name: "$CI_JOB_NAME.logs"
     when: on_failure
     paths:
       - test-suite/logs
+  variables:
+    timeout: ""
 
 # set dependencies when using
-.validate-template: &validate-template
+.validate-template:
   stage: test
   dependencies:
     - not-a-real-job
   script:
     - cd _install_ci
-    - find lib/coq/ -name '*.vo' -print0 > vofiles
-    - for regexp in 's/.vo//' 's:lib/coq/plugins:Coq:' 's:lib/coq/theories:Coq:' 's:/:.:g'; do sed -z -i "$regexp" vofiles; done
-    - xargs -0 --arg-file=vofiles bin/coqchk -boot -silent -o -m -coqlib lib/coq/
+    - find lib/coq/ -name '*.vo' -fprint0 vofiles
+    - xargs -0 --arg-file=vofiles bin/coqchk -o -m -coqlib lib/coq/ > ../coqchk.log 2>&1 || touch coqchk.failed
+    - tail -n 1000 ../coqchk.log # the log is too big for gitlab so pipe to a file and display the tail
+    - "[ ! -f coqchk.failed ]" # needs quoting for yml syntax reasons
+  artifacts:
+    name: "$CI_JOB_NAME.logs"
+    paths:
+      - coqchk.log
+    expire_in: 1 month
 
-.ci-template: &ci-template
+.ci-template:
   stage: test
   script:
     - set -e
     - echo 'start:coq.test'
-    - make -f Makefile.ci -j "$NJOBS" ${TEST_TARGET}
+    - make -f Makefile.ci -j "$NJOBS" "${CI_JOB_NAME#*:}"
     - echo 'end:coq.test'
     - set +e
   dependencies:
     - build:base
-  variables: &ci-template-vars
-    TEST_TARGET: "$CI_JOB_NAME"
 
-.ci-template-flambda: &ci-template-flambda
-  <<: *ci-template
+.ci-template-flambda:
+  extends: .ci-template
   dependencies:
     - build:edge+flambda
   variables:
-    <<: *ci-template-vars
     OPAM_SWITCH: "edge"
     OPAM_VARIANT: "+flambda"
 
-.windows-template: &windows-template
+.windows-template:
   stage: test
   artifacts:
     name: "%CI_JOB_NAME%"
@@ -189,51 +216,89 @@ after_script:
     variables:
       - $WINDOWS =~ /enabled/
 
+.deploy-template:
+  stage: deploy
+  before_script:
+    - which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+    - git config --global user.name "coqbot"
+    - git config --global user.email "coqbot@users.noreply.github.com"
+
 build:base:
-  <<: *build-template
+  extends: .build-template
   variables:
     COQ_EXTRA_CONF: "-native-compiler yes -coqide opt"
     # coqdoc for stdlib, until we know how to build it from installed Coq
     EXTRA_TARGET: "stdlib"
+    EXTRA_INSTALL: "install-doc-stdlib-html install-doc-printable"
 
 # no coqide for 32bit: libgtk installation problems
 build:base+32bit:
-  <<: *build-template
+  extends: .build-template
   variables:
     OPAM_VARIANT: "+32bit"
     COQ_EXTRA_CONF: "-native-compiler yes"
 
-build:edge:
-  <<: *build-template
-  variables:
-    OPAM_SWITCH: edge
-    COQ_EXTRA_CONF: "-native-compiler yes -coqide opt"
-
 build:edge+flambda:
-  <<: *build-template
+  extends: .build-template
   variables:
     OPAM_SWITCH: edge
     OPAM_VARIANT: "+flambda"
     COQ_EXTRA_CONF: "-native-compiler yes -coqide opt -flambda-opts "
     COQ_EXTRA_CONF_QUOTE: "-O3 -unbox-closures"
 
-build:egde:dune:dev:
-  <<: *dune-template
+build:edge+flambda:dune:dev:
+  extends: .dune-template
+
+build:base+async:
+  extends: .build-template
+  stage: test
   variables:
-    OPAM_SWITCH: edge
-    DUNE_TARGET: world
+    COQ_EXTRA_CONF: "-native-compiler yes -coqide opt"
+    COQUSERFLAGS: "-async-proofs on"
+    timeout: "timeout 100m"
+  allow_failure: true # See https://github.com/coq/coq/issues/9658
+  only:
+    variables:
+      - $UNRELIABLE =~ /enabled/
+
+build:quick:
+  extends: .build-template
+  variables:
+    COQ_EXTRA_CONF: "-native-compiler no"
+    QUICK: "1"
+    timeout: "timeout 100m"
+  allow_failure: true # See https://github.com/coq/coq/issues/9637
+  only:
+    variables:
+      - $UNRELIABLE =~ /enabled/
 
 windows64:
-  <<: *windows-template
+  extends: .windows-template
   variables:
     ARCH: "64"
 
 windows32:
-  <<: *windows-template
+  extends: .windows-template
   variables:
     ARCH: "32"
   except:
     - /^pr-.*$/
+
+lint:
+  image: docker:git
+  stage: test
+  script:
+    - apk add bash
+    - dev/lint-repository.sh
+  dependencies: []
+  before_script: []
+  variables:
+    # we need an unknown amount of history for per-commit linting
+    GIT_DEPTH: ""
 
 pkg:opam:
   stage: test
@@ -241,32 +306,32 @@ pkg:opam:
   dependencies: []
   script:
     - set -e
-    - opam pin add coq .
-    - opam pin add coqide-server .
-    - opam pin add coqide .
+    - opam pin add --kind=path coq.$COQ_VERSION .
+    - opam pin add --kind=path coqide-server.$COQ_VERSION .
+    - opam pin add --kind=path coqide.$COQ_VERSION .
     - set +e
   variables:
-    OPAM_SWITCH: edge
+    COQ_VERSION: "8.10"
+    OPAM_SWITCH: "edge"
+    OPAM_VARIANT: "+flambda"
 
-pkg:nix:
+.nix-template:
   image: nixorg/nix:latest # Minimal NixOS image which doesn't even contain git
   stage: test
   variables:
     # By default we use coq.cachix.org as an extra substituter but this can be overridden
     EXTRA_SUBSTITUTERS: https://coq.cachix.org
-    EXTRA_PUBLIC_KEYS: coq.cachix.org-1:Jgt0DwGAUo+wpxCM52k2V+E0hLoOzFPzvg94F65agtI=
+    EXTRA_PUBLIC_KEYS: coq.cachix.org-1:5QW/wwEnD+l2jvN6QRbRRsa4hBHG3QiQQ26cxu1F5tI=
     # The following variables should not be overridden
     GIT_STRATEGY: none
-    CACHIX_PUBLIC_KEY: cachix.cachix.org-1:eWNHQldwUO7G2VkjpnjDbWwy4KQ/HNxht7H4SSoMckM=
     NIXOS_PUBLIC_KEY: cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
   dependencies: [] # We don't need to download build artifacts
   before_script: [] # We don't want to use the shared 'before_script'
   script:
+    - cat /proc/{cpu,mem}info || true
     # Use current worktree as tmpdir to allow exporting artifacts in case of failure
     - export TMPDIR=$PWD
-    # Install Cachix as documented at https://github.com/cachix/cachix
-    - nix-env -if https://github.com/cachix/cachix/tarball/master --substituters https://cachix.cachix.org --trusted-public-keys "$CACHIX_PUBLIC_KEY"
     # We build an expression rather than a direct URL to not be dependent on
     # the URL location; we are forced to put the public key of cache.nixos.org
     # because there is no --extra-trusted-public-key option.
@@ -277,44 +342,110 @@ pkg:nix:
     paths:
       - nix-build-coq.drv-0/*/test-suite/logs
 
+pkg:nix:deploy:
+  extends: .nix-template
+  environment:
+    name: cachix
+    url: https://coq.cachix.org
+  before_script:
+    # Install Cachix as documented at https://github.com/cachix/cachix
+    - nix-env -iA cachix --prebuilt-only -f https://cachix.org/api/v1/install
+  only:
+    - master
+    - /^v.*\..*$/
+
+pkg:nix:deploy:channel:
+  extends: .deploy-template
+  environment:
+    name: cachix
+    url: https://coq.cachix.org
+  only:
+    variables:
+      - $CACHIX_DEPLOYMENT_KEY
+  dependencies:
+    - pkg:nix:deploy
+  script:
+    - echo "$CACHIX_DEPLOYMENT_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - git fetch --unshallow
+    - git branch -v
+    - git push git@github.com:coq/coq-on-cachix "${CI_COMMIT_SHA}":"refs/heads/${CI_COMMIT_REF_NAME}"
+
+pkg:nix:
+  extends: .nix-template
+  except:
+    - master
+    - /^v.*\..*$/
+
 doc:refman:
-  <<: *doc-template
+  extends: .doc-template
   dependencies:
     - build:base
 
-doc:ml-api:odoc:
-  stage: test
-  dependencies:
-    - build:egde:dune:dev
-  script: make -f Makefile.dune apidoc
+doc:refman:dune:
+  extends: .dune-ci-template
   variables:
-    OPAM_SWITCH: edge
+    DUNE_TARGET: refman-html
   artifacts:
-    name: "$CI_JOB_NAME"
+    paths:
+      - _build/default/doc/sphinx_build/html
+
+doc:stdlib:dune:
+  extends: .dune-ci-template
+  variables:
+    DUNE_TARGET: stdlib-html
+  artifacts:
+    paths:
+      - _build/default/doc/stdlib/html
+
+doc:refman:deploy:
+  extends: .deploy-template
+  environment:
+    name: deployment
+    url: https://coq.github.io/
+  only:
+    variables:
+      - $DOCUMENTATION_DEPLOY_KEY
+  dependencies:
+    - doc:ml-api:odoc
+    - doc:refman:dune
+    - doc:stdlib:dune
+  script:
+    - echo "$DOCUMENTATION_DEPLOY_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - git clone git@github.com:coq/doc.git _deploy
+    - rm -rf _deploy/$CI_COMMIT_REF_NAME/api
+    - rm -rf _deploy/$CI_COMMIT_REF_NAME/refman
+    - rm -rf _deploy/$CI_COMMIT_REF_NAME/stdlib
+    - mkdir -p _deploy/$CI_COMMIT_REF_NAME
+    - cp -rv _build/default/_doc/_html _deploy/$CI_COMMIT_REF_NAME/api
+    - cp -rv _build/default/doc/sphinx_build/html _deploy/$CI_COMMIT_REF_NAME/refman
+    - cp -rv _build/default/doc/stdlib/html _deploy/$CI_COMMIT_REF_NAME/stdlib
+    - cd _deploy/$CI_COMMIT_REF_NAME/
+    - git add api refman stdlib
+    - git commit -m "Documentation of branch “$CI_COMMIT_REF_NAME” at $CI_COMMIT_SHORT_SHA"
+    - git push # TODO: rebase and retry on failure
+
+doc:ml-api:odoc:
+  extends: .dune-ci-template
+  variables:
+    DUNE_TARGET: apidoc
+  artifacts:
     paths:
       - _build/default/_doc/
 
 test-suite:base:
-  <<: *test-suite-template
+  extends: .test-suite-template
   dependencies:
     - build:base
 
 test-suite:base+32bit:
-  <<: *test-suite-template
+  extends: .test-suite-template
   dependencies:
     - build:base+32bit
   variables:
     OPAM_VARIANT: "+32bit"
 
-test-suite:edge:
-  <<: *test-suite-template
-  dependencies:
-    - build:edge
-  variables:
-    OPAM_SWITCH: edge
-
 test-suite:edge+flambda:
-  <<: *test-suite-template
+  extends: .test-suite-template
   dependencies:
     - build:edge+flambda
   variables:
@@ -324,124 +455,212 @@ test-suite:edge+flambda:
 test-suite:egde:dune:dev:
   stage: test
   dependencies:
-    - build:egde:dune:dev
+    - build:edge+flambda:dune:dev
   script: make -f Makefile.dune test-suite
   variables:
     OPAM_SWITCH: edge
+    OPAM_VARIANT: "+flambda"
   artifacts:
     name: "$CI_JOB_NAME.logs"
     when: on_failure
     paths:
       - _build/default/test-suite/logs
 
+test-suite:edge+trunk+make:
+  stage: test
+  dependencies: []
+  script:
+    - opam switch create 4.09.0 --empty
+    - eval $(opam env)
+    - opam repo add ocaml-beta https://github.com/ocaml/ocaml-beta-repository.git
+    - opam update
+    - opam install ocaml-variants=4.09.0+trunk
+    - opam pin add -n ocamlfind --dev
+    - opam install num
+    - eval $(opam env)
+    # We avoid problems with warnings:
+    - ./configure -profile devel -warn-error no
+    - make -j "$NJOBS" world
+    - make -j "$NJOBS" test-suite UNIT_TESTS=
+  variables:
+    OPAM_SWITCH: base
+  artifacts:
+    name: "$CI_JOB_NAME.logs"
+    when: always
+    paths:
+      - test-suite/logs
+    expire_in: 1 week
+  allow_failure: true
+
+test-suite:edge+trunk+dune:
+  stage: test
+  dependencies: []
+  script:
+    - opam switch create 4.09.0 --empty
+    - eval $(opam env)
+    - opam repo add ocaml-beta https://github.com/ocaml/ocaml-beta-repository.git
+    - opam update
+    - opam install ocaml-variants=4.09.0+trunk
+    - opam pin add -n ocamlfind --dev
+    - opam pin add dune --dev # ounit lablgtk conf-gtksourceview
+    - opam install dune num
+    - eval $(opam env)
+    # We use the release profile to avoid problems with warnings
+    - make -f Makefile.dune trunk
+    - export COQ_UNIT_TEST=noop
+    - dune runtest --profile=ocaml409
+  variables:
+    OPAM_SWITCH: base
+  artifacts:
+    name: "$CI_JOB_NAME.logs"
+    when: always
+    paths:
+      - _build/log
+      - _build/default/test-suite/logs
+    expire_in: 1 week
+  allow_failure: true
+
+test-suite:base+async:
+  extends: .test-suite-template
+  dependencies:
+    - build:base
+  variables:
+    COQFLAGS: "-async-proofs on -async-proofs-cache force"
+    timeout: "timeout 100m"
+  allow_failure: true
+  only:
+    variables:
+      - $UNRELIABLE =~ /enabled/
+
 validate:base:
-  <<: *validate-template
+  extends: .validate-template
   dependencies:
     - build:base
 
 validate:base+32bit:
-  <<: *validate-template
+  extends: .validate-template
   dependencies:
     - build:base+32bit
   variables:
     OPAM_VARIANT: "+32bit"
 
-validate:edge:
-  <<: *validate-template
-  dependencies:
-    - build:edge
-  variables:
-    OPAM_SWITCH: edge
-
 validate:edge+flambda:
-  <<: *validate-template
+  extends: .validate-template
   dependencies:
     - build:edge+flambda
   variables:
     OPAM_SWITCH: edge
     OPAM_VARIANT: "+flambda"
 
-ci-aac-tactics:
-  <<: *ci-template
+validate:quick:
+  extends: .validate-template
+  dependencies:
+    - build:quick
+  only:
+    variables:
+      - $UNRELIABLE =~ /enabled/
 
-ci-bedrock2:
-  <<: *ci-template
-  allow_failure: true
+# Libraries are by convention the projects that depend on Coq
+# but not on its ML API
 
-ci-bignums:
-  <<: *ci-template
+library:ci-argosy:
+  extends: .ci-template
 
-ci-color:
-  <<: *ci-template-flambda
+library:ci-bedrock2:
+  extends: .ci-template
 
-ci-compcert:
-  <<: *ci-template-flambda
+library:ci-color:
+  extends: .ci-template-flambda
 
-ci-coq-dpdgraph:
-  <<: *ci-template
+library:ci-compcert:
+  extends: .ci-template-flambda
 
-ci-coquelicot:
-  <<: *ci-template
+library:ci-coquelicot:
+  extends: .ci-template
 
-ci-cross-crypto:
-  <<: *ci-template
+library:ci-cross-crypto:
+  extends: .ci-template
 
-ci-elpi:
-  <<: *ci-template
+library:ci-fcsl-pcm:
+  extends: .ci-template
 
-ci-equations:
-  <<: *ci-template
+library:ci-fiat-crypto:
+  extends: .ci-template-flambda
 
-ci-fcsl-pcm:
-  <<: *ci-template
+library:ci-fiat-crypto-legacy:
+  extends: .ci-template-flambda
 
-ci-fiat-crypto:
-  <<: *ci-template-flambda
+library:ci-flocq:
+  extends: .ci-template
 
-ci-fiat-crypto-legacy:
-  <<: *ci-template-flambda
+library:ci-corn:
+  extends: .ci-template-flambda
 
-ci-fiat-parsers:
-  <<: *ci-template
+library:ci-geocoq:
+  extends: .ci-template-flambda
 
-ci-flocq:
-  <<: *ci-template
+library:ci-hott:
+  extends: .ci-template
 
-ci-formal-topology:
-  <<: *ci-template-flambda
+library:ci-iris-lambda-rust:
+  extends: .ci-template-flambda
 
-ci-geocoq:
-  <<: *ci-template-flambda
+library:ci-math-comp:
+  extends: .ci-template-flambda
 
-ci-hott:
-  <<: *ci-template
+library:ci-sf:
+  extends: .ci-template
 
-ci-iris-lambda-rust:
-  <<: *ci-template-flambda
+library:ci-stdlib2:
+  extends: .ci-template-flambda
 
-ci-ltac2:
-  <<: *ci-template
+library:ci-unimath:
+  extends: .ci-template-flambda
 
-ci-math-comp:
-  <<: *ci-template-flambda
+library:ci-verdi-raft:
+  extends: .ci-template-flambda
 
-ci-mtac2:
-  <<: *ci-template
+library:ci-vst:
+  extends: .ci-template-flambda
 
-ci-pidetop:
-  <<: *ci-template
+# Plugins are by definition the projects that depend on Coq's ML API
 
-ci-plugin-tutorial:
-  <<: *ci-template
+plugin:ci-aac_tactics:
+  extends: .ci-template
 
-ci-quickchick:
-  <<: *ci-template-flambda
+plugin:ci-bignums:
+  extends: .ci-template
 
-ci-sf:
-  <<: *ci-template
+plugin:ci-coq_dpdgraph:
+  extends: .ci-template
 
-ci-unimath:
-  <<: *ci-template-flambda
+plugin:ci-coqhammer:
+  extends: .ci-template
 
-ci-vst:
-  <<: *ci-template-flambda
+plugin:ci-elpi:
+  extends: .ci-template
+
+plugin:ci-equations:
+  extends: .ci-template
+
+plugin:ci-fiat_parsers:
+  extends: .ci-template
+
+plugin:ci-mtac2:
+  extends: .ci-template
+
+plugin:ci-paramcoq:
+  extends: .ci-template
+
+plugin:plugin-tutorial:
+  stage: test
+  dependencies: []
+  script:
+    - ./configure -local -warn-error yes
+    - make -j "$NJOBS" plugin-tutorial
+
+plugin:ci-quickchick:
+  extends: .ci-template-flambda
+
+plugin:ci-relation_algebra:
+  extends: .ci-template

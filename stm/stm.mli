@@ -16,7 +16,9 @@ open Names
 module AsyncOpts : sig
 
   type cache = Force
-  type async_proofs = APoff | APonLazy | APon
+  type async_proofs = APoff
+                    | APonLazy (* Delays proof checking, but does it in master *)
+                    | APon
   type tac_error_filter = [ `None | `Only of string list | `All ]
 
   type stm_opt = {
@@ -27,7 +29,6 @@ module AsyncOpts : sig
     async_proofs_mode : async_proofs;
 
     async_proofs_private_flags : string option;
-    async_proofs_full : bool;
     async_proofs_never_reopen_branch : bool;
 
     async_proofs_tac_error_resilience : tac_error_filter;
@@ -39,13 +40,15 @@ module AsyncOpts : sig
 
 end
 
+type interactive_top = TopLogical of DirPath.t | TopPhysical of string
+
 (** The STM document type [stm_doc_type] determines some properties
    such as what uncompleted proofs are allowed and what gets recorded
    to aux files. *)
 type stm_doc_type =
   | VoDoc       of string       (* file path *)
   | VioDoc      of string       (* file path *)
-  | Interactive of DirPath.t    (* module path *)
+  | Interactive of interactive_top    (* module path *)
 
 (** Coq initalization options:
 
@@ -90,15 +93,16 @@ val init_core : unit -> unit
 (** [new_doc opt] Creates a new document with options [opt] *)
 val new_doc  : stm_init_options -> doc * Stateid.t
 
-(** [parse_sentence sid pa] Reads a sentence from [pa] with parsing
-   state [sid] Returns [End_of_input] if the stream ends *)
-val parse_sentence : doc:doc -> Stateid.t -> Pcoq.Parsable.t ->
-  Vernacexpr.vernac_control CAst.t
+(** [parse_sentence sid entry pa] Reads a sentence from [pa] with parsing state
+    [sid] and non terminal [entry]. [entry] receives in input the current proof
+    mode. [sid] should be associated with a valid parsing state (which may not
+    be the case if an error was raised at parsing time). *)
+val parse_sentence :
+  doc:doc -> Stateid.t ->
+  entry:(Pvernac.proof_mode option -> 'a Pcoq.Entry.t) -> Pcoq.Parsable.t -> 'a
 
 (* Reminder: A parsable [pa] is constructed using
    [Pcoq.Parsable.t stream], where [stream : char Stream.t]. *)
-
-exception End_of_input
 
 (* [add ~ontop ?newtip verbose cmd] adds a new command [cmd] ontop of
    the state [ontop].
@@ -107,7 +111,7 @@ exception End_of_input
    If [newtip] is provided, then the returned state id is guaranteed
    to be [newtip] *)
 val add : doc:doc -> ontop:Stateid.t -> ?newtip:Stateid.t ->
-  bool -> Vernacexpr.vernac_control CAst.t ->
+  bool -> Vernacexpr.vernac_control ->
   doc * Stateid.t * [ `NewTip | `Unfocus of Stateid.t ]
 
 (* Returns the proof state before the last tactic that was applied at or before
@@ -152,7 +156,7 @@ val join : doc:doc -> doc
    - if the worker proof is not empty, then it waits until all workers
      are done with their current jobs and then dumps (or fails if one
      of the completed tasks is a failure) *)
-val snapshot_vio : doc:doc -> DirPath.t -> string -> doc
+val snapshot_vio : doc:doc -> output_native_objects:bool -> DirPath.t -> string -> doc
 
 (* Empties the task queue, can be used only if the worker pool is empty (E.g.
  * after having built a .vio in batch mode *)
@@ -171,7 +175,7 @@ val get_current_state : doc:doc -> Stateid.t
 val get_ldir : doc:doc -> Names.DirPath.t
 
 (* This returns the node at that position *)
-val get_ast : doc:doc -> Stateid.t -> (Vernacexpr.vernac_control Loc.located) option
+val get_ast : doc:doc -> Stateid.t -> Vernacexpr.vernac_control option
 
 (* Filename *)
 val set_compilation_hints : string -> unit
@@ -256,7 +260,7 @@ type dynamic_block_error_recovery =
   doc -> static_block_declaration -> [ `ValidBlock of recovery_action | `Leaks ]
 
 val register_proof_block_delimiter :
-  Vernacexpr.proof_block_name ->
+  Vernacextend.proof_block_name ->
   static_block_detection ->
   dynamic_block_error_recovery ->
     unit
@@ -297,7 +301,7 @@ val restore : document -> unit
 (** Experimental Hooks for UI experiment plugins, not for general use! *)
 
 type document_edit_notifiers =
-  { add_hook  : Vernacexpr.vernac_control CAst.t -> Stateid.t -> unit
+  { add_hook  : Vernacexpr.vernac_control -> Stateid.t -> unit
   (** User adds a sentence to the document (after parsing) *)
   ; edit_hook : Stateid.t -> unit
   (** User edits a sentence in the document *)

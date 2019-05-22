@@ -15,6 +15,7 @@ open Names
 open Termops
 open Environ
 open Constr
+open Context
 open EConstr
 open Vars
 open Namegen
@@ -120,13 +121,13 @@ let max_prefix_sign lid sign =
 let rec add_prods_sign env sigma t =
   match EConstr.kind sigma (whd_all env sigma t) with
     | Prod (na,c1,b) ->
-	let id = id_of_name_using_hdchar env sigma t na in
+        let id = id_of_name_using_hdchar env sigma t na.binder_name in
 	let b'= subst1 (mkVar id) b in
-        add_prods_sign (push_named (LocalAssum (id,c1)) env) sigma b'
+        add_prods_sign (push_named (LocalAssum ({na with binder_name=id},c1)) env) sigma b'
     | LetIn (na,c1,t1,b) ->
-	let id = id_of_name_using_hdchar env sigma t na in
+        let id = id_of_name_using_hdchar env sigma t na.binder_name in
 	let b'= subst1 (mkVar id) b in
-        add_prods_sign (push_named (LocalDef (id,c1,t1)) env) sigma b'
+        add_prods_sign (push_named (LocalDef ({na with binder_name=id},c1,t1)) env) sigma b'
     | _ -> (env,t)
 
 (* [dep_option] indicates whether the inversion lemma is dependent or not.
@@ -149,9 +150,10 @@ let compute_first_inversion_scheme env sigma ind sort dep_option =
   let pty,goal =
     if dep_option  then
       let pty = make_arity env sigma true indf sort in
+      let r = relevance_of_inductive_type env ind in
       let goal =
 	mkProd
-	  (Anonymous, mkAppliedInd ind, applist(mkVar p,realargs@[mkRel 1]))
+          (make_annot Anonymous r, mkAppliedInd ind, applist(mkVar p,realargs@[mkRel 1]))
       in
       pty,goal
     else
@@ -169,11 +171,11 @@ let compute_first_inversion_scheme env sigma ind sort dep_option =
           env ~init:([],[])
       in
       let pty = it_mkNamedProd_or_LetIn (mkSort sort) ownsign in
-      let goal = mkArrow i (applist(mkVar p, List.rev revargs)) in
+      let goal = mkArrow i Sorts.Relevant (applist(mkVar p, List.rev revargs)) in
       (pty,goal)
   in
   let npty = nf_all env sigma pty in
-  let extenv = push_named (LocalAssum (p,npty)) env in
+  let extenv = push_named (LocalAssum (make_annot p Sorts.Relevant,npty)) env in
   extenv, goal
 
 (* [inversion_scheme sign I]
@@ -183,7 +185,7 @@ let compute_first_inversion_scheme env sigma ind sort dep_option =
    scheme on sort [sort]. Depending on the value of [dep_option] it will
    build a dependent lemma or a non-dependent one *)
 
-let inversion_scheme env sigma t sort dep_option inv_op =
+let inversion_scheme ~name ~poly env sigma t sort dep_option inv_op =
   let (env,i) = add_prods_sign env sigma t in
   let ind =
     try find_rectype env sigma i
@@ -201,11 +203,8 @@ let inversion_scheme env sigma t sort dep_option inv_op =
     user_err ~hdr:"lemma_inversion"
     (str"Computed inversion goal was not closed in initial signature.");
   *)
-  let pf = Proof.start (Evd.from_ctx (evar_universe_context sigma)) [invEnv,invGoal] in
-  let pf =
-    fst (Proof.run_tactic env (
-      tclTHEN intro (onLastHypId inv_op)) pf)
-  in
+  let pf = Proof.start ~name ~poly (Evd.from_ctx (evar_universe_context sigma)) [invEnv,invGoal] in
+  let pf, _, () = Proof.run_tactic env (tclTHEN intro (onLastHypId inv_op)) pf in
   let pfterm = List.hd (Proof.partial_proof pf) in
   let global_named_context = Global.named_context_val () in
   let ownSign = ref begin
@@ -217,7 +216,7 @@ let inversion_scheme env sigma t sort dep_option inv_op =
       invEnv ~init:Context.Named.empty
   end in
   let avoid = ref Id.Set.empty in
-  let _,_,_,_,sigma = Proof.proof pf in
+  let Proof.{sigma} = Proof.data pf in
   let sigma = Evd.minimize_universes sigma in
   let rec fill_holes c =
     match EConstr.kind sigma c with
@@ -225,7 +224,7 @@ let inversion_scheme env sigma t sort dep_option inv_op =
 	let h = next_ident_away (Id.of_string "H") !avoid in
 	let ty,inst = Evarutil.generalize_evar_over_rels sigma (e,args) in
 	avoid := Id.Set.add h !avoid;
-	ownSign := Context.Named.add (LocalAssum (h,ty)) !ownSign;
+        ownSign := Context.Named.add (LocalAssum (make_annot h Sorts.Relevant,ty)) !ownSign;
 	applist (mkVar h, inst)
     | _ -> EConstr.map sigma fill_holes c
   in
@@ -236,10 +235,8 @@ let inversion_scheme env sigma t sort dep_option inv_op =
   p, sigma
 
 let add_inversion_lemma ~poly name env sigma t sort dep inv_op =
-  let invProof, sigma = inversion_scheme env sigma t sort dep inv_op in
-  let univs =
-    Evd.const_univ_entry ~poly sigma
-  in
+  let invProof, sigma = inversion_scheme ~name ~poly env sigma t sort dep inv_op in
+  let univs = Evd.univ_entry ~poly sigma in
   let entry = definition_entry ~univs invProof in
   let _ = declare_constant name (DefinitionEntry entry, IsProof Lemma) in
   ()
@@ -250,7 +247,7 @@ let add_inversion_lemma ~poly name env sigma t sort dep inv_op =
 let add_inversion_lemma_exn ~poly na com comsort bool tac =
   let env = Global.env () in
   let sigma = Evd.from_env env in
-  let sigma, c = Constrintern.interp_type_evars env sigma com in
+  let sigma, c = Constrintern.interp_type_evars ~program_mode:false env sigma com in
   let sigma, sort = Evd.fresh_sort_in_family ~rigid:univ_rigid sigma comsort in
   try
     add_inversion_lemma ~poly na env sigma c sort bool tac

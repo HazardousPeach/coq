@@ -10,6 +10,7 @@
 
 open Names
 open Constr
+open Declarations
 open Environ
 open Esubst
 
@@ -23,14 +24,6 @@ val with_stats: 'a Lazy.t -> 'a
   [kernel_name]) and local (= by [Rel] or [Var])), all evars, and letin's.
   Rem: reduction of a Rel/Var bound to a term is Delta, but reduction of
   a LetIn expression is Letin reduction *)
-
-
-
-val all_opaque      : transparent_state
-val all_transparent : transparent_state
-
-val is_transparent_variable : transparent_state -> variable -> bool
-val is_transparent_constant : transparent_state -> Constant.t -> bool
 
 (** Sets of reduction kinds. *)
 module type RedFlagsSig = sig
@@ -60,10 +53,10 @@ module type RedFlagsSig = sig
   val red_sub : reds -> red_kind -> reds
 
   (** Adds a reduction kind to a set *)
-  val red_add_transparent : reds -> transparent_state -> reds
+  val red_add_transparent : reds -> TransparentState.t -> reds
 
   (** Retrieve the transparent state of the reduction flags *)
-  val red_transparent : reds -> transparent_state
+  val red_transparent : reds -> TransparentState.t
 
   (** Build a reduction set from scratch = iter [red_add] on [no_red] *)
   val mkflags : red_kind list -> reds
@@ -98,25 +91,7 @@ val unfold_red : evaluable_global_reference -> reds
 (***********************************************************************)
 type table_key = Constant.t Univ.puniverses tableKey
 
-type 'a infos_cache
-type 'a infos_tab
-type 'a infos = {
-  i_flags : reds;
-  i_cache : 'a infos_cache }
-
-val ref_value_cache: 'a infos -> 'a infos_tab -> table_key -> 'a option
-val create:
-  repr:('a infos -> 'a infos_tab -> constr -> 'a) ->
-  share:bool ->
-  reds ->
-  env ->
-  (existential -> constr option) ->
-  'a infos
-val create_tab : unit -> 'a infos_tab
-val evar_value : 'a infos_cache -> existential -> constr option
-
-val info_env : 'a infos -> env
-val info_flags: 'a infos -> reds
+module KeyTable : Hashtbl.S with type key = table_key
 
 (***********************************************************************
   s Lazy reduction. *)
@@ -139,24 +114,27 @@ type fterm =
   | FFix of fixpoint * fconstr subs
   | FCoFix of cofixpoint * fconstr subs
   | FCaseT of case_info * constr * fconstr * constr array * fconstr subs (* predicate and branches are closures *)
-  | FLambda of int * (Name.t * constr) list * constr * fconstr subs
-  | FProd of Name.t * fconstr * fconstr
-  | FLetIn of Name.t * fconstr * fconstr * constr * fconstr subs
+  | FLambda of int * (Name.t Context.binder_annot * constr) list * constr * fconstr subs
+  | FProd of Name.t Context.binder_annot * fconstr * constr * fconstr subs
+  | FLetIn of Name.t Context.binder_annot * fconstr * fconstr * constr * fconstr subs
   | FEvar of existential * fconstr subs
+  | FInt of Uint63.t
   | FLIFT of int * fconstr
   | FCLOS of constr * fconstr subs
   | FLOCKED
 
 (***********************************************************************
   s A [stack] is a context of arguments, arguments are pushed by
-   [append_stack] one array at a time but popped with [decomp_stack]
-   one by one *)
+   [append_stack] one array at a time *)
+type 'a next_native_args = (CPrimitives.arg_kind * 'a) list
 
 type stack_member =
   | Zapp of fconstr array
   | ZcaseT of case_info * constr * constr array * fconstr subs
   | Zproj of Projection.Repr.t
   | Zfix of fconstr * stack
+  | Zprimitive of CPrimitives.t * pconstant * fconstr list * fconstr next_native_args
+       (* operator, constr def, reduced arguments rev, next arguments *)
   | Zshift of int
   | Zupdate of fconstr
 
@@ -165,15 +143,12 @@ and stack = stack_member list
 val empty_stack : stack
 val append_stack : fconstr array -> stack -> stack
 
-val decomp_stack : stack -> (fconstr * stack) option
-val array_of_stack : stack -> fconstr array
-val stack_assign : stack -> int -> fconstr -> stack
+val check_native_args : CPrimitives.t -> stack -> bool
+val get_native_args1 : CPrimitives.t -> pconstant -> stack ->
+  fconstr list * fconstr * fconstr next_native_args * stack
+
 val stack_args_size : stack -> int
-val stack_tail : int -> stack -> stack
-val stack_nth : stack -> int -> fconstr
-val zip_term : (fconstr -> constr) -> constr -> stack -> constr
 val eta_expand_stack : stack -> stack
-val unfold_projection : 'a infos -> Projection.t -> stack_member option
 
 (** To lazy reduce a constr, create a [clos_infos] with
    [create_clos_infos], inject the term to reduce with [inject]; then use
@@ -190,30 +165,40 @@ val mk_red : fterm -> fconstr
 val fterm_of : fconstr -> fterm
 val term_of_fconstr : fconstr -> constr
 val destFLambda :
-  (fconstr subs -> constr -> fconstr) -> fconstr -> Name.t * fconstr * fconstr
+  (fconstr subs -> constr -> fconstr) -> fconstr -> Name.t Context.binder_annot * fconstr * fconstr
+
+type optrel = Unknown | KnownR | KnownI
+
+val relevance_of : fconstr -> optrel
+val set_relevance : Sorts.relevance -> fconstr -> unit
 
 (** Global and local constant cache *)
-type clos_infos = fconstr infos
+type clos_infos
+type clos_tab
 val create_clos_infos :
   ?evars:(existential->constr option) -> reds -> env -> clos_infos
 val oracle_of_infos : clos_infos -> Conv_oracle.oracle
 
-val env_of_infos : 'a infos -> env
+val create_tab : unit -> clos_tab
+
+val info_env : clos_infos -> env
+val info_flags: clos_infos -> reds
+val unfold_projection : clos_infos -> Projection.t -> stack_member option
 
 val infos_with_reds : clos_infos -> reds -> clos_infos
 
 (** Reduction function *)
 
 (** [norm_val] is for strong normalization *)
-val norm_val : clos_infos -> fconstr infos_tab -> fconstr -> constr
+val norm_val : clos_infos -> clos_tab -> fconstr -> constr
 
 (** [whd_val] is for weak head normalization *)
-val whd_val : clos_infos -> fconstr infos_tab -> fconstr -> constr
+val whd_val : clos_infos -> clos_tab -> fconstr -> constr
 
 (** [whd_stack] performs weak head normalization in a given stack. It
    stops whenever a reduction is blocked. *)
 val whd_stack :
-  clos_infos -> fconstr infos_tab -> fconstr -> stack -> fconstr * stack
+  clos_infos -> clos_tab -> fconstr -> stack -> fconstr * stack
 
 (** [eta_expand_ind_stack env ind c s t] computes stacks correspoding
     to the conversion of the eta expansion of t, considered as an inhabitant
@@ -230,9 +215,7 @@ val eta_expand_ind_stack : env -> inductive -> fconstr -> stack ->
 (** Conversion auxiliary functions to do step by step normalisation *)
 
 (** [unfold_reference] unfolds references in a [fconstr] *)
-val unfold_reference : clos_infos -> fconstr infos_tab -> table_key -> fconstr option
-
-val eq_table_key : table_key -> table_key -> bool
+val unfold_reference : clos_infos -> clos_tab -> table_key -> (fconstr, Util.Empty.t) constant_def
 
 (***********************************************************************
   i This is for lazy debug *)
@@ -243,9 +226,9 @@ val lift_fconstr_vect : int -> fconstr array -> fconstr array
 val mk_clos      : fconstr subs -> constr -> fconstr
 val mk_clos_vect : fconstr subs -> constr array -> fconstr array
 
-val kni: clos_infos -> fconstr infos_tab -> fconstr -> stack -> fconstr * stack
-val knr: clos_infos -> fconstr infos_tab -> fconstr -> stack -> fconstr * stack
-val kl : clos_infos -> fconstr infos_tab -> fconstr -> constr
+val kni: clos_infos -> clos_tab -> fconstr -> stack -> fconstr * stack
+val knr: clos_infos -> clos_tab -> fconstr -> stack -> fconstr * stack
+val kl : clos_infos -> clos_tab -> fconstr -> constr
 
 val to_constr : lift -> fconstr -> constr
 

@@ -16,15 +16,10 @@ open Constr
 open Environ
 open EConstr
 
-(** printers *)
-val print_sort : Sorts.t -> Pp.t
-val pr_sort_family : Sorts.family -> Pp.t
-val pr_fix : ('a -> Pp.t) -> ('a, 'a) pfixpoint -> Pp.t
-
 (** about contexts *)
-val push_rel_assum : Name.t * types -> env -> env
-val push_rels_assum : (Name.t * Constr.types) list -> env -> env
-val push_named_rec_types : Name.t array * Constr.types array * 'a -> env -> env
+val push_rel_assum : Name.t Context.binder_annot * types -> env -> env
+val push_rels_assum : (Name.t Context.binder_annot * Constr.types) list -> env -> env
+val push_named_rec_types : Name.t Context.binder_annot array * Constr.types array * 'a -> env -> env
 
 val lookup_rel_id : Id.t -> ('c, 't) Context.Rel.pt -> int * 'c option * 't
 (** Associates the contents of an identifier in a [rel_context]. Raise
@@ -39,8 +34,8 @@ val rel_list : int -> int -> constr list
 (** iterators/destructors on terms *)
 val mkProd_or_LetIn : rel_declaration -> types -> types
 val mkProd_wo_LetIn : rel_declaration -> types -> types
-val it_mkProd : types -> (Name.t * types) list -> types
-val it_mkLambda : constr -> (Name.t * types) list -> constr
+val it_mkProd : types -> (Name.t Context.binder_annot * types) list -> types
+val it_mkLambda : constr -> (Name.t Context.binder_annot * types) list -> constr
 val it_mkProd_or_LetIn : types -> rel_context -> types
 val it_mkProd_wo_LetIn : types -> rel_context -> types
 val it_mkLambda_or_LetIn : Constr.constr -> Constr.rel_context -> Constr.constr
@@ -83,11 +78,6 @@ val fold_constr_with_full_binders : Evd.evar_map ->
   ('a -> 'b -> constr -> 'b) ->
   'a -> 'b -> constr -> 'b
 
-val iter_constr_with_full_binders : Evd.evar_map ->
-  (rel_declaration -> 'a -> 'a) ->
-  ('a -> constr -> unit) -> 'a ->
-  constr -> unit
-
 (**********************************************************************)
 
 val strip_head_cast : Evd.evar_map -> constr -> constr
@@ -118,9 +108,6 @@ val dependent_in_decl : Evd.evar_map -> constr -> named_declaration -> bool
 val count_occurrences : Evd.evar_map -> constr -> constr -> int
 val collect_metas : Evd.evar_map -> constr -> int list
 val collect_vars : Evd.evar_map -> constr -> Id.Set.t (** for visible vars only *)
-
-val vars_of_global_reference : env -> GlobRef.t -> Id.Set.t
-[@@ocaml.deprecated "Use [Environ.vars_of_global]"]
 
 (* Substitution of metavariables *)
 type meta_value_map = (metavariable * Constr.constr) list
@@ -244,7 +231,7 @@ val add_vname : Id.Set.t -> Name.t -> Id.Set.t
 
 (** other signature iterators *)
 val process_rel_context : (rel_declaration -> env -> env) -> env -> env
-val assums_of_rel_context : ('c, 't) Context.Rel.pt -> (Name.t * 't) list
+val assums_of_rel_context : ('c, 't) Context.Rel.pt -> (Name.t Context.binder_annot * 't) list
 val lift_rel_context : int -> Constr.rel_context -> Constr.rel_context
 val substl_rel_context : Constr.constr list -> Constr.rel_context -> Constr.rel_context
 val smash_rel_context : Constr.rel_context -> Constr.rel_context (** expand lets in context *)
@@ -282,19 +269,13 @@ val is_global : Evd.evar_map -> GlobRef.t -> constr -> bool
 
 val isGlobalRef : Evd.evar_map -> constr -> bool
 
-val is_template_polymorphic : env -> Evd.evar_map -> constr -> bool
+val is_template_polymorphic_ind : env -> Evd.evar_map -> constr -> bool
 
 val is_Prop : Evd.evar_map -> constr -> bool
 val is_Set : Evd.evar_map -> constr -> bool
 val is_Type : Evd.evar_map -> constr -> bool
 
-val reference_of_level : Evd.evar_map -> Univ.Level.t -> Libnames.qualid
-
-(** Combinators on judgments *)
-
-val on_judgment       : ('a -> 'b) -> ('a, 'a) punsafe_judgment -> ('b, 'b) punsafe_judgment
-val on_judgment_value : ('c -> 'c) -> ('c, 't) punsafe_judgment -> ('c, 't) punsafe_judgment
-val on_judgment_type  : ('t -> 't) -> ('c, 't) punsafe_judgment -> ('c, 't) punsafe_judgment
+val reference_of_level : Evd.evar_map -> Univ.Level.t -> Libnames.qualid option
 
 (** {5 Debug pretty-printers} *)
 
@@ -302,13 +283,13 @@ open Evd
 
 val pr_existential_key : evar_map -> Evar.t -> Pp.t
 
-val pr_evar_suggested_name : Evar.t -> evar_map -> Id.t
+val evar_suggested_name : Evar.t -> evar_map -> Id.t
 
-val pr_evar_info : evar_info -> Pp.t
+val pr_evar_info : env -> evar_map -> evar_info -> Pp.t
 val pr_evar_constraints : evar_map -> evar_constraint list -> Pp.t
-val pr_evar_map : ?with_univs:bool -> int option -> evar_map -> Pp.t
+val pr_evar_map : ?with_univs:bool -> int option -> env -> evar_map -> Pp.t
 val pr_evar_map_filter : ?with_univs:bool -> (Evar.t -> evar_info -> bool) ->
-  evar_map -> Pp.t
+  env -> evar_map -> Pp.t
 val pr_metaset : Metaset.t -> Pp.t
 val pr_evar_universe_context : UState.t -> Pp.t
 val pr_evd_level : evar_map -> Univ.Level.t -> Pp.t

@@ -12,9 +12,8 @@ open CErrors
 open Util
 open Pp
 open CAst
+open Vernacextend
 open Vernacexpr
-
-let default_proof_mode () = Proof_global.get_default_proof_mode_name () [@ocaml.warning "-3"]
 
 let string_of_parallel = function
   | `Yes (solve,abs) ->
@@ -22,18 +21,17 @@ let string_of_parallel = function
   | `No -> ""
 
 let string_of_vernac_type = function
-  | VtUnknown -> "Unknown"
   | VtStartProof _ -> "StartProof"
   | VtSideff _ -> "Sideff"
-  | VtQed VtKeep -> "Qed(keep)"
-  | VtQed VtKeepAsAxiom -> "Qed(admitted)"
+  | VtQed (VtKeep VtKeepAxiom) -> "Qed(admitted)"
+  | VtQed (VtKeep (VtKeepOpaque | VtKeepDefined)) -> "Qed(keep)"
   | VtQed VtDrop -> "Qed(drop)"
   | VtProofStep { parallel; proof_block_detection } ->
       "ProofStep " ^ string_of_parallel parallel ^
         Option.default "" proof_block_detection
-  | VtProofMode s -> "ProofMode " ^ s
   | VtQuery -> "Query"
   | VtMeta -> "Meta "
+  | VtProofMode _ -> "Proof Mode"
 
 let string_of_vernac_when = function
   | VtLater -> "Later"
@@ -41,6 +39,10 @@ let string_of_vernac_when = function
 
 let string_of_vernac_classification (t,w) =
   string_of_vernac_type t ^ " " ^ string_of_vernac_when w
+
+let vtkeep_of_opaque = let open Proof_global in function
+  | Opaque -> VtKeepOpaque
+  | Transparent -> VtKeepDefined
 
 let idents_of_name : Names.Name.t -> Names.Id.t list =
   function
@@ -50,22 +52,27 @@ let idents_of_name : Names.Name.t -> Names.Id.t list =
 let stm_allow_nested_proofs_option_name = ["Nested";"Proofs";"Allowed"]
 
 let options_affecting_stm_scheduling =
-  [ Vernacentries.universe_polymorphism_option_name;
-    stm_allow_nested_proofs_option_name ]
+  [ Attributes.universe_polymorphism_option_name;
+    stm_allow_nested_proofs_option_name;
+    Vernacentries.proof_mode_opt_name;
+    Attributes.program_mode_option_name;
+    Proof_using.proof_using_opt_name;
+  ]
 
 let classify_vernac e =
-  let static_classifier ~poly e = match e with
+  let static_classifier ~atts e = match e with
     (* Univ poly compatibility: we run it now, so that we can just
      * look at Flags in stm.ml.  Would be nicer to have the stm
      * look at the entire dag to detect this option. *)
-    | ( VernacSetOption (_, l,_) | VernacUnsetOption (_, l))
+    | VernacSetOption (_, l,_)
       when CList.exists (CList.equal String.equal l)
         options_affecting_stm_scheduling ->
        VtSideff [], VtNow
     (* Qed *)
     | VernacAbort _ -> VtQed VtDrop, VtLater
-    | VernacEndProof Admitted -> VtQed VtKeepAsAxiom, VtLater
-    | VernacEndProof _ | VernacExactProof _ -> VtQed VtKeep, VtLater
+    | VernacEndProof Admitted -> VtQed (VtKeep VtKeepAxiom), VtLater
+    | VernacEndProof (Proved (opaque,_)) -> VtQed (VtKeep (vtkeep_of_opaque opaque)), VtLater
+    | VernacExactProof _ -> VtQed (VtKeep VtKeepOpaque), VtLater
     (* Query *)
     | VernacShow _ | VernacPrint _ | VernacSearch _ | VernacLocate _
     | VernacCheckMayEval _ -> VtQuery, VtLater
@@ -84,53 +91,56 @@ let classify_vernac e =
         VtProofStep { parallel = `No;
                       proof_block_detection = Some "curly" },
         VtLater
-    (* Options changing parser *)
-    | VernacUnsetOption (_, ["Default";"Proof";"Using"])
-    | VernacSetOption (_, ["Default";"Proof";"Using"],_) -> VtSideff [], VtNow
     (* StartProof *)
     | VernacDefinition ((Decl_kinds.DoDischarge,_),({v=i},_),ProveBody _) ->
-      VtStartProof(default_proof_mode (),Doesn'tGuaranteeOpacity, idents_of_name i), VtLater
+      VtStartProof(Doesn'tGuaranteeOpacity, idents_of_name i), VtLater
 
     | VernacDefinition (_,({v=i},_),ProveBody _) ->
-       let guarantee = if poly then Doesn'tGuaranteeOpacity else GuaranteesOpacity in
-        VtStartProof(default_proof_mode (),guarantee, idents_of_name i), VtLater
+      let polymorphic = Attributes.(parse_drop_extra polymorphic atts) in
+      let guarantee = if polymorphic then Doesn'tGuaranteeOpacity else GuaranteesOpacity in
+      VtStartProof(guarantee, idents_of_name i), VtLater
     | VernacStartTheoremProof (_,l) ->
-        let ids = List.map (fun (({v=i}, _), _) -> i) l in
-       let guarantee = if poly then Doesn'tGuaranteeOpacity else GuaranteesOpacity in
-        VtStartProof (default_proof_mode (),guarantee,ids), VtLater
+      let polymorphic = Attributes.(parse_drop_extra polymorphic atts) in
+      let ids = List.map (fun (({v=i}, _), _) -> i) l in
+      let guarantee = if polymorphic then Doesn'tGuaranteeOpacity else GuaranteesOpacity in
+      VtStartProof (guarantee,ids), VtLater
     | VernacFixpoint (discharge,l) ->
+      let polymorphic = Attributes.(parse_drop_extra polymorphic atts) in
        let guarantee =
-         if discharge = Decl_kinds.DoDischarge || poly then Doesn'tGuaranteeOpacity
+         if discharge = Decl_kinds.DoDischarge || polymorphic then Doesn'tGuaranteeOpacity
          else GuaranteesOpacity
        in
         let ids, open_proof =
           List.fold_left (fun (l,b) ((({v=id},_),_,_,_,p),_) ->
             id::l, b || p = None) ([],false) l in
         if open_proof
-        then VtStartProof (default_proof_mode (),guarantee,ids), VtLater
+        then VtStartProof (guarantee,ids), VtLater
         else VtSideff ids, VtLater
     | VernacCoFixpoint (discharge,l) ->
+      let polymorphic = Attributes.(parse_drop_extra polymorphic atts) in
        let guarantee =
-         if discharge = Decl_kinds.DoDischarge || poly then Doesn'tGuaranteeOpacity
+         if discharge = Decl_kinds.DoDischarge || polymorphic then Doesn'tGuaranteeOpacity
          else GuaranteesOpacity
        in
         let ids, open_proof =
           List.fold_left (fun (l,b) ((({v=id},_),_,_,p),_) ->
             id::l, b || p = None) ([],false) l in
         if open_proof
-        then VtStartProof (default_proof_mode (),guarantee,ids), VtLater
+        then VtStartProof (guarantee,ids), VtLater
         else VtSideff ids, VtLater
     (* Sideff: apply to all open branches. usually run on master only *)
     | VernacAssumption (_,_,l) ->
         let ids = List.flatten (List.map (fun (_,(l,_)) -> List.map (fun (id, _) -> id.v) l) l) in
         VtSideff ids, VtLater
+    | VernacPrimitive (id,_,_) ->
+        VtSideff [id.CAst.v], VtLater
     | VernacDefinition (_,({v=id},_),DefineBody _) -> VtSideff (idents_of_name id), VtLater
     | VernacInductive (_, _,_,l) ->
         let ids = List.map (fun (((_,({v=id},_)),_,_,_,cl),_) -> id :: match cl with
         | Constructors l -> List.map (fun (_,({v=id},_)) -> id) l
         | RecordDecl (oid,l) -> (match oid with Some {v=x} -> [x] | _ -> []) @
            CList.map_filter (function
-            | ((_,AssumExpr({v=Names.Name n},_)),_),_ -> Some n
+            | AssumExpr({v=Names.Name n},_), _ -> Some n
             | _ -> None) l) l in
         VtSideff (List.flatten ids), VtLater
     | VernacScheme l ->
@@ -147,16 +157,16 @@ let classify_vernac e =
     | VernacReserve _
     | VernacGeneralizable _
     | VernacSetOpacity _ | VernacSetStrategy _
-    | VernacUnsetOption _ | VernacSetOption _
+    | VernacSetOption _
     | VernacAddOption _ | VernacRemoveOption _
     | VernacMemOption _ | VernacPrintOption _
     | VernacGlobalCheck _
     | VernacDeclareReduction _
-    | VernacDeclareClass _ | VernacDeclareInstances _
+    | VernacExistingClass _ | VernacExistingInstance _
     | VernacRegister _
     | VernacNameSectionHypSet _
-    | VernacDeclareCustomEntry _
-    | VernacComments _ -> VtSideff [], VtLater
+    | VernacComments _
+    | VernacDeclareInstance _ -> VtSideff [], VtLater
     (* Who knows *)
     | VernacLoad _ -> VtSideff [], VtNow
     (* (Local) Notations have to disappear *)
@@ -168,6 +178,7 @@ let classify_vernac e =
     | VernacDeclareModuleType ({v=id},bl,_,_) ->
         VtSideff [id], if bl = [] then VtLater else VtNow
     (* These commands alter the parser *)
+    | VernacDeclareCustomEntry _
     | VernacOpenCloseScope _ | VernacDeclareScope _
     | VernacDelimiters _ | VernacBindScope _
     | VernacInfix _ | VernacNotation _ | VernacNotationAddFormat _
@@ -175,10 +186,14 @@ let classify_vernac e =
     | VernacSyntacticDefinition _
     | VernacRequire _ | VernacImport _ | VernacInclude _
     | VernacDeclareMLModule _
-    | VernacContext _ (* TASSI: unsure *)
-    | VernacProofMode _ -> VtSideff [], VtNow
-    (* These are ambiguous *)
-    | VernacInstance _ -> VtUnknown, VtNow
+    | VernacContext _ (* TASSI: unsure *) -> VtSideff [], VtNow
+    | VernacProofMode pm -> VtProofMode pm, VtNow
+    | VernacInstance (_,((name,_),_,_),None,_) when not (Attributes.parse_drop_extra Attributes.program atts) ->
+      let polymorphic = Attributes.(parse_drop_extra polymorphic atts) in
+      let guarantee = if polymorphic then Doesn'tGuaranteeOpacity else GuaranteesOpacity in
+      VtStartProof (guarantee, idents_of_name name.CAst.v), VtLater
+    | VernacInstance (_,((name,_),_,_),_,_) ->
+      VtSideff (idents_of_name name.CAst.v), VtLater
     (* Stm will install a new classifier to handle these *)
     | VernacBack _ | VernacAbortAll
     | VernacUndoTo _ | VernacUndo _
@@ -189,28 +204,22 @@ let classify_vernac e =
     | VernacWriteState _ -> VtSideff [], VtNow
     (* Plugins should classify their commands *)
     | VernacExtend (s,l) ->
-        try Vernacentries.get_vernac_classifier s l
+        try Vernacextend.get_vernac_classifier s l
         with Not_found -> anomaly(str"No classifier for"++spc()++str (fst s)++str".")
   in
-  let rec static_control_classifier ~poly = function
-    | VernacExpr (f, e) ->
-      let _, atts = Vernacentries.attributes_of_flags f Vernacinterp.(mk_atts ~polymorphic:poly ()) in
-      let poly = atts.Vernacinterp.polymorphic in
-      static_classifier ~poly e
-    | VernacTimeout (_,e) -> static_control_classifier ~poly e
-    | VernacTime (_,{v=e}) | VernacRedirect (_, {v=e}) ->
-       static_control_classifier ~poly e
+  let rec static_control_classifier v = v |> CAst.with_val (function
+    | VernacExpr (atts, e) ->
+      static_classifier ~atts e
+    | VernacTimeout (_,e) -> static_control_classifier e
+    | VernacTime (_,e) | VernacRedirect (_, e) ->
+       static_control_classifier e
     | VernacFail e -> (* Fail Qed or Fail Lemma must not join/fork the DAG *)
-        (match static_control_classifier ~poly e with
+        (match static_control_classifier e with
         | ( VtQuery | VtProofStep _ | VtSideff _
-          | VtProofMode _ | VtMeta), _ as x -> x
+          | VtMeta), _ as x -> x
         | VtQed _, _ ->
             VtProofStep { parallel = `No; proof_block_detection = None },
-            VtNow
-        | (VtStartProof _ | VtUnknown), _ -> VtUnknown, VtNow)
+            VtLater
+        | (VtStartProof _ | VtProofMode _), _ -> VtQuery, VtLater))
   in
-  static_control_classifier ~poly:(Flags.is_universe_polymorphism ()) e
-
-let classify_as_query = VtQuery, VtLater
-let classify_as_sideeff = VtSideff [], VtLater
-let classify_as_proofstep = VtProofStep { parallel = `No; proof_block_detection = None}, VtLater
+  static_control_classifier e

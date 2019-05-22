@@ -47,7 +47,7 @@ type ssrdocc = ssrclear option * ssrocc
 
 (* OLD ssr terms *)
 type ssrtermkind = char (* FIXME, make algebraic *)
-type ssrterm = ssrtermkind * Tacexpr.glob_constr_and_expr
+type ssrterm = ssrtermkind * Genintern.glob_constr_and_expr
 
 (* NEW ssr term *)
 
@@ -64,39 +64,35 @@ type ast_closure_term = {
 
 type ssrview = ast_closure_term list
 
-(* TODO
-type id_mod = Hat | HatTilde | Sharp
- *)
+type id_block = Prefix of Id.t | SuffixId of Id.t | SuffixNum of int
 
 (* Only [One] forces an introduction, possibly reducing the goal. *)
-type anon_iter =
-  | One
+type anon_kind =
+  | One of string option (* name hint *)
   | Drop
   | All
-(* TODO
-  | Dependent (* fast mode *)
-  | UntilMark
-  | Temporary (* "+" *)
- *)
+  | Temporary
 
 type ssripat =
   | IPatNoop
-  | IPatId of (*TODO id_mod option * *) Id.t
-  | IPatAnon of anon_iter (* inaccessible name *)
-(* TODO  | IPatClearMark *)
-  | IPatDispatch of ssripatss (* /[..|..] *)
-  | IPatCase of (* ipats_mod option * *) ssripatss (* this is not equivalent to /case /[..|..] if there are already multiple goals *)
+  | IPatId of Id.t
+  | IPatAnon of anon_kind (* inaccessible name *)
+  | IPatDispatch of ssripatss_or_block (* (..|..) *)
+  | IPatCase of ssripatss_or_block (* [..|..] *)
   | IPatInj of ssripatss
   | IPatRewrite of (*occurrence option * rewrite_pattern **) ssrocc * ssrdir
-  | IPatView of bool * ssrview (* {}/view (true if the clear is present) *)
+  | IPatView of ssrview (* /view *)
   | IPatClear of ssrclear (* {H1 H2} *)
   | IPatSimpl of ssrsimpl
   | IPatAbstractVars of Id.t list
-  | IPatTac of unit Proofview.tactic
+  | IPatFastNondep
 
 and ssripats = ssripat list
 and ssripatss = ssripats list
-type ssrhpats = ((ssrclear * ssripats) * ssripats) * ssripats
+and ssripatss_or_block =
+  | Block of id_block
+  | Regular of ssripats list
+type ssrhpats = ((ssrclear option * ssripats) * ssripats) * ssripats
 type ssrhpats_wtransp = bool * ssrhpats
 
 (* tac => inpats *)
@@ -104,6 +100,7 @@ type ssrintrosarg = Tacexpr.raw_tactic_expr * ssripats
 
 
 type ssrfwdid = Id.t
+
 (** Binders (for fwd tactics) *)
 type 'term ssrbind =
   | Bvar of Name.t
@@ -139,6 +136,9 @@ type 'tac ssrhint = bool * 'tac option list
 
 type 'tac fwdbinders =
         bool * (ssrhpats * ((ssrfwdfmt * ast_closure_term) * 'tac ssrhint))
+
+type 'tac ffwbinders =
+  (ssrhpats * ((ssrfwdfmt * ast_closure_term) * 'tac ssrhint))
 
 type clause =
   (ssrclear * ((ssrhyp_or_id * string) *

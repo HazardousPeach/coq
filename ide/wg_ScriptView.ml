@@ -10,6 +10,8 @@
 
 open Preferences
 
+exception Abort
+
 type insert_action = {
   ins_val : string;
   ins_off : int;
@@ -152,11 +154,11 @@ object(self)
     if self#process_delete_action del then (`OK, `WRITE) else (`FAIL, `NOOP)
   | Action lst ->
     let fold accu action = match accu with
-    | (`FAIL, _) -> accu (** we stop now! *)
+    | (`FAIL, _) -> accu (* we stop now! *)
     | (`OK, status) ->
       let (res, nstatus) = self#process_action action in
       let merge op1 op2 = match op1, op2 with
-      | `NOOP, `NOOP -> `NOOP (** only a noop when both are *)
+      | `NOOP, `NOOP -> `NOOP (* only a noop when both are *)
       | _ -> `WRITE
       in
       (res, merge status nstatus)
@@ -172,8 +174,8 @@ object(self)
     | (`OK, _) ->
       history <- rem;
       redo <- (negate_action action) :: redo
-    | (`FAIL, `NOOP) -> () (** we do nothing *)
-    | (`FAIL, `WRITE) -> self#clear_undo () (** we don't know how we failed, so start off *)
+    | (`FAIL, `NOOP) -> () (* we do nothing *)
+    | (`FAIL, `WRITE) -> self#clear_undo () (* we don't know how we failed, so start off *)
     end
 
   method perform_redo () = match redo with
@@ -184,8 +186,8 @@ object(self)
     | (`OK, _) ->
       redo <- rem;
       history <- (negate_action action) :: history;
-    | (`FAIL, `NOOP) -> () (** we do nothing *)
-    | (`FAIL, `WRITE) -> self#clear_undo () (** we don't know how we failed *)
+    | (`FAIL, `NOOP) -> () (* we do nothing *)
+    | (`FAIL, `WRITE) -> self#clear_undo () (* we don't know how we failed *)
     end
 
   method undo () =
@@ -212,9 +214,9 @@ object(self)
     self#with_lock_undo self#process_begin_user_action ()
 
   method process_end_user_action () =
-    (** Search for the pending action *)
+    (* Search for the pending action *)
     let rec split accu = function
-    | [] -> raise Not_found (** no pending begin action! *)
+    | [] -> raise Not_found (* no pending begin action! *)
     | EndGrp :: rem ->
       let grp = List.rev accu in
       let rec flatten = function
@@ -240,7 +242,7 @@ object(self)
     (* Save the insert action *)
     let len = Glib.Utf8.length s in
     let mergeable =
-      (** heuristic: split at newline and atomic pastes *)
+      (* heuristic: split at newline and atomic pastes *)
       len = 1 && (s <> "\n")
     in
     let ins = {
@@ -284,12 +286,12 @@ end
 
 class script_view (tv : source_view) (ct : Coq.coqtop) =
 
-let view = new GSourceView2.source_view (Gobject.unsafe_cast tv) in
+let view = new GSourceView3.source_view (Gobject.unsafe_cast tv) in
 let completion = new Wg_Completion.complete_model ct view#buffer in
 let popup = new Wg_Completion.complete_popup completion (view :> GText.view) in
 
 object (self)
-  inherit GSourceView2.source_view (Gobject.unsafe_cast tv)
+  inherit GSourceView3.source_view (Gobject.unsafe_cast tv)
 
   val undo_manager = new undo_manager view#buffer
 
@@ -405,6 +407,49 @@ object (self)
       self#buffer#delete_mark (`MARK stop_mark)
     | _ -> ()
 
+  method apply_unicode_binding () =
+    (* Auxiliary method to reach the beginning of line or the
+        nearest space before the iterator. *)
+    let rec get_line_start iter =
+      if iter#starts_line || Glib.Unichar.isspace iter#char then iter
+      else get_line_start iter#backward_char
+      in
+    (* Main action *)
+    let buffer = self#buffer in
+    let insert = buffer#get_iter `INSERT in
+    let insert_mark = buffer#create_mark ~left_gravity:false insert in
+    let () = buffer#begin_user_action () in
+    let word_to_insert =
+      try
+        let line_start = get_line_start insert in
+        let prev_backslash_search = insert#backward_search ~limit:line_start "\\" in
+        let backslash =
+          match prev_backslash_search with
+          | None -> raise Abort
+          | Some (backslash_start,backslash_stop) -> backslash_start
+          in
+        let prefix = backslash#get_text ~stop:insert in
+        let word =
+          match Unicode_bindings.lookup prefix with
+          | None -> raise Abort
+          | Some word -> word
+          in
+        let was_deleted = buffer#delete_interactive ~start:backslash ~stop:insert () in
+        if not was_deleted then raise Abort;
+        word
+      with Abort -> " "
+       (* Insert a space if no binding applies. This is to make sure that the user
+          gets some visual feedback that the keystroke was taken into account.
+          And also avoid slowing down users who press "Shift" for capitalizing the
+          first letter of a sentence just before typing the "Space" that comes in
+          front of that first letter. *)
+      in
+    let insert2 = buffer#get_iter_at_mark (`MARK insert_mark) in
+    let _was_inserted = buffer#insert_interactive ~iter:insert2 word_to_insert in
+    let () = self#buffer#end_user_action () in
+    self#buffer#delete_mark (`MARK insert_mark)
+
+
   method complete_popup = popup
 
   method undo = undo_manager#undo
@@ -460,10 +505,11 @@ object (self)
       if not proceed then GtkSignal.stop_emit ()
     in
     let _ = GtkSignal.connect ~sgn:move_line_signal ~callback obj in
-    (** Plug on preferences *)
-    let cb clr = self#misc#modify_base [`NORMAL, `NAME clr] in
-    let _ = background_color#connect#changed ~callback:cb in
-    let _ = self#misc#connect#realize ~callback:(fun () -> cb background_color#get) in
+    (* Plug on preferences *)
+(* FIXME: handle this using CSS *)
+(*     let cb clr = self#misc#modify_bg [`NORMAL, `NAME clr] in *)
+(*     let _ = background_color#connect#changed ~callback:cb in *)
+(*     let _ = self#misc#connect#realize ~callback:(fun () -> cb background_color#get) in *)
 
     let cb b = self#set_wrap_mode (if b then `WORD else `NONE) in
     stick dynamic_word_wrap self cb;
@@ -484,24 +530,24 @@ object (self)
     stick tab_length self self#set_tab_width;
     stick auto_complete self self#set_auto_complete;
 
-    let cb ft = self#misc#modify_font (Pango.Font.from_string ft) in
+    let cb ft = self#misc#modify_font (GPango.font_description_from_string ft) in
     stick text_font self cb;
 
     ()
 
 end
 
-let script_view ct ?(source_buffer:GSourceView2.source_buffer option)  ?draw_spaces =
-  GtkSourceView2.SourceView.make_params [] ~cont:(
+let script_view ct ?(source_buffer:GSourceView3.source_buffer option)  ?draw_spaces =
+  GtkSourceView3.SourceView.make_params [] ~cont:(
     GtkText.View.make_params ~cont:(
       GContainer.pack_container ~create:
 	(fun pl ->
 	  let w = match source_buffer with
-	    | None -> GtkSourceView2.SourceView.new_ ()
-	    | Some buf -> GtkSourceView2.SourceView.new_with_buffer
+            | None -> GtkSourceView3.SourceView.new_ ()
+            | Some buf -> GtkSourceView3.SourceView.new_with_buffer
               (Gobject.try_cast buf#as_buffer "GtkSourceBuffer")
 	  in
 	  let w = Gobject.unsafe_cast w in
 	  Gobject.set_params (Gobject.try_cast w "GtkSourceView") pl;
-	  Gaux.may ~f:(GtkSourceView2.SourceView.set_draw_spaces w) draw_spaces;
+          Gaux.may ~f:(GtkSourceView3.SourceView.set_draw_spaces w) draw_spaces;
 	  ((new script_view w ct) : script_view))))

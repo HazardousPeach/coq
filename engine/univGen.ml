@@ -13,26 +13,20 @@ open Names
 open Constr
 open Univ
 
+type univ_unique_id = int
 (* Generator of levels *)
-type universe_id = DirPath.t * int
-
 let new_univ_id, set_remote_new_univ_id =
   RemoteCounter.new_counter ~name:"Universes" 0 ~incr:((+) 1)
-    ~build:(fun n -> Global.current_dirpath (), n)
+    ~build:(fun n -> n)
 
-let new_univ_level () =
-  let dp, id = new_univ_id () in
-  Univ.Level.make dp id
+let new_univ_global () =
+  Univ.Level.UGlobal.make (Global.current_dirpath ()) (new_univ_id ())
 
-let fresh_level () = new_univ_level ()
-
-(* TODO: remove *)
-let new_univ dp = Univ.Universe.make (new_univ_level dp)
-let new_Type dp = mkType (new_univ dp)
-let new_Type_sort dp = Type (new_univ dp)
+let fresh_level () =
+  Univ.Level.make (new_univ_global ())
 
 let fresh_instance auctx =
-  let inst = Array.init (AUContext.size auctx) (fun _ -> new_univ_level()) in
+  let inst = Array.init (AUContext.size auctx) (fun _ -> fresh_level()) in
   let ctx = Array.fold_right LSet.add inst LSet.empty in
   let inst = Instance.of_array inst in
   inst, (ctx, AUContext.instantiate inst auctx)
@@ -77,19 +71,12 @@ let fresh_global_instance ?loc ?names env gr =
   let u, ctx = fresh_global_instance ?loc ?names env gr in
   mkRef (gr, u), ctx
 
-let constr_of_global gr =
-  let c, ctx = fresh_global_instance (Global.env ()) gr in
-    if not (Univ.ContextSet.is_empty ctx) then
-      if Univ.LSet.is_empty (Univ.ContextSet.levels ctx) then
-        (* Should be an error as we might forget constraints, allow for now
-           to make firstorder work with "using" clauses *)
-        c
-      else CErrors.user_err ~hdr:"constr_of_global"
-          Pp.(str "globalization of polymorphic reference " ++ Nametab.pr_global_env Id.Set.empty gr ++
-              str " would forget universes.")
-    else c
-
-let constr_of_global_univ = mkRef
+let constr_of_monomorphic_global gr =
+  if not (Global.is_polymorphic gr) then
+    fst (fresh_global_instance (Global.env ()) gr)
+  else CErrors.user_err ~hdr:"constr_of_global"
+      Pp.(str "globalization of polymorphic reference " ++ Nametab.pr_global_env Id.Set.empty gr ++
+          str " would forget universes.")
 
 let fresh_global_or_constr_instance env = function
   | IsConstr c -> c, ContextSet.empty
@@ -103,45 +90,13 @@ let global_of_constr c =
   | Var id -> VarRef id, Instance.empty
   | _ -> raise Not_found
 
-open Declarations
-
-let type_of_reference env r =
-  match r with
-  | VarRef id -> Environ.named_type id env, ContextSet.empty
-
-  | ConstRef c ->
-     let cb = Environ.lookup_constant c env in
-     let ty = cb.const_type in
-     let auctx = Declareops.constant_polymorphic_context cb in
-     let inst, ctx = fresh_instance auctx in
-     Vars.subst_instance_constr inst ty, ctx
-
-  | IndRef ind ->
-    let (mib, _ as specif) = Inductive.lookup_mind_specif env ind in
-    let auctx = Declareops.inductive_polymorphic_context mib in
-    let inst, ctx = fresh_instance auctx in
-    let ty = Inductive.type_of_inductive env (specif, inst) in
-    ty, ctx
-
-  | ConstructRef (ind,_ as cstr) ->
-    let (mib,_ as specif) = Inductive.lookup_mind_specif env ind in
-    let auctx = Declareops.inductive_polymorphic_context mib in
-    let inst, ctx = fresh_instance auctx in
-    Inductive.type_of_constructor (cstr,inst) specif, ctx
-
-let type_of_global t = type_of_reference (Global.env ()) t
-
 let fresh_sort_in_family = function
+  | InSProp -> Sorts.sprop, ContextSet.empty
   | InProp -> Sorts.prop, ContextSet.empty
   | InSet -> Sorts.set, ContextSet.empty
   | InType ->
     let u = fresh_level () in
-      Type (Univ.Universe.make u), ContextSet.singleton u
-
-let new_sort_in_family sf =
-  fst (fresh_sort_in_family sf)
-
-let extend_context = Univ.extend_in_context_set
+      sort_of_univ (Univ.Universe.make u), ContextSet.singleton u
 
 let new_global_univ () =
   let u = fresh_level () in

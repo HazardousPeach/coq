@@ -70,7 +70,7 @@ let map_named_declaration_with_hyploc f hyploc acc decl =
   in
   match decl,hyploc with
   | LocalAssum (id,_), InHypValueOnly ->
-      error_occurrences_error (IncorrectInValueOccurrence id)
+      error_occurrences_error (IncorrectInValueOccurrence id.Context.binder_name)
   | LocalAssum (id,typ), _ ->
       let acc,typ = f acc typ in acc, LocalAssum (id,typ)
   | LocalDef (id,body,typ), InHypTypeOnly ->
@@ -125,7 +125,7 @@ let replace_term_occ_gen_modulo sigma occs like_first test bywhat cl occ t =
          end;
          add_subst t subst; incr pos;
          (* Check nested matching subterms *)
-         if occs != Locus.AllOccurrences && occs != Locus.NoOccurrences then
+         if not (Locusops.is_all_occurrences occs) && occs != Locus.NoOccurrences then
            begin nested := true; ignore (subst_below k t); nested := false end;
          (* Do the effective substitution *)
          Vars.lift k (bywhat ()))

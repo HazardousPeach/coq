@@ -35,6 +35,8 @@ sig
   val fold_left_i : (int -> 'a -> 'b -> 'a) -> 'a -> 'b array -> 'a
   val fold_right2 :
     ('a -> 'b -> 'c -> 'c) -> 'a array -> 'b array -> 'c -> 'c
+  val fold_right3 :
+    ('a -> 'b -> 'c -> 'd -> 'd) -> 'a array -> 'b array -> 'c array -> 'd -> 'd
   val fold_left2 :
     ('a -> 'b -> 'c -> 'a) -> 'a -> 'b array -> 'c array -> 'a
   val fold_left3 :
@@ -50,6 +52,8 @@ sig
   val map2_i : (int -> 'a -> 'b -> 'c) -> 'a array -> 'b array -> 'c array
   val map3 :
     ('a -> 'b -> 'c -> 'd) -> 'a array -> 'b array -> 'c array -> 'd array
+  val map3_i :
+    (int -> 'a -> 'b -> 'c -> 'd) -> 'a array -> 'b array -> 'c array -> 'd array
   val map_left : ('a -> 'b) -> 'a array -> 'b array
   val iter2_i : (int -> 'a -> 'b -> unit) -> 'a array -> 'b array -> unit
   val fold_left_map : ('a -> 'b -> 'a * 'c) -> 'a -> 'b array -> 'a * 'c array
@@ -64,6 +68,7 @@ sig
   module Smart :
   sig
     val map : ('a -> 'a) -> 'a array -> 'a array
+    val map_i : (int -> 'a -> 'a) -> 'a array -> 'a array
     val map2 : ('a -> 'b -> 'b) -> 'a array -> 'b array -> 'b array
     val fold_left_map : ('a -> 'b -> 'a * 'b) -> 'a -> 'b array -> 'a * 'b array
     val fold_left2_map : ('a -> 'b -> 'c -> 'a * 'c) -> 'a -> 'b array -> 'c array -> 'a * 'c array
@@ -252,6 +257,16 @@ let fold_left2_i f a v1 v2 =
   if Array.length v2 <> lv1 then invalid_arg "Array.fold_left2_i";
   fold a 0
 
+let fold_right3 f v1 v2 v3 a =
+  let lv1 = Array.length v1 in
+  let rec fold a n =
+    if n=0 then a
+    else
+      let k = n-1 in
+      fold (f (uget v1 k) (uget v2 k) (uget v3 k) a) k in
+  if Array.length v2 <> lv1 || Array.length v3 <> lv1 then invalid_arg "Array.fold_right3";
+  fold a lv1
+
 let fold_left3 f a v1 v2 v3 =
   let lv1 = Array.length v1 in
   let rec fold a n =
@@ -342,6 +357,21 @@ let map3 f v1 v2 v3 =
     let res = Array.make len1 (f (uget v1 0) (uget v2 0) (uget v3 0)) in
     for i = 1 to pred len1 do
       Array.unsafe_set res i (f (uget v1 i) (uget v2 i) (uget v3 i))
+    done;
+    res
+  end
+
+let map3_i f v1 v2 v3 =
+  let len1 = Array.length v1 in
+  let len2 = Array.length v2 in
+  let len3 = Array.length v3 in
+  let () = if not (Int.equal len1 len2 && Int.equal len1 len3) then invalid_arg "Array.map3_i" in
+  if Int.equal len1 0 then
+    [| |]
+  else begin
+    let res = Array.make len1 (f 0 (uget v1 0) (uget v2 0) (uget v3 0)) in
+    for i = 1 to pred len1 do
+      Array.unsafe_set res i (f i (uget v1 i) (uget v2 i) (uget v3 i))
     done;
     res
   end
@@ -439,7 +469,7 @@ struct
       end
     done;
     if !i < len then begin
-      (** The array is not the same as the original one *)
+      (* The array is not the same as the original one *)
       let ans : 'a array = Array.copy ar in
       let v = match !temp with None -> assert false | Some x -> x in
       Array.unsafe_set ans !i v;
@@ -447,6 +477,36 @@ struct
       while !i < len do
         let v = Array.unsafe_get ans !i in
         let v' = f v in
+        if v != v' then Array.unsafe_set ans !i v';
+        incr i
+      done;
+      ans
+    end else ar
+
+  (* Same as map_i but smart *)
+  let map_i f (ar : 'a array) =
+    let len = Array.length ar in
+    let i = ref 0 in
+    let break = ref true in
+    let temp = ref None in
+    while !break && (!i < len) do
+      let v = Array.unsafe_get ar !i in
+      let v' = f !i v in
+      if v == v' then incr i
+      else begin
+        break := false;
+        temp := Some v';
+      end
+    done;
+    if !i < len then begin
+      (* The array is not the same as the original one *)
+      let ans : 'a array = Array.copy ar in
+      let v = match !temp with None -> assert false | Some x -> x in
+      Array.unsafe_set ans !i v;
+      incr i;
+      while !i < len do
+        let v = Array.unsafe_get ans !i in
+        let v' = f !i v in
         if v != v' then Array.unsafe_set ans !i v';
         incr i
       done;
@@ -471,7 +531,7 @@ struct
       end
     done;
     if !i < len then begin
-      (** The array is not the same as the original one *)
+      (* The array is not the same as the original one *)
       let ans : 'a array = Array.copy ar in
       let v = match !temp with None -> assert false | Some x -> x in
       Array.unsafe_set ans !i v;
@@ -492,7 +552,7 @@ struct
     let i = ref 0 in
     let break = ref true in
     let r = ref accu in
-    (** This variable is never accessed unset *)
+    (* This variable is never accessed unset *)
     let temp = ref None in
     while !break && (!i < len) do
       let v = Array.unsafe_get ar !i in
@@ -527,7 +587,7 @@ struct
     let i = ref 0 in
     let break = ref true in
     let r = ref accu in
-    (** This variable is never accessed unset *)
+    (* This variable is never accessed unset *)
     let temp = ref None in
     while !break && (!i < len) do
       let v = Array.unsafe_get ar !i in
@@ -608,7 +668,7 @@ struct
         end
       done;
       if !i < len then begin
-        (** The array is not the same as the original one *)
+        (* The array is not the same as the original one *)
         let ans : 'a array = Array.copy ar in
         let v = match !temp with None -> assert false | Some x -> x in
         Array.unsafe_set ans !i v;

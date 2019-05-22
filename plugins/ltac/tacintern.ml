@@ -19,7 +19,6 @@ open Util
 open Names
 open Libnames
 open Globnames
-open Nametab
 open Smartlocate
 open Constrexpr
 open Termops
@@ -45,9 +44,9 @@ type glob_sign = Genintern.glob_sign = {
      (* ltac variables and the subset of vars introduced by Intro/Let/... *)
   genv : Environ.env;
   extra : Genintern.Store.t;
+  intern_sign : Genintern.intern_variable_status;
 }
 
-let fully_empty_glob_sign = Genintern.empty_glob_sign Environ.empty_env
 let make_empty_glob_sign () = Genintern.empty_glob_sign (Global.env ())
 
 (* We have identifier <| global_reference <| constr *)
@@ -84,7 +83,8 @@ let intern_hyp ist ({loc;v=id} as locid) =
   else if find_ident id ist then
     make id
   else
-    Pretype_errors.error_var_not_found ?loc id
+    CErrors.user_err ?loc Pp.(str "Hypothesis" ++ spc () ++ Id.print id ++ spc() ++
+                              str "was not found in the current environment.")
 
 let intern_or_var f ist = function
   | ArgVar locid -> ArgVar (intern_hyp ist locid)
@@ -98,7 +98,7 @@ let intern_global_reference ist qid =
     ArgVar (make ?loc:qid.CAst.loc @@ qualid_basename qid)
   else
     try ArgArg (qid.CAst.loc,locate_global_with_alias qid)
-    with Not_found -> error_global_not_found qid
+    with Not_found -> Nametab.error_global_not_found qid
 
 let intern_ltac_variable ist qid =
   if qualid_is_ident qid && find_var (qualid_basename qid) ist then
@@ -122,22 +122,22 @@ let warn_deprecated_tactic =
   CWarnings.create ~name:"deprecated-tactic" ~category:"deprecated"
     (fun (qid,depr) -> str "Tactic " ++ pr_qualid qid ++
       strbrk " is deprecated" ++
-      pr_opt (fun since -> str "since " ++ str since) depr.Vernacinterp.since ++
-      str "." ++ pr_opt (fun note -> str note) depr.Vernacinterp.note)
+      pr_opt (fun since -> str "since " ++ str since) depr.Attributes.since ++
+      str "." ++ pr_opt (fun note -> str note) depr.Attributes.note)
 
 let warn_deprecated_alias =
   CWarnings.create ~name:"deprecated-tactic-notation" ~category:"deprecated"
     (fun (kn,depr) -> str "Tactic Notation " ++ Pptactic.pr_alias_key kn ++
       strbrk " is deprecated since" ++
-      pr_opt (fun since -> str "since " ++ str since) depr.Vernacinterp.since ++
-      str "." ++ pr_opt (fun note -> str note) depr.Vernacinterp.note)
+      pr_opt (fun since -> str "since " ++ str since) depr.Attributes.since ++
+      str "." ++ pr_opt (fun note -> str note) depr.Attributes.note)
 
 let intern_isolated_global_tactic_reference qid =
   let loc = qid.CAst.loc in
   let kn = Tacenv.locate_tactic qid in
   Option.iter (fun depr -> warn_deprecated_tactic ?loc (qid,depr)) @@
     Tacenv.tac_deprecation kn;
-  TacCall (Loc.tag ?loc (ArgArg (loc,kn),[]))
+  TacCall (CAst.make ?loc (ArgArg (loc,kn),[]))
 
 let intern_isolated_tactic_reference strict ist qid =
   (* An ltac reference *)
@@ -150,7 +150,7 @@ let intern_isolated_tactic_reference strict ist qid =
   try ConstrMayEval (ConstrTerm (intern_constr_reference strict ist qid))
   with Not_found ->
   (* Reference not found *)
-  error_global_not_found qid
+  Nametab.error_global_not_found qid
 
 (* Internalize an applied tactic reference *)
 
@@ -169,7 +169,7 @@ let intern_applied_tactic_reference ist qid =
   try intern_applied_global_tactic_reference qid
   with Not_found ->
   (* Reference not found *)
-  error_global_not_found qid
+  Nametab.error_global_not_found qid
 
 (* Intern a reference parsed in a non-tactic entry *)
 
@@ -190,7 +190,7 @@ let intern_non_tactic_reference strict ist qid =
     TacGeneric ipat
   else
     (* Reference not found *)
-    error_global_not_found qid
+    Nametab.error_global_not_found qid
 
 let intern_message_token ist = function
   | (MsgString _ | MsgInt _ as x) -> x
@@ -210,7 +210,7 @@ let intern_binding_name ist x =
      and if a term w/o ltac vars, check the name is indeed quantified *)
   x
 
-let intern_constr_gen pattern_mode isarity {ltacvars=lfun; genv=env; extra} c =
+let intern_constr_gen pattern_mode isarity {ltacvars=lfun; genv=env; extra; intern_sign} c =
   let warn = if !strict_check then fun x -> x else Constrintern.for_grammar in
   let scope = if isarity then Pretyping.IsType else Pretyping.WithoutTypeConstraint in
   let ltacvars = {
@@ -219,7 +219,7 @@ let intern_constr_gen pattern_mode isarity {ltacvars=lfun; genv=env; extra} c =
     ltac_extra = extra;
   } in
   let c' =
-    warn (Constrintern.intern_gen scope ~pattern_mode ~ltacvars env Evd.(from_env env)) c
+    warn (Constrintern.intern_core scope ~pattern_mode ~ltacvars env Evd.(from_env env) intern_sign) c
   in
   (c',if !strict_check then None else Some c)
 
@@ -302,7 +302,7 @@ let intern_evaluable_global_reference ist qid =
   try evaluable_of_global_reference ist.genv (locate_global_with_alias ~head:true qid)
   with Not_found ->
   if qualid_is_ident qid && not !strict_check then EvalVarRef (qualid_basename qid)
-  else error_global_not_found qid
+  else Nametab.error_global_not_found qid
 
 let intern_evaluable_reference_or_by_notation ist = function
   | {v=AN r} -> intern_evaluable_global_reference ist r
@@ -377,7 +377,7 @@ let intern_typed_pattern_or_ref_with_occurrences ist (l,p) =
          subterm matched when a pattern *)
       let r = match r with
       | {v=AN r} -> r
-      | {loc} -> (qualid_of_path ?loc (path_of_global (smart_global r))) in
+      | {loc} -> (qualid_of_path ?loc (Nametab.path_of_global (smart_global r))) in
       let sign = {
         Constrintern.ltac_vars = ist.ltacvars;
         ltac_bound = Id.Set.empty;
@@ -551,26 +551,26 @@ let rec intern_atomic lf ist x =
   | TacReduce (r,cl) ->
       dump_glob_red_expr r;
       TacReduce (intern_red_expr ist r, clause_app (intern_hyp_location ist) cl)
-  | TacChange (None,c,cl) ->
+  | TacChange (check,None,c,cl) ->
       let is_onhyps = match cl.onhyps with
       | None | Some [] -> true
       | _ -> false
       in
       let is_onconcl = match cl.concl_occs with
-      | AllOccurrences | NoOccurrences -> true
+      | AtLeastOneOccurrence | AllOccurrences | NoOccurrences -> true
       | _ -> false
       in
-      TacChange (None,
+      TacChange (check,None,
         (if is_onhyps && is_onconcl
          then intern_type ist c else intern_constr ist c),
 	clause_app (intern_hyp_location ist) cl)
-  | TacChange (Some p,c,cl) ->
+  | TacChange (check,Some p,c,cl) ->
       let { ltacvars } = ist in
       let metas,pat = intern_typed_pattern ist ~as_type:false ~ltacvars p in
       let fold accu x = Id.Set.add x accu in
       let ltacvars = List.fold_left fold ltacvars metas in
       let ist' = { ist with ltacvars } in
-      TacChange (Some pat,intern_constr ist' c,
+      TacChange (check,Some pat,intern_constr ist' c,
 	clause_app (intern_hyp_location ist) cl)
 
   (* Equality and inversion *)
@@ -587,10 +587,10 @@ let rec intern_atomic lf ist x =
 and intern_tactic onlytac ist tac = snd (intern_tactic_seq onlytac ist tac)
 
 and intern_tactic_seq onlytac ist = function
-  | TacAtom (loc,t) ->
+  | TacAtom { loc; v=t } ->
       let lf = ref ist.ltacvars in
       let t = intern_atomic lf ist t in
-      !lf, TacAtom (Loc.tag ?loc:(adjust_loc loc) t)
+      !lf, TacAtom (CAst.make ?loc:(adjust_loc loc) t)
   | TacFun tacfun -> ist.ltacvars, TacFun (intern_tactic_fun ist tacfun)
   | TacLetIn (isrec,l,u) ->
       let ltacvars = Id.Set.union (extract_let_names l) ist.ltacvars in
@@ -659,27 +659,27 @@ and intern_tactic_seq onlytac ist = function
   | TacFirst l -> ist.ltacvars, TacFirst (List.map (intern_pure_tactic ist) l)
   | TacSolve l -> ist.ltacvars, TacSolve (List.map (intern_pure_tactic ist) l)
   | TacComplete tac -> ist.ltacvars, TacComplete (intern_pure_tactic ist tac)
-  | TacArg (loc,a) -> ist.ltacvars, intern_tactic_as_arg loc onlytac ist a
+  | TacArg { loc; v=a } -> ist.ltacvars, intern_tactic_as_arg loc onlytac ist a
   | TacSelect (sel, tac) ->
       ist.ltacvars, TacSelect (sel, intern_pure_tactic ist tac)
 
   (* For extensions *)
-  | TacAlias (loc,(s,l)) ->
+  | TacAlias { loc; v=(s,l) } ->
       let alias = Tacenv.interp_alias s in
       Option.iter (fun o -> warn_deprecated_alias ?loc (s,o)) @@ alias.Tacenv.alias_deprecation;
       let l = List.map (intern_tacarg !strict_check false ist) l in
-      ist.ltacvars, TacAlias (Loc.tag ?loc (s,l))
-  | TacML (loc,(opn,l)) ->
+      ist.ltacvars, TacAlias (CAst.make ?loc (s,l))
+  | TacML { loc; v=(opn,l) } ->
       let _ignore = Tacenv.interp_ml_tactic opn in
-      ist.ltacvars, TacML (loc, (opn,List.map (intern_tacarg !strict_check false ist) l))
+      ist.ltacvars, TacML CAst.(make ?loc (opn,List.map (intern_tacarg !strict_check false ist) l))
 
 and intern_tactic_as_arg loc onlytac ist a =
   match intern_tacarg !strict_check onlytac ist a with
   | TacCall _ | Reference _
-  | TacGeneric _ as a -> TacArg (loc,a)
+  | TacGeneric _ as a -> TacArg CAst.(make ?loc a)
   | Tacexp a -> a
   | ConstrMayEval _ | TacFreshId _ | TacPretype _ | TacNumgoals as a ->
-      if onlytac then error_tactic_expected ?loc else TacArg (loc,a)
+      if onlytac then error_tactic_expected ?loc else TacArg CAst.(make ?loc a)
 
 and intern_tactic_or_tacarg ist = intern_tactic false ist
 
@@ -692,9 +692,9 @@ and intern_tactic_fun ist (var,body) =
 and intern_tacarg strict onlytac ist = function
   | Reference r -> intern_non_tactic_reference strict ist r
   | ConstrMayEval c -> ConstrMayEval (intern_constr_may_eval ist c)
-  | TacCall (loc,(f,[])) -> intern_isolated_tactic_reference strict ist f
-  | TacCall (loc,(f,l)) ->
-      TacCall (Loc.tag ?loc (
+  | TacCall { loc; v=(f,[]) } -> intern_isolated_tactic_reference strict ist f
+  | TacCall { loc; v=(f,l) } ->
+      TacCall (CAst.make ?loc (
         intern_applied_tactic_reference ist f,
         List.map (intern_tacarg !strict_check false ist) l))
   | TacFreshId x -> TacFreshId (List.map (intern_string_or_var ist) x)
@@ -843,8 +843,9 @@ let notation_subst bindings tac =
     (make ?loc @@ Name id, c) :: accu
   in
   let bindings = Id.Map.fold fold bindings [] in
-  (** This is theoretically not correct due to potential variable capture, but
-      Ltac has no true variables so one cannot simply substitute *)
+  (* This is theoretically not correct due to potential variable
+     capture, but Ltac has no true variables so one cannot simply
+     substitute *)
   TacLetIn (false, bindings, tac)
 
 let () = Genintern.register_ntn_subst0 wit_tactic notation_subst

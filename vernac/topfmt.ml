@@ -196,8 +196,20 @@ let init_tag_map styles =
 let default_styles () =
   init_tag_map (default_tag_map ())
 
-let parse_color_config file =
-  let styles = Terminal.parse file in
+let set_emacs_print_strings () =
+  let open Terminal in
+  let diff = "diff." in
+  List.iter (fun b ->
+      let (name, attrs) = b in
+      if CString.is_sub diff name 0 then
+        tag_map := CString.Map.add name
+          { attrs with prefix = Some (Printf.sprintf "<%s>" name);
+                       suffix = Some (Printf.sprintf "</%s>" name) }
+          !tag_map)
+    (CString.Map.bindings !tag_map)
+
+let parse_color_config str =
+  let styles = Terminal.parse str in
   init_tag_map styles
 
 let dump_tags () = CString.Map.bindings !tag_map
@@ -222,20 +234,21 @@ let diff_tag_stack = ref []  (* global, just like std_ft *)
 (** Not thread-safe. We should put a lock somewhere if we print from
     different threads. Do we? *)
 let make_style_stack () =
-  (** Default tag is to reset everything *)
+  (* Default tag is to reset everything *)
   let style_stack = ref [] in
   let peek () = match !style_stack with
-  | []      -> default_style  (** Anomalous case, but for robustness *)
+  | []      -> default_style  (* Anomalous case, but for robustness *)
   | st :: _ -> st
   in
   let open_tag tag =
     let (tpfx, ttag) = split_tag tag in
     if tpfx = end_pfx then "" else
       let style = get_style ttag in
-    (** Merge the current settings and the style being pushed.  This allows
-    restoring the previous settings correctly in a pop when both set the same
-    attribute.  Example: current settings have red FG, the pushed style has
-    green FG.  When popping the style, we should set red FG, not default FG. *)
+      (* Merge the current settings and the style being pushed.  This
+         allows restoring the previous settings correctly in a pop
+         when both set the same attribute.  Example: current settings
+         have red FG, the pushed style has green FG.  When popping the
+         style, we should set red FG, not default FG. *)
     let style = Terminal.merge (peek ()) style in
     let diff = Terminal.diff (peek ()) style in
     style_stack := style :: !style_stack;
@@ -247,7 +260,7 @@ let make_style_stack () =
       if tpfx = start_pfx then "" else begin
         if tpfx = end_pfx then diff_tag_stack := (try List.tl !diff_tag_stack with tl -> []);
         match !style_stack with
-        | []       -> (** Something went wrong, we fallback *)
+        | []       -> (* Something went wrong, we fallback *)
                       Terminal.eval default_style
         | cur :: rem -> style_stack := rem;
                       if cur = (peek ()) then "" else
@@ -263,13 +276,13 @@ let make_printing_functions () =
     let (tpfx, ttag) = split_tag tag in
     if tpfx <> end_pfx then
       let style = get_style ttag in
-      match style.Terminal.prefix with Some s -> Format.pp_print_string ft s | None -> () in
+      match style.Terminal.prefix with Some s -> Format.pp_print_as ft 0 s | None -> () in
 
   let print_suffix ft tag =
     let (tpfx, ttag) = split_tag tag in
     if tpfx <> start_pfx then
       let style = get_style ttag in
-      match style.Terminal.suffix with Some s -> Format.pp_print_string ft s | None -> () in
+      match style.Terminal.suffix with Some s -> Format.pp_print_as ft 0 s | None -> () in
 
   print_prefix, print_suffix
 
@@ -334,6 +347,21 @@ type execution_phase =
   | LoadingPrelude
   | LoadingRcFile
   | InteractiveLoop
+  | CompilationPhase
+
+let default_phase = ref InteractiveLoop
+
+let in_phase ~phase f x =
+  let op = !default_phase in
+  default_phase := phase;
+  try
+    let res = f x in
+    default_phase := op;
+    res
+  with exn ->
+    let iexn = Backtrace.add_backtrace exn in
+    default_phase := op;
+    Util.iraise iexn
 
 let pr_loc loc =
     let fname = loc.Loc.fname in
@@ -347,8 +375,8 @@ let pr_loc loc =
 	   int (loc.bp-loc.bol_pos) ++ str"-" ++ int (loc.ep-loc.bol_pos) ++
 	   str":")
 
-let pr_phase ?loc phase =
-  match phase, loc with
+let pr_phase ?loc () =
+  match !default_phase, loc with
   | LoadingRcFile, loc ->
      (* For when all errors go through feedback:
      str "While loading rcfile:" ++
@@ -358,15 +386,17 @@ let pr_phase ?loc phase =
      Some (str "While loading initial state:" ++ Option.cata (fun loc -> fnl () ++ pr_loc loc) (mt ()) loc)
   | _, Some loc -> Some (pr_loc loc)
   | ParsingCommandLine, _
-  | Initialization, _ -> None
+  | Initialization, _
+  | CompilationPhase, _ ->
+    None
   | InteractiveLoop, _ ->
      (* Note: interactive messages such as "foo is defined" are not located *)
      None
 
-let print_err_exn phase any =
+let print_err_exn any =
   let (e, info) = CErrors.push any in
   let loc = Loc.get_loc info in
-  let pre_hdr = pr_phase ?loc phase in
+  let pre_hdr = pr_phase ?loc () in
   let msg = CErrors.iprint (e, info) ++ fnl () in
   std_logger ?pre_hdr Feedback.Error msg
 
@@ -391,3 +421,24 @@ let with_output_to_file fname func input =
     deep_ft := Util.pi3 old_fmt;
     close_out channel;
     Exninfo.iraise reraise
+
+(* For coqtop -time, we display the position in the file,
+   and a glimpse of the executed command *)
+
+let pr_cmd_header com =
+  let shorten s =
+    if Unicode.utf8_length s > 33 then (Unicode.utf8_sub s 0 30) ^ "..." else s
+  in
+  let noblank s = String.map (fun c ->
+      match c with
+        | ' ' | '\n' | '\t' | '\r' -> '~'
+        | x -> x
+      ) s
+  in
+  let (start,stop) = Option.cata Loc.unloc (0,0) com.CAst.loc in
+  let safe_pr_vernac x =
+    try Ppvernac.pr_vernac x
+    with e -> str (Printexc.to_string e) in
+  let cmd = noblank (shorten (string_of_ppcmds (safe_pr_vernac com)))
+  in str "Chars " ++ int start ++ str " - " ++ int stop ++
+     str " [" ++ str cmd ++ str "] "

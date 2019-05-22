@@ -41,6 +41,13 @@ struct
     if i < k then find i l
     else if i = k then v
     else find i r
+
+  let rec find_opt i s = match map_prj s with
+  | MEmpty -> None
+  | MNode (l, k, v, r, h) ->
+    if i < k then find_opt i l
+    else if i = k then Some v
+    else find_opt i r
 end
 
 module List = struct
@@ -114,8 +121,8 @@ struct
           let () = t := DSet (i, old, res) in
           res
       else match v with
-      | None -> t (** Nothing to do! *)
-      | Some _ -> (** we must resize *)
+      | None -> t (* Nothing to do! *)
+      | Some _ -> (* we must resize *)
         let nlen = next len (succ i) in
         let nlen = min nlen Sys.max_array_length in
         let () = assert (i < nlen) in

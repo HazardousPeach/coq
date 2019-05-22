@@ -82,7 +82,7 @@ Notation "F ^op" := (OppositeFunctor F) : functor_scope.
 Definition FunctorProduct' C D C' D' (F : Functor C D) (F' : Functor C' D') : Functor (C * C') (D * D')
   := admit.
 
-Global Class FunctorApplicationInterpretable
+Class FunctorApplicationInterpretable
        {C D} (F : Functor C D)
        {argsT : Type} (args : argsT)
        {T : Type} (rtn : T)
@@ -94,9 +94,9 @@ Definition FunctorApplicationOf {C D} F {argsT} args {T} {rtn}
 Global Arguments FunctorApplicationOf / {C} {D} F {argsT} args {T} {rtn} {_}.
 
 Global Instance FunctorApplicationDash C D (F : Functor C D)
-: FunctorApplicationInterpretable F (IdentityFunctor C) F | 0.
+: FunctorApplicationInterpretable F (IdentityFunctor C) F | 0 := {}.
 Global Instance FunctorApplicationFunctorFunctor' A B C C' D (F : Functor (A * B) D) (G : Functor C A) (H : Functor C' B)
-: FunctorApplicationInterpretable F (G, H) (F ∘ (FunctorProduct' G H))%functor | 100.
+: FunctorApplicationInterpretable F (G, H) (F ∘ (FunctorProduct' G H))%functor | 100 := {}.
 
 Notation "F ⟨ x ⟩" := (FunctorApplicationOf F%functor x%functor) : functor_scope.
 

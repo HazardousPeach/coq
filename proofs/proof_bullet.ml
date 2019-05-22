@@ -176,7 +176,7 @@ end
 (* Current bullet behavior, controlled by the option *)
 let current_behavior = ref Strict.strict
 
-let _ =
+let () =
   Goptions.(declare_string_option {
     optdepr = false;
     optname = "bullet behavior";
@@ -197,3 +197,15 @@ let put p b =
 
 let suggest p =
   (!current_behavior).suggest p
+
+(* Better printing for bullet exceptions *)
+exception SuggestNoSuchGoals of int * Proof.t
+
+let _ = CErrors.register_handler begin function
+    | SuggestNoSuchGoals(n,proof) ->
+      let suffix = suggest proof in
+      CErrors.user_err
+        Pp.(str "No such " ++ str (CString.plural n "goal") ++ str "." ++
+            pr_non_empty_arg (fun x -> x) suffix)
+    | _ -> raise CErrors.Unhandled
+  end

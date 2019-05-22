@@ -1,5 +1,7 @@
 Names
-Uint31
+TransparentState
+Uint63
+CPrimitives
 Univ
 UGraph
 Esubst
@@ -18,12 +20,13 @@ Opaqueproof
 Declarations
 Entries
 Nativevalues
-CPrimitives
 Declareops
 Retroknowledge
 Conv_oracle
 Environ
+Primred
 CClosure
+Retypeops
 Reduction
 Clambda
 Nativelambda
@@ -38,6 +41,7 @@ Type_errors
 Modops
 Inductive
 Typeops
+IndTyping
 Indtypes
 Cooking
 Term_typing

@@ -24,6 +24,7 @@ type existential_name = Id.t
 (** Sorts *)
 
 type 'a glob_sort_gen =
+  | GSProp (** representation of [SProp] literal *)
   | GProp (** representation of [Prop] literal *)
   | GSet  (** representation of [Set] literal *)
   | GType of 'a (** representation of [Type] literal *)
@@ -39,6 +40,12 @@ type glob_constraint = glob_level * Univ.constraint_type * glob_level
 
 type sort_info = (Libnames.qualid * int) option list
 type glob_sort = sort_info glob_sort_gen
+
+type glob_recarg = int option
+
+and glob_fix_kind =
+  | GFix of (glob_recarg array * int)
+  | GCoFix of int
 
 (** Casts *)
 
@@ -77,23 +84,15 @@ type 'a glob_constr_r =
       (** [GCases(style,r,tur,cc)] = "match 'tur' return 'r' with 'cc'" (in [MatchStyle]) *)
   | GLetTuple of Name.t list * (Name.t * 'a glob_constr_g option) * 'a glob_constr_g * 'a glob_constr_g
   | GIf   of 'a glob_constr_g * (Name.t * 'a glob_constr_g option) * 'a glob_constr_g * 'a glob_constr_g
-  | GRec  of 'a fix_kind_g * Id.t array * 'a glob_decl_g list array *
+  | GRec  of glob_fix_kind * Id.t array * 'a glob_decl_g list array *
              'a glob_constr_g array * 'a glob_constr_g array
   | GSort of glob_sort
   | GHole of Evar_kinds.t * Namegen.intro_pattern_naming_expr * Genarg.glob_generic_argument option
   | GCast of 'a glob_constr_g * 'a glob_constr_g cast_type
+  | GInt of Uint63.t
 and 'a glob_constr_g = ('a glob_constr_r, 'a) DAst.t
 
 and 'a glob_decl_g = Name.t * binding_kind * 'a glob_constr_g option * 'a glob_constr_g
-
-and 'a fix_recursion_order_g =
-  | GStructRec
-  | GWfRec of 'a glob_constr_g
-  | GMeasureRec of 'a glob_constr_g * 'a glob_constr_g option
-
-and 'a fix_kind_g =
-  | GFix of ((int option * 'a fix_recursion_order_g) array * int)
-  | GCoFix of int
 
 and 'a predicate_pattern_g =
     Name.t * (inductive * Name.t list) CAst.t option
@@ -106,6 +105,7 @@ and 'a tomatch_tuples_g = 'a tomatch_tuple_g list
 and 'a cases_clause_g = (Id.t list * 'a cases_pattern_g list * 'a glob_constr_g) CAst.t
 (** [(p,il,cl,t)] = "|'cl' => 't'". Precondition: the free variables
     of [t] are members of [il]. *)
+
 and 'a cases_clauses_g = 'a cases_clause_g list
 
 type glob_constr = [ `any ] glob_constr_g
@@ -114,9 +114,7 @@ type tomatch_tuples = [ `any ] tomatch_tuples_g
 type cases_clause = [ `any ] cases_clause_g
 type cases_clauses = [ `any ] cases_clauses_g
 type glob_decl = [ `any ] glob_decl_g
-type fix_kind = [ `any ] fix_kind_g
 type predicate_pattern = [ `any ] predicate_pattern_g
-type fix_recursion_order = [ `any ] fix_recursion_order_g
 
 type any_glob_constr = AnyGlobConstr : 'r glob_constr_g -> any_glob_constr
 

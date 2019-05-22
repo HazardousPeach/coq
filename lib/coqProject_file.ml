@@ -12,10 +12,6 @@
    ideally we would like to make this independent so it can be
    bootstrapped. *)
 
-(* Note the problem with the error invokation below calling exit... *)
-(* let error msg = Feedback.msg_error msg *)
-let warning msg = Feedback.msg_warning Pp.(str msg)
-
 type arg_source = CmdLine | ProjectFile
 
 type 'a sourced = { thing : 'a; source : arg_source }
@@ -28,7 +24,7 @@ type project = {
 
   v_files : string sourced list;
   mli_files : string sourced list;
-  ml4_files : string sourced list;
+  mlg_files : string sourced list;
   ml_files : string sourced list;
   mllib_files : string sourced list;
   mlpack_files : string sourced list;
@@ -65,7 +61,7 @@ let mk_project project_file makefile install_kind use_ocamlopt = {
 
   v_files = [];
   mli_files = [];
-  ml4_files = [];
+  mlg_files = [];
   ml_files = [];
   mllib_files = [];
   mlpack_files = [];
@@ -145,7 +141,7 @@ let exists_dir dir =
   try Sys.is_directory (strip_trailing_slash dir) with Sys_error _ -> false
 
 
-let process_cmd_line orig_dir proj args =
+let process_cmd_line ~warning_fn orig_dir proj args =
   let parsing_project_file = ref (proj.project_file <> None) in
   let sourced x = { thing = x; source = if !parsing_project_file then ProjectFile else CmdLine } in
   let orig_dir = (* avoids turning foo.v in ./foo.v *)
@@ -168,7 +164,7 @@ let process_cmd_line orig_dir proj args =
   | ("-full"|"-opt") :: r -> aux { proj with use_ocamlopt =  true } r
   | "-install" :: d :: r ->
     if proj.install_kind <> None then
-      (warning "-install set more than once.@\n%!");
+      (warning_fn "-install set more than once.");
     let install = match d with
       | "user" -> UserInstall
       | "none" -> NoInstall
@@ -195,7 +191,7 @@ let process_cmd_line orig_dir proj args =
     let file = CUnix.remove_path_dot (CUnix.correct_path file orig_dir) in
     let () = match proj.project_file with
       | None -> ()
-      | Some _ -> warning "Multiple project files are deprecated.@\n%!"
+      | Some _ -> warning_fn "Multiple project files are deprecated."
     in
     parsing_project_file := true;
     let proj = aux { proj with project_file = Some file } (parse file) in
@@ -218,11 +214,14 @@ let process_cmd_line orig_dir proj args =
       let f = CUnix.correct_path f orig_dir in
       let proj =
         if exists_dir f then { proj with subdirs = proj.subdirs @ [sourced f] }
-        else match CUnix.get_extension f with
+        else match Filename.extension f with
           | ".v" ->
             { proj with v_files = proj.v_files @ [sourced f] }
         | ".ml" -> { proj with ml_files = proj.ml_files @ [sourced f] }
-        | ".ml4" -> { proj with ml4_files = proj.ml4_files @ [sourced f] }
+        | ".ml4" ->
+          let msg = Printf.sprintf "camlp5 macro files not supported anymore, please port %s to coqpp" f in
+          raise (Parsing_error msg)
+        | ".mlg" -> { proj with mlg_files = proj.mlg_files @ [sourced f] }
         | ".mli" -> { proj with mli_files = proj.mli_files @ [sourced f] }
         | ".mllib" -> { proj with mllib_files = proj.mllib_files @ [sourced f] }
         | ".mlpack" -> { proj with mlpack_files = proj.mlpack_files @ [sourced f] }
@@ -233,11 +232,11 @@ let process_cmd_line orig_dir proj args =
 
  (******************************* API ************************************)
 
-let cmdline_args_to_project ~curdir args =
-  process_cmd_line curdir (mk_project None None None true) args
+let cmdline_args_to_project ~warning_fn ~curdir args =
+  process_cmd_line ~warning_fn curdir (mk_project None None None true) args
 
-let read_project_file f =
-  process_cmd_line (Filename.dirname f)
+let read_project_file ~warning_fn f =
+  process_cmd_line ~warning_fn (Filename.dirname f)
     (mk_project (Some f) None (Some NoInstall) true) (parse f)
 
 let rec find_project_file ~from ~projfile_name =
@@ -249,9 +248,9 @@ let rec find_project_file ~from ~projfile_name =
     else find_project_file ~from:newdir ~projfile_name
 ;;
 
-let all_files { v_files; ml_files; mli_files; ml4_files;
+let all_files { v_files; ml_files; mli_files; mlg_files;
                 mllib_files; mlpack_files } =
-  v_files @ mli_files @ ml4_files @ ml_files @ mllib_files @ mlpack_files
+  v_files @ mli_files @ mlg_files @ ml_files @ mllib_files @ mlpack_files
 
 let map_sourced_list f l = List.map (fun x -> f x.thing) l
 ;;

@@ -38,12 +38,15 @@ type subterm_unification_error = bool * position_reporting * position_reporting 
 type type_error = (constr, types) ptype_error
 
 type pretype_error =
-  (** Old Case *)
   | CantFindCaseType of constr
-  (** Type inference unification *)
+  (** Old Case *)
+
   | ActualTypeNotCoercible of unsafe_judgment * types * unification_error
-  (** Tactic Unification *)
+  (** Type inference unification *)
+
   | UnifOccurCheck of Evar.t * constr
+  (** Tactic Unification *)
+
   | UnsolvableImplicit of Evar.t * Evd.unsolvability_explanation option
   | CannotUnify of constr * constr * unification_error option
   | CannotUnifyLocal of constr * constr * constr
@@ -56,6 +59,7 @@ type pretype_error =
   | NonLinearUnification of Name.t * constr
   (** Pretyping *)
   | VarNotFound of Id.t
+  | EvarNotFound of Id.t
   | UnexpectedType of constr * constr
   | NotProduct of constr
   | TypingError of type_error
@@ -63,6 +67,7 @@ type pretype_error =
   | UnsatisfiableConstraints of
     (Evar.t * Evar_kinds.t) option * Evar.Set.t option
     (** unresolvable evar, connex component *)
+  | DisallowedSProp
 
 exception PretypeError of env * Evd.evar_map * pretype_error
 
@@ -97,12 +102,12 @@ val error_number_branches :
 
 val error_ill_typed_rec_body :
   ?loc:Loc.t -> env -> Evd.evar_map ->
-      int -> Name.t array -> unsafe_judgment array -> types array -> 'b
+      int -> Name.t Context.binder_annot array -> unsafe_judgment array -> types array -> 'b
 
 val error_elim_arity :
   ?loc:Loc.t -> env -> Evd.evar_map ->
-      pinductive -> Sorts.family list -> constr ->
-      unsafe_judgment -> (Sorts.family * Sorts.family * arity_error) option -> 'b
+      pinductive -> constr ->
+      unsafe_judgment -> (Sorts.family list * Sorts.family * Sorts.family * arity_error) option -> 'b
 
 val error_not_a_type :
   ?loc:Loc.t -> env -> Evd.evar_map -> unsafe_judgment -> 'b
@@ -150,9 +155,11 @@ val error_unexpected_type :
 val error_not_product :
   ?loc:Loc.t -> env -> Evd.evar_map -> constr -> 'b
 
-(** {6 Error in conversion from AST to glob_constr } *)
+val error_var_not_found : ?loc:Loc.t -> env -> Evd.evar_map -> Id.t -> 'b
 
-val error_var_not_found : ?loc:Loc.t -> Id.t -> 'b
+val error_evar_not_found : ?loc:Loc.t -> env -> Evd.evar_map -> Id.t -> 'b
+
+val error_disallowed_sprop : env -> Evd.evar_map -> 'a
 
 (** {6 Typeclass errors } *)
 

@@ -109,7 +109,7 @@ let labels_of_ref r =
 
 (*s Constants tables. *)
 
-let typedefs = ref (Cmap_env.empty : (constant_body * ml_type) Cmap_env.t)
+let typedefs = ref (Cmap_env.empty : (Opaqueproof.opaque constant_body * ml_type) Cmap_env.t)
 let init_typedefs () = typedefs := Cmap_env.empty
 let add_typedef kn cb t =
   typedefs := Cmap_env.add kn (cb,t) !typedefs
@@ -120,7 +120,7 @@ let lookup_typedef kn cb =
   with Not_found -> None
 
 let cst_types =
-  ref (Cmap_env.empty : (constant_body * ml_schema) Cmap_env.t)
+  ref (Cmap_env.empty : (Opaqueproof.opaque constant_body * ml_schema) Cmap_env.t)
 let init_cst_types () = cst_types := Cmap_env.empty
 let add_cst_type kn cb s = cst_types := Cmap_env.add kn (cb,s) !cst_types
 let lookup_cst_type kn cb =
@@ -446,14 +446,14 @@ let error_MPfile_as_mod mp b =
 
 let argnames_of_global r =
   let env = Global.env () in
-  let typ, _ = Global.type_of_global_in_context env r in
+  let typ, _ = Typeops.type_of_global_in_context env r in
   let rels,_ =
     decompose_prod (Reduction.whd_all env typ) in
-  List.rev_map fst rels
+  List.rev_map (fun x -> Context.binder_name (fst x)) rels
 
 let msg_of_implicit = function
   | Kimplicit (r,i) ->
-     let name = match List.nth (argnames_of_global r) (i-1) with
+     let name = match (List.nth (argnames_of_global r) (i-1)) with
        | Anonymous -> ""
        | Name id -> "(" ^ Id.to_string id ^ ") "
      in
@@ -500,7 +500,7 @@ let info_file f =
 let my_bool_option name initval =
   let flag = ref initval in
   let access = fun () -> !flag in
-  let _ = declare_bool_option
+  let () = declare_bool_option
     {optdepr = false;
      optname = "Extraction "^name;
      optkey = ["Extraction"; name];
@@ -572,14 +572,14 @@ let chg_flag n = int_flag_ref := n; opt_flag_ref := flag_of_int n
 
 let optims () = !opt_flag_ref
 
-let _ = declare_bool_option
+let () = declare_bool_option
 	  {optdepr = false;
 	   optname = "Extraction Optimize";
 	   optkey = ["Extraction"; "Optimize"];
 	   optread = (fun () -> not (Int.equal !int_flag_ref 0));
 	   optwrite = (fun b -> chg_flag (if b then int_flag_init else 0))}
 
-let _ = declare_int_option
+let () = declare_int_option
           { optdepr = false;
             optname = "Extraction Flag";
             optkey = ["Extraction";"Flag"];
@@ -593,7 +593,7 @@ let _ = declare_int_option
 let conservative_types_ref = ref false
 let conservative_types () = !conservative_types_ref
 
-let _ = declare_bool_option
+let () = declare_bool_option
   {optdepr = false;
    optname = "Extraction Conservative Types";
    optkey = ["Extraction"; "Conservative"; "Types"];
@@ -605,7 +605,7 @@ let _ = declare_bool_option
 let file_comment_ref = ref ""
 let file_comment () = !file_comment_ref
 
-let _ = declare_string_option
+let () = declare_string_option
   {optdepr = false;
    optname = "Extraction File Comment";
    optkey = ["Extraction"; "File"; "Comment"];
@@ -621,10 +621,9 @@ let lang_ref = Summary.ref Ocaml ~name:"ExtrLang"
 let lang () = !lang_ref
 
 let extr_lang : lang -> obj =
-  declare_object
-    {(default_object "Extraction Lang") with
-       cache_function = (fun (_,l) -> lang_ref := l);
-       load_function = (fun _ (_,l) -> lang_ref := l)}
+  declare_object @@ superglobal_object_nodischarge "Extraction Lang"
+    ~cache:(fun (_,l) -> lang_ref := l)
+    ~subst:None
 
 let extraction_language x = Lib.add_anonymous_leaf (extr_lang x)
 
@@ -648,15 +647,10 @@ let add_inline_entries b l =
 (* Registration of operations for rollback. *)
 
 let inline_extraction : bool * GlobRef.t list -> obj =
-  declare_object
-    {(default_object "Extraction Inline") with
-       cache_function = (fun (_,(b,l)) -> add_inline_entries b l);
-       load_function = (fun _ (_,(b,l)) -> add_inline_entries b l);
-       classify_function = (fun o -> Substitute o);
-       discharge_function = (fun (_,x) -> Some x);
-       subst_function =
-        (fun (s,(b,l)) -> (b,(List.map (fun x -> fst (subst_global s x)) l)))
-    }
+  declare_object @@ superglobal_object "Extraction Inline"
+    ~cache:(fun (_,(b,l)) -> add_inline_entries b l)
+    ~subst:(Some (fun (s,(b,l)) -> (b,(List.map (fun x -> fst (subst_global s x)) l))))
+    ~discharge:(fun (_,x) -> Some x)
 
 (* Grammar entries. *)
 
@@ -685,10 +679,9 @@ let print_extraction_inline () =
 (* Reset part *)
 
 let reset_inline : unit -> obj =
-  declare_object
-    {(default_object "Reset Extraction Inline") with
-       cache_function = (fun (_,_)-> inline_table :=  empty_inline_table);
-       load_function = (fun _ (_,_)-> inline_table :=  empty_inline_table)}
+  declare_object @@ superglobal_object_nodischarge "Reset Extraction Inline"
+    ~cache:(fun (_,_)-> inline_table :=  empty_inline_table)
+    ~subst:None
 
 let reset_extraction_inline () = Lib.add_anonymous_leaf (reset_inline ())
 
@@ -731,13 +724,9 @@ let add_implicits r l =
 (* Registration of operations for rollback. *)
 
 let implicit_extraction : GlobRef.t * int_or_id list -> obj =
-  declare_object
-    {(default_object "Extraction Implicit") with
-       cache_function = (fun (_,(r,l)) -> add_implicits r l);
-       load_function = (fun _ (_,(r,l)) -> add_implicits r l);
-       classify_function = (fun o -> Substitute o);
-       subst_function = (fun (s,(r,l)) -> (fst (subst_global s r), l))
-    }
+  declare_object @@ superglobal_object_nodischarge "Extraction Implicit"
+    ~cache:(fun (_,(r,l)) -> add_implicits r l)
+    ~subst:(Some (fun (s,(r,l)) -> (fst (subst_global s r), l)))
 
 (* Grammar entries. *)
 
@@ -784,12 +773,9 @@ let add_blacklist_entries l =
 (* Registration of operations for rollback. *)
 
 let blacklist_extraction : string list -> obj =
-  declare_object
-    {(default_object "Extraction Blacklist") with
-       cache_function = (fun (_,l) -> add_blacklist_entries l);
-       load_function = (fun _ (_,l) -> add_blacklist_entries l);
-       subst_function = (fun (_,x) -> x)
-    }
+  declare_object @@ superglobal_object_nodischarge "Extraction Blacklist"
+    ~cache:(fun (_,l) -> add_blacklist_entries l)
+    ~subst:None
 
 (* Grammar entries. *)
 
@@ -805,10 +791,9 @@ let print_extraction_blacklist () =
 (* Reset part *)
 
 let reset_blacklist : unit -> obj =
-  declare_object
-    {(default_object "Reset Extraction Blacklist") with
-       cache_function = (fun (_,_)-> blacklist_table := Id.Set.empty);
-       load_function = (fun _ (_,_)-> blacklist_table := Id.Set.empty)}
+  declare_object @@ superglobal_object_nodischarge "Reset Extraction Blacklist"
+    ~cache:(fun (_,_)-> blacklist_table := Id.Set.empty)
+    ~subst:None
 
 let reset_extraction_blacklist () = Lib.add_anonymous_leaf (reset_blacklist ())
 
@@ -852,23 +837,14 @@ let find_custom_match pv =
 (* Registration of operations for rollback. *)
 
 let in_customs : GlobRef.t * string list * string -> obj =
-  declare_object
-    {(default_object "ML extractions") with
-       cache_function = (fun (_,(r,ids,s)) -> add_custom r ids s);
-       load_function = (fun _ (_,(r,ids,s)) -> add_custom r ids s);
-       classify_function = (fun o -> Substitute o);
-       subst_function =
-        (fun (s,(r,ids,str)) -> (fst (subst_global s r), ids, str))
-    }
+  declare_object @@ superglobal_object_nodischarge "ML extractions"
+    ~cache:(fun (_,(r,ids,s)) -> add_custom r ids s)
+    ~subst:(Some (fun (s,(r,ids,str)) -> (fst (subst_global s r), ids, str)))
 
 let in_custom_matchs : GlobRef.t * string -> obj =
-  declare_object
-    {(default_object "ML extractions custom matchs") with
-       cache_function = (fun (_,(r,s)) -> add_custom_match r s);
-       load_function = (fun _ (_,(r,s)) -> add_custom_match r s);
-       classify_function = (fun o -> Substitute o);
-       subst_function = (fun (subs,(r,s)) -> (fst (subst_global subs r), s))
-    }
+  declare_object @@ superglobal_object_nodischarge "ML extractions custom matchs"
+    ~cache:(fun (_,(r,s)) -> add_custom_match r s)
+    ~subst:(Some (fun (subs,(r,s)) -> (fst (subst_global subs r), s)))
 
 (* Grammar entries. *)
 
@@ -878,7 +854,7 @@ let extract_constant_inline inline r ids s =
   match g with
     | ConstRef kn ->
 	let env = Global.env () in
-	let typ, _ = Global.type_of_global_in_context env (ConstRef kn) in
+        let typ, _ = Typeops.type_of_global_in_context env (ConstRef kn) in
 	let typ = Reduction.whd_all env typ in
 	if Reduction.is_arity env typ
 	  then begin

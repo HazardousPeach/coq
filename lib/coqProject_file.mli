@@ -22,7 +22,7 @@ type project = {
 
   v_files : string sourced list;
   mli_files : string sourced list;
-  ml4_files : string sourced list;
+  mlg_files : string sourced list;
   ml_files : string sourced list;
   mllib_files : string sourced list;
   mlpack_files : string sourced list;
@@ -50,8 +50,8 @@ and install =
   | TraditionalInstall
   | UserInstall
 
-val cmdline_args_to_project : curdir:string -> string list -> project
-val read_project_file : string -> project
+val cmdline_args_to_project : warning_fn:(string -> unit) -> curdir:string -> string list -> project
+val read_project_file : warning_fn:(string -> unit) -> string -> project
 val coqtop_args_from_project : project -> string list
 val find_project_file : from:string -> projfile_name:string -> string option
 

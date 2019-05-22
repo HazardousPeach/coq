@@ -25,10 +25,10 @@ typed modulo insertion of appropriate coercions. We allow to write:
 Classes
 -------
 
-A class with `n` parameters is any defined name with a type
-:g:`forall (x₁:A₁)..(xₙ:Aₙ),s` where ``s`` is a sort.  Thus a class with
+A class with :math:`n` parameters is any defined name with a type
+:n:`forall (@ident__1 : @type__1)..(@ident__n:@type__n), @sort`.  Thus a class with
 parameters is considered as a single class and not as a family of
-classes.  An object of a class ``C`` is any term of type :g:`C t₁ .. tₙ`.
+classes.  An object of a class is any term of type :n:`@class @term__1 .. @term__n`.
 In addition to these user-defined classes, we have two built-in classes:
 
 
@@ -37,23 +37,23 @@ In addition to these user-defined classes, we have two built-in classes:
   * ``Funclass``, the class of functions; its objects are all the terms with a functional
     type, i.e. of form :g:`forall x:A,B`.
 
-Formally, the syntax of a classes is defined as:
+Formally, the syntax of classes is defined as:
 
 .. productionlist::
-   class: qualid
-        : | `Sortclass`
-        : | `Funclass`
+   class: `qualid`
+        : Sortclass
+        : Funclass
 
 
 Coercions
 ---------
 
 A name ``f`` can be declared as a coercion between a source user-defined class
-``C`` with `n` parameters and a target class ``D`` if one of these
+``C`` with :math:`n` parameters and a target class ``D`` if one of these
 conditions holds:
 
  * ``D`` is a user-defined class, then the type of ``f`` must have the form
-   :g:`forall (x₁:A₁)..(xₙ:Aₙ)(y:C x₁..xₙ), D u₁..uₘ` where `m`
+   :g:`forall (x₁:A₁)..(xₙ:Aₙ)(y:C x₁..xₙ), D u₁..uₘ` where :math:`m`
    is the number of parameters of ``D``.
  * ``D`` is ``Funclass``, then the type of ``f`` must have the form
    :g:`forall (x₁:A₁)..(xₙ:Aₙ)(y:C x₁..xₙ)(x:A), B`.
@@ -124,43 +124,55 @@ Declaring Coercions
 
 .. cmd:: Coercion @qualid : @class >-> @class
 
-  Declares the construction denoted by `qualid` as a coercion between
+  Declares the construction denoted by :token:`qualid` as a coercion between
   the two given classes.
 
   .. exn:: @qualid not declared.
+     :undocumented:
+
   .. exn:: @qualid is already a coercion.
+     :undocumented:
+
   .. exn:: Funclass cannot be a source class.
+     :undocumented:
+
   .. exn:: @qualid is not a function.
+     :undocumented:
+
   .. exn:: Cannot find the source class of @qualid.
+     :undocumented:
+
   .. exn:: Cannot recognize @class as a source class of @qualid.
+     :undocumented:
+
   .. exn:: @qualid does not respect the uniform inheritance condition.
+     :undocumented:
+
   .. exn:: Found target class ... instead of ...
+     :undocumented:
 
   .. warn:: Ambiguous path.
 
      When the coercion :token:`qualid` is added to the inheritance graph,
-     invalid coercion paths are ignored; they are signaled by a warning
-     displaying these paths of the form :g:`[f₁;..;fₙ] : C >-> D`.
+     invalid coercion paths are ignored. The :cmd:`Coercion` command tries to check
+     that they are convertible with existing ones on the same classes.
+     The paths for which this check fails are displayed by a warning in the form
+     :g:`[f₁;..;fₙ] : C >-> D`.
 
   .. cmdv:: Local Coercion @qualid : @class >-> @class
 
-     Declares the construction denoted by `qualid` as a coercion local to
+     Declares the construction denoted by :token:`qualid` as a coercion local to
      the current section.
 
-  .. cmdv:: Coercion @ident := @term
+  .. cmdv:: Coercion @ident := @term {? @type }
 
-     This defines `ident` just like ``Definition`` `ident` ``:=`` `term`,
-     and then declares `ident` as a coercion between it source and its target.
+     This defines :token:`ident` just like :n:`Definition @ident := term {? @type }`,
+     and then declares :token:`ident` as a coercion between it source and its target.
 
-  .. cmdv:: Coercion @ident := @term : @type
+  .. cmdv:: Local Coercion @ident := @term {? @type }
 
-     This defines `ident` just like ``Definition`` `ident` : `type` ``:=`` `term`,
-     and then declares `ident` as a coercion between it source and its target.
-
-  .. cmdv:: Local Coercion @ident := @term
-
-     This defines `ident` just like ``Let`` `ident` ``:=`` `term`,
-     and then declares `ident` as a coercion between it source and its target.
+     This defines :token:`ident` just like :n:`Let @ident := @term  {? @type }`,
+     and then declares :token:`ident` as a coercion between it source and its target.
 
 Assumptions can be declared as coercions at declaration time.
 This extends the grammar of assumptions from
@@ -174,10 +186,10 @@ Figure :ref:`vernacular` as follows:
    \comindex{Hypothesis \mbox{\rm (and coercions)}}
 
 .. productionlist::
-   assumption : assumption_keyword assums .
-   assums : simple_assums
-          : | (simple_assums) ... (simple_assums)
-   simple_assums : ident ... ident :[>] term
+   assumption : `assumption_keyword` `assums` .
+   assums : `simple_assums`
+          : (`simple_assums`) ... (`simple_assums`)
+   simple_assums : `ident` ... `ident` :[>] `term`
 
 If the extra ``>`` is present before the type of some assumptions, these
 assumptions are declared as coercions.
@@ -192,44 +204,44 @@ grammar of inductive types from Figure :ref:`vernacular` as follows:
    \comindex{CoInductive \mbox{\rm (and coercions)}}
 
 .. productionlist::
-   inductive : `Inductive` ind_body `with` ... `with` ind_body
-             : | `CoInductive` ind_body `with` ... `with` ind_body
-   ind_body : ident [binders] : term := [[|] constructor | ... | constructor]
-   constructor : ident [binders] [:[>] term]
+   inductive : Inductive `ind_body` with ... with `ind_body`
+             : CoInductive `ind_body` with ... with `ind_body`
+   ind_body : `ident` [ `binders` ] : `term` := [[|] `constructor` | ... | `constructor` ]
+   constructor : `ident` [ `binders` ] [:[>] `term` ]
 
 Especially, if the extra ``>`` is present in a constructor
 declaration, this constructor is declared as a coercion.
 
 .. cmd:: Identity Coercion @ident : @class >-> @class
 
-  If ``C`` is the source `class` and ``D`` the destination, we check
-  that ``C`` is a constant with a body of the form
-  :g:`fun (x₁:T₁)..(xₙ:Tₙ) => D t₁..tₘ` where `m` is the
-  number of parameters of ``D``.  Then we define an identity
-  function with type :g:`forall (x₁:T₁)..(xₙ:Tₙ)(y:C x₁..xₙ),D t₁..tₘ`,
-  and we declare it as an identity coercion between ``C`` and ``D``.
+   If ``C`` is the source `class` and ``D`` the destination, we check
+   that ``C`` is a constant with a body of the form
+   :g:`fun (x₁:T₁)..(xₙ:Tₙ) => D t₁..tₘ` where `m` is the
+   number of parameters of ``D``.  Then we define an identity
+   function with type :g:`forall (x₁:T₁)..(xₙ:Tₙ)(y:C x₁..xₙ),D t₁..tₘ`,
+   and we declare it as an identity coercion between ``C`` and ``D``.
 
-  .. exn:: @class must be a transparent constant.
+   .. exn:: @class must be a transparent constant.
+      :undocumented:
 
-  .. cmdv:: Local Identity Coercion @ident : @ident >-> @ident
+   .. cmdv:: Local Identity Coercion @ident : @ident >-> @ident
 
-    Same as ``Identity Coercion`` but locally to the current section.
+      Same as :cmd:`Identity Coercion` but locally to the current section.
 
-  .. cmdv:: SubClass @ident := @type
-     :name: SubClass
+   .. cmdv:: SubClass @ident := @type
+      :name: SubClass
 
-    If `type` is a class `ident'` applied to some arguments then
-    `ident` is defined and an identity coercion of name
-    `Id_ident_ident'` is
-    declared. Otherwise said, this is an abbreviation for
+      If :n:`@type` is a class :n:`@ident'` applied to some arguments then
+      :n:`@ident` is defined and an identity coercion of name
+      :n:`Id_@ident_@ident'` is
+      declared. Otherwise said, this is an abbreviation for
 
-      ``Definition`` `ident` ``:=`` `type`.
+      :n:`Definition @ident := @type.`
+      :n:`Identity Coercion Id_@ident_@ident' : @ident >-> @ident'`.
 
-      ``Identity Coercion`` `Id_ident_ident'` : `ident` ``>->`` `ident'`.
+   .. cmdv:: Local SubClass @ident := @type
 
-  .. cmdv:: Local SubClass @ident := @type
-
-    Same as before but locally to the current section.
+      Same as before but locally to the current section.
 
 
 Displaying Available Coercions
@@ -237,19 +249,19 @@ Displaying Available Coercions
 
 .. cmd:: Print Classes
 
-  Print the list of declared classes in the current context.
+   Print the list of declared classes in the current context.
 
 .. cmd:: Print Coercions
 
-  Print the list of declared coercions in the current context.
+   Print the list of declared coercions in the current context.
 
 .. cmd:: Print Graph
 
-  Print the list of valid coercion paths in the current context.
+   Print the list of valid coercion paths in the current context.
 
 .. cmd:: Print Coercion Paths @class @class
 
-  Print the list of valid coercion paths between the two given classes.
+   Print the list of valid coercion paths between the two given classes.
 
 Activating the Printing of Coercions
 -------------------------------------
@@ -270,19 +282,21 @@ Activating the Printing of Coercions
 Classes as Records
 ------------------
 
+.. index:: :> (coercion)
+
 We allow the definition of *Structures with Inheritance* (or classes as records)
 by extending the existing :cmd:`Record` macro. Its new syntax is:
 
 .. cmdv:: Record {? >} @ident {? @binders} : @sort := {? @ident} { {+; @ident :{? >} @term } }
 
-   The first identifier `ident` is the name of the defined record and
-   `sort` is its type. The optional identifier after ``:=`` is the name
-   of the constuctor (it will be ``Build_``\ `ident` if not given).
-   The other identifiers are the names of the fields, and the `term`
+   The first identifier :token:`ident` is the name of the defined record and
+   :token:`sort` is its type. The optional identifier after ``:=`` is the name
+   of the constructor (it will be :n:`Build_@ident` if not given).
+   The other identifiers are the names of the fields, and :token:`term`
    are their respective types. If ``:>`` is used instead of ``:`` in
    the declaration of a field, then the name of this field is automatically
    declared as a coercion from the record name to the class of this
-   field type. Remark that the fields always verify the uniform
+   field type. Note that the fields always verify the uniform
    inheritance condition. If the optional ``>`` is given before the
    record name, then the constructor name is automatically declared as
    a coercion from the class of the last field type to the record name
@@ -310,21 +324,8 @@ are also forgotten.
 Coercions and Modules
 ---------------------
 
-.. flag:: Automatic Coercions Import
-
-   Since |Coq| version 8.3, the coercions present in a module are activated
-   only when the module is explicitly imported. Formerly, the coercions
-   were activated as soon as the module was required, whether it was
-   imported or not.
-
-   This option makes it possible to recover the behavior of the versions of
-   |Coq| prior to 8.3.
-
-.. warn:: Coercion used but not in scope: @qualid. If you want to use this coercion, please Import the module that contains it.
-
-          This warning is emitted when typechecking relies on a coercion
-          contained in a module that has not been explicitely imported. It helps
-          migrating code and stop relying on the option above.
+The coercions present in a module are activated only when the module is
+explicitly imported.
 
 Examples
 --------
@@ -353,7 +354,7 @@ We first give an example of coercion between atomic inductive types
 
 .. warning::
 
-  Note that ``Check true=O`` would fail. This is "normal" behavior of
+  Note that ``Check (true = O)`` would fail. This is "normal" behavior of
   coercions. To validate ``true=O``, the coercion is searched from
   ``nat`` to ``bool``. There is none.
 

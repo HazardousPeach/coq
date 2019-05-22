@@ -21,6 +21,7 @@ open Term
 open Constr
 open Declarations
 open Univ
+open Context
 
 module NamedDecl = Context.Named.Declaration
 module RelDecl = Context.Rel.Declaration
@@ -134,12 +135,12 @@ let abstract_context hyps =
     | NamedDecl.LocalDef (id, b, t) ->
       let b = Vars.subst_vars subst b in
       let t = Vars.subst_vars subst t in
-      id, RelDecl.LocalDef (Name id, b, t)
+      id, RelDecl.LocalDef (map_annot Name.mk_name id, b, t)
     | NamedDecl.LocalAssum (id, t) ->
       let t = Vars.subst_vars subst t in
-      id, RelDecl.LocalAssum (Name id, t)
+      id, RelDecl.LocalAssum (map_annot Name.mk_name id, t)
     in
-    (decl :: ctx, id :: subst)
+    (decl :: ctx, id.binder_name :: subst)
   in
   Context.Named.fold_outside fold hyps ~init:([], [])
 
@@ -151,13 +152,15 @@ let abstract_constant_body c (hyps, subst) =
   let c = Vars.subst_vars subst c in
   it_mkLambda_or_LetIn c hyps
 
-type recipe = { from : constant_body; info : Opaqueproof.cooking_info }
+type recipe = { from : Opaqueproof.opaque constant_body; info : Opaqueproof.cooking_info }
 type inline = bool
 
-type result = {
-  cook_body : constant_def;
+type 'opaque result = {
+  cook_body : (constr Mod_subst.substituted, 'opaque) constant_def;
   cook_type : types;
-  cook_universes : constant_universes;
+  cook_universes : universes;
+  cook_private_univs : Univ.ContextSet.t option;
+  cook_relevance : Sorts.relevance;
   cook_inline : inline;
   cook_context : Constr.named_context option;
 }
@@ -168,6 +171,7 @@ let on_body ml hy f = function
   | OpaqueDef o ->
     OpaqueDef (Opaqueproof.discharge_direct_opaque ~cook_constr:f
                  { Opaqueproof.modlist = ml; abstract = hy } o)
+  | Primitive _ -> CErrors.anomaly (Pp.str "Primitives cannot be cooked")
 
 let expmod_constr_subst cache modlist subst c =
   let subst = Univ.make_instance_subst subst in
@@ -183,10 +187,10 @@ let cook_constr { Opaqueproof.modlist ; abstract = (vars, subst, _) } c =
 
 let lift_univs cb subst auctx0 =
   match cb.const_universes with
-  | Monomorphic_const ctx ->
+  | Monomorphic ctx ->
     assert (AUContext.is_empty auctx0);
-    subst, (Monomorphic_const ctx)
-  | Polymorphic_const auctx ->
+    subst, (Monomorphic ctx)
+  | Polymorphic auctx ->
     (** Given a named instance [subst := u₀ ... uₙ₋₁] together with an abstract
         context [auctx0 := 0 ... n - 1 |= C{0, ..., n - 1}] of the same length,
         and another abstract context relative to the former context
@@ -200,12 +204,13 @@ let lift_univs cb subst auctx0 =
     *)
     if (Univ.Instance.is_empty subst) then
       (** Still need to take the union for the constraints between globals *)
-      subst, (Polymorphic_const (AUContext.union auctx0 auctx))
+      subst, (Polymorphic (AUContext.union auctx0 auctx))
     else
       let ainst = Univ.make_abstract_instance auctx in
       let subst = Instance.append subst ainst in
-      let auctx' = Univ.subst_univs_level_abstract_universe_context (Univ.make_instance_subst subst) auctx in
-      subst, (Polymorphic_const (AUContext.union auctx0 auctx'))
+      let substf = Univ.make_instance_subst subst in
+      let auctx' = Univ.subst_univs_level_abstract_universe_context substf auctx in
+      subst, (Polymorphic (AUContext.union auctx0 auctx'))
 
 let cook_constant ~hcons { from = cb; info } =
   let { Opaqueproof.modlist; abstract } = info in
@@ -229,10 +234,16 @@ let cook_constant ~hcons { from = cb; info } =
 		  hyps)
       hyps0 ~init:cb.const_hyps in
   let typ = abstract_constant_type (expmod cb.const_type) hyps in
+  let private_univs = Option.map (on_snd (Univ.subst_univs_level_constraints
+                                            (Univ.make_instance_subst usubst)))
+      cb.const_private_poly_univs
+  in
   {
     cook_body = body;
     cook_type = typ;
     cook_universes = univs;
+    cook_private_univs = private_univs;
+    cook_relevance = cb.const_relevance;
     cook_inline = cb.const_inline_code;
     cook_context = Some const_hyps;
   }

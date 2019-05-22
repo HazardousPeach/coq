@@ -171,6 +171,7 @@ Section Defs.
    a rewrite relation. *)
     
   Global Instance equivalence_rewrite_relation `(Equivalence eqA) : RewriteRelation eqA.
+  Defined.
 
   (** Leibniz equality. *)
   Section Leibniz.
@@ -189,7 +190,9 @@ End Defs.
 
 (** Default rewrite relations handled by [setoid_rewrite]. *)
 Instance: RewriteRelation impl.
+Defined.
 Instance: RewriteRelation iff.
+Defined.
 
 (** Hints to drive the typeclass resolution avoiding loops
  due to the use of full unification. *)
@@ -283,6 +286,7 @@ Local Open Scope list_scope.
 (** A compact representation of non-dependent arities, with the codomain singled-out. *)
 
 (* Note, we do not use [list Type] because it imposes unnecessary universe constraints *)
+#[universes(template)]
 Inductive Tlist : Type := Tnil : Tlist | Tcons : Type -> Tlist -> Tlist.
 Local Infix "::" := Tcons.
 
@@ -403,9 +407,10 @@ Program Instance predicate_equivalence_equivalence :
   Qed.
   Next Obligation.
     fold pointwise_lifting.
-    induction l. firstorder.
-    intros. simpl in *. pose (IHl (x x0) (y x0) (z x0)).
-    firstorder.
+    induction l.
+    - firstorder.
+    - intros. simpl in *. pose (IHl (x x0) (y x0) (z x0)).
+      firstorder.
   Qed.
 
 Program Instance predicate_implication_preorder :
@@ -414,9 +419,10 @@ Program Instance predicate_implication_preorder :
     induction l ; firstorder.
   Qed.
   Next Obligation.
-    induction l. firstorder.
-    unfold predicate_implication in *. simpl in *.
-    intro. pose (IHl (x x0) (y x0) (z x0)). firstorder.
+    induction l.
+    - firstorder.
+    - unfold predicate_implication in *. simpl in *.
+      intro. pose (IHl (x x0) (y x0) (z x0)). firstorder.
   Qed.
 
 (** We define the various operations which define the algebra on binary relations,
@@ -429,6 +435,7 @@ Section Binary.
     @predicate_equivalence (_::_::Tnil).
 
   Global Instance: RewriteRelation relation_equivalence.
+  Defined.
   
   Definition relation_conjunction (R : relation A) (R' : relation A) : relation A :=
     @predicate_intersection (A::A::Tnil) R R'.

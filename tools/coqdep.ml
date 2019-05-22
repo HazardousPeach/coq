@@ -233,7 +233,7 @@ struct
             let rem = NSet.fold push next rem in
             aux rem seen
           | Some false ->
-            (** The path we took encountered x -> y but not the one in seen *)
+            (* The path we took encountered x -> y but not the one in seen *)
             if through then aux (NMap.add n true rem) (NMap.add n true seen)
             else aux rem seen
           | Some true -> aux rem seen
@@ -357,7 +357,7 @@ let treat_coq_file chan =
           | None -> acc
           | Some file_str -> (canonize file_str, ".v") :: acc
         else acc
-      | AddLoadPath _ | AddRecLoadPath _ -> acc (** TODO *)
+      | AddLoadPath _ | AddRecLoadPath _ -> acc (* TODO *)
       in
       loop acc
   in
@@ -473,7 +473,8 @@ let add_r_include path l = add_rec_dir_import add_known path (split_period l)
 let treat_coqproject f =
   let open CoqProject_file in
   let iter_sourced f = List.iter (fun {thing} -> f thing) in
-  let project = read_project_file f in
+  let warning_fn x = coqdep_warning "%s" x in
+  let project = read_project_file ~warning_fn f in
   iter_sourced (fun { path } -> add_caml_dir path) project.ml_includes;
   iter_sourced (fun ({ path }, l) -> add_q_include path l) project.q_includes;
   iter_sourced (fun ({ path }, l) -> add_r_include path l) project.r_includes;
@@ -528,7 +529,13 @@ let coqdep () =
     add_rec_dir_import add_known "plugins" ["Coq"];
     add_rec_dir_import (fun _ -> add_caml_known) "theories" ["Coq"];
     add_rec_dir_import (fun _ -> add_caml_known) "plugins" ["Coq"];
+    let user = "user-contrib" in
+    if Sys.file_exists user then begin
+      add_rec_dir_no_import add_known user [];
+      add_rec_dir_no_import (fun _ -> add_caml_known) user [];
+    end;
   end else begin
+    (* option_boot is actually always false in this branch *)
     Envars.set_coqlib ~fail:(fun msg -> raise (CoqlibError msg));
     let coqlib = Envars.coqlib () in
     add_rec_dir_import add_coqlib_known (coqlib//"theories") ["Coq"];
@@ -561,4 +568,5 @@ let _ =
   try
     coqdep ()
   with CoqlibError msg ->
-    eprintf "*** Error: %s@\n%!" msg
+    eprintf "*** Error: %s@\n%!" msg;
+    exit 1

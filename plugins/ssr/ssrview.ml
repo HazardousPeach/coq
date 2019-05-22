@@ -10,6 +10,7 @@
 
 open Util
 open Names
+open Context
 
 open Ltac_plugin
 
@@ -42,19 +43,14 @@ module AdaptorDb = struct
       term_view_adaptor_db := AdaptorMap.add k (t :: lk) !term_view_adaptor_db
 
   let subst_adaptor ( subst, (k, t as a)) =
-    let t' = Detyping.subst_glob_constr subst t in
+    let t' = Detyping.subst_glob_constr (Global.env()) subst t in
     if t' == t then a else k, t'
 
-  let classify_adaptor x = Libobject.Substitute x
-
   let in_db =
-    Libobject.declare_object {
-       (Libobject.default_object "VIEW_ADAPTOR_DB")
-    with
-       Libobject.open_function = (fun i o -> if i = 1 then cache_adaptor o);
-       Libobject.cache_function = cache_adaptor;
-       Libobject.subst_function = subst_adaptor;
-       Libobject.classify_function = classify_adaptor }
+    let open Libobject in
+    declare_object @@ global_object_nodischarge "VIEW_ADAPTOR_DB"
+      ~cache:cache_adaptor
+      ~subst:(Some subst_adaptor)
 
   let declare kind terms =
     List.iter (fun term -> Lib.add_anonymous_leaf (in_db (kind,term)))
@@ -64,18 +60,23 @@ end
 
 (* Forward View application code *****************************************)
 
+let reduce_or l = tclUNIT (List.fold_left (||) false l)
+
 module State : sig
 
   (* View storage API *)
-  val vsINIT    : EConstr.t * Id.t list -> unit tactic
+  val vsINIT    : view:EConstr.t -> subject_name:Id.t list -> to_clear:Id.t list -> unit tactic
   val vsPUSH    : (EConstr.t -> (EConstr.t * Id.t list) tactic) -> unit tactic
-  val vsCONSUME : (name:Id.t option -> EConstr.t -> to_clear:Id.t list -> unit tactic) -> unit tactic
+  val vsCONSUME : (names:Id.t list -> EConstr.t -> to_clear:Id.t list -> unit tactic) -> unit tactic
+
+  (* The bool is the || of the bool returned by the continuations *)
+  val vsCONSUME_IF_PRESENT : (names:Id.t list -> EConstr.t option -> to_clear:Id.t list -> bool tactic) -> bool tactic
   val vsASSERT_EMPTY : unit tactic
 
 end = struct (* {{{ *)
 
 type vstate = {
-  subject_name : Id.t option;   (* top *)
+  subject_name : Id.t list;   (* top *)
     (* None if views are being applied to a term *)
   view : EConstr.t;  (* v2 (v1 top) *)
   to_clear : Id.t list;
@@ -86,34 +87,43 @@ include Ssrcommon.MakeState(struct
   let init = None
 end)
 
-let vsINIT (view, to_clear) =
-  tclSET (Some { subject_name = None; view; to_clear })
+let vsINIT ~view ~subject_name ~to_clear =
+  tclSET (Some { subject_name; view; to_clear })
 
-let vsPUSH k =
-  tacUPDATE (fun s -> match s with
+(** Initializes the state in which view data is accumulated when views are
+applied to the first assumption in the goal *)
+let vsBOOTSTRAP = Goal.enter_one ~__LOC__ begin fun gl ->
+  let concl = Goal.concl gl in
+  let id = (* We keep the orig name for checks in "in" tcl *)
+    match EConstr.kind_of_type (Goal.sigma gl) concl with
+    | Term.ProdType({binder_name=Name.Name id}, _, _)
+      when Ssrcommon.is_discharged_id id -> id
+    | _ -> mk_anon_id "view_subject" (Tacmach.New.pf_ids_of_hyps gl) in
+  let view = EConstr.mkVar id in
+  Ssrcommon.tclINTRO_ID id <*>
+  tclSET (Some { subject_name = [id]; view; to_clear = [] })
+end
+
+let rec vsPUSH k =
+ tclINDEPENDENT (tclGET (function
   | Some { subject_name; view; to_clear } ->
       k view >>= fun (view, clr) ->
-      tclUNIT (Some { subject_name; view; to_clear = to_clear @ clr })
-  | None ->
-      Goal.enter_one ~__LOC__ begin fun gl ->
-        let concl = Goal.concl gl in
-        let id = (* We keep the orig name for checks in "in" tcl *)
-          match EConstr.kind_of_type (Goal.sigma gl) concl with
-          | Term.ProdType(Name.Name id, _, _)
-            when Ssrcommon.is_discharged_id id -> id
-          | _ -> mk_anon_id "view_subject" (Tacmach.New.pf_ids_of_hyps gl) in
-        let view = EConstr.mkVar id in
-        Ssrcommon.tclINTRO_ID id <*>
-        k view >>= fun (view, to_clear) ->
-        tclUNIT (Some { subject_name = Some id; view; to_clear })
-      end)
+      tclSET (Some { subject_name; view; to_clear = to_clear @ clr })
+  | None -> vsBOOTSTRAP <*> vsPUSH k))
 
-let vsCONSUME k =
-  tclGET (fun s -> match s with
+let rec vsCONSUME k =
+ tclINDEPENDENT (tclGET (function
   | Some { subject_name; view; to_clear } ->
         tclSET None <*>
-        k ~name:subject_name view ~to_clear
-  | None -> anomaly "vsCONSUME: empty storage")
+        k ~names:subject_name view ~to_clear
+  | None -> vsBOOTSTRAP <*> vsCONSUME k))
+
+let vsCONSUME_IF_PRESENT k =
+ tclINDEPENDENTL (tclGET1 (function
+  | Some { subject_name; view; to_clear } ->
+        tclSET None <*>
+        k ~names:subject_name (Some view) ~to_clear
+  | None -> k ~names:[] None ~to_clear:[])) >>= reduce_or
 
 let vsASSERT_EMPTY =
   tclGET (function
@@ -133,20 +143,26 @@ let intern_constr_expr { Genintern.genv; ltacvars = vars } sigma ce =
    To allow for t being a notation, like "Notation foo x := ltac:(foo x)", we
    need to internalize t.
 *)
-let is_tac_in_term { body; glob_env; interp_env } =
+let is_tac_in_term ?extra_scope { annotation; body; glob_env; interp_env } =
   Goal.(enter_one ~__LOC__ begin fun goal ->
     let genv = env goal in
     let sigma = sigma goal in
     let ist = Ssrcommon.option_assert_get glob_env (Pp.str"not a term") in
     (* We use the env of the goal, not the global one *)
     let ist = { ist with Genintern.genv } in
+    (* We open extra_scope *)
+    let body =
+      match extra_scope with
+      | None -> body
+      | Some s -> CAst.make (Constrexpr.CDelimiters(s,body))
+    in
     (* We unravel notations *)
     let g = intern_constr_expr ist sigma body in
     match DAst.get g with
     | Glob_term.GHole (_,_, Some x)
       when Genarg.has_type x (Genarg.glbwit Tacarg.wit_tactic)
         -> tclUNIT (`Tac (Genarg.out_gen (Genarg.glbwit Tacarg.wit_tactic) x))
-    | _ -> tclUNIT (`Term (interp_env, g))
+    | _ -> tclUNIT (`Term (annotation, interp_env, g))
 end)
 
 (* To inject a constr into a glob_constr we use an Ltac variable *)
@@ -192,7 +208,7 @@ let tclKeepOpenConstr (_env, sigma, t) = Unsafe.tclEVARS sigma <*> tclUNIT t
 let tclADD_CLEAR_IF_ID (env, ist, t) x =
   Ssrprinters.ppdebug (lazy
     Pp.(str"tclADD_CLEAR_IF_ID: " ++ Printer.pr_econstr_env env ist t));
-  let hd, _ = EConstr.decompose_app ist t in
+  let hd, args = EConstr.decompose_app ist t in
   match EConstr.kind ist hd with
   | Constr.Var id when Ssrcommon.not_section_id id -> tclUNIT (x, [id])
   | _ -> tclUNIT (x,[])
@@ -265,15 +281,16 @@ let interp_view ~clear_if_id ist v p =
        else tclKeepOpenConstr ot >>= tclPAIR []
 
 (* we store in the state (v top), then (v1 (v2 top))... *)
-let pile_up_view ~clear_if_id (ist, v) =
+let pile_up_view ~clear_if_id (annotation, ist, v) =
   let ist = Ssrcommon.option_assert_get ist (Pp.str"not a term") in
+  let clear_if_id = clear_if_id && annotation <> `Parens in
   State.vsPUSH (fun p -> interp_view ~clear_if_id ist v p)
 
 let finalize_view s0 ?(simple_types=true) p =
 Goal.enter_one ~__LOC__ begin fun g ->
   let env = Goal.env g in
   let sigma = Goal.sigma g in
-  let evars_of_p = Evd.evars_of_term (EConstr.to_constr ~abort_on_undefined_evars:false sigma p) in
+  let evars_of_p = Evd.evars_of_term sigma p in
   let filter x _ = Evar.Set.mem x evars_of_p in
   let sigma = Typeclasses.resolve_typeclasses ~fail:false ~filter env sigma in
   let p = Reductionops.nf_evar sigma p in
@@ -290,7 +307,7 @@ Goal.enter_one ~__LOC__ begin fun g ->
   let und0 = (* Unassigned evars in the initial goal *)
     let sigma0 = Tacmach.project s0 in
     let g0info = Evd.find sigma0 (Tacmach.sig_it s0) in
-    let g0 = Evd.evars_of_filtered_evar_info g0info in
+    let g0 = Evd.evars_of_filtered_evar_info sigma0 g0info in
     List.filter (fun k -> Evar.Set.mem k g0)
       (List.map fst (Evar.Map.bindings (Evd.undefined_map sigma0))) in
   let rigid = rigid_of und0 in
@@ -305,51 +322,83 @@ end
 
 let pose_proof subject_name p =
   Tactics.generalize [p] <*>
-  Option.cata
-    (fun id -> Ssrcommon.tclRENAME_HD_PROD (Name.Name id)) (tclUNIT())
-    subject_name
+  begin match subject_name with
+  | id :: _ -> Ssrcommon.tclRENAME_HD_PROD (Name.Name id)
+  | _ -> tclUNIT() end
   <*>
   Tactics.New.reduce_after_refine
 
-let rec apply_all_views ~clear_if_id ending vs s0 =
+(* returns true if the last item was a tactic *)
+let rec apply_all_views_aux ~clear_if_id vs finalization conclusion s0 =
   match vs with
-  | [] -> ending s0
+  | [] -> finalization s0 (fun name p ->
+            (match p with
+            | None -> conclusion ~to_clear:[]
+            | Some p ->
+                pose_proof name p <*> conclusion ~to_clear:name) <*>
+            tclUNIT false)
   | v :: vs ->
       Ssrprinters.ppdebug (lazy Pp.(str"piling..."));
-      is_tac_in_term v >>= function
-      | `Tac tac ->
-           Ssrprinters.ppdebug (lazy Pp.(str"..a tactic"));
-           ending s0 <*> Tacinterp.eval_tactic tac <*>
-           Ssrcommon.tacSIGMA >>= apply_all_views ~clear_if_id ending vs
+      is_tac_in_term ~extra_scope:"ssripat" v >>= function
       | `Term v ->
            Ssrprinters.ppdebug (lazy Pp.(str"..a term"));
            pile_up_view ~clear_if_id v <*>
-           apply_all_views ~clear_if_id ending vs s0
+           apply_all_views_aux ~clear_if_id vs finalization conclusion s0
+      | `Tac tac ->
+           Ssrprinters.ppdebug (lazy Pp.(str"..a tactic"));
+           finalization s0 (fun name p ->
+            (match p with
+            | None -> tclUNIT ()
+            | Some p -> pose_proof name p) <*>
+           Tacinterp.eval_tactic tac <*>
+           if vs = [] then begin
+             Ssrprinters.ppdebug (lazy Pp.(str"..was the last view"));
+             conclusion ~to_clear:name <*> tclUNIT true
+           end else
+             Tactics.clear name <*>
+             tclINDEPENDENTL begin
+               Ssrprinters.ppdebug (lazy Pp.(str"..was NOT the last view"));
+               Ssrcommon.tacSIGMA >>=
+                 apply_all_views_aux ~clear_if_id vs finalization conclusion
+             end >>= reduce_or)
+
+let apply_all_views vs ~conclusion ~clear_if_id =
+  let finalization s0 k =
+    State.vsCONSUME_IF_PRESENT (fun ~names t ~to_clear ->
+      match t with
+      | None -> k [] None
+      | Some t ->
+          finalize_view s0 t >>= fun p -> k (names @ to_clear) (Some p)) in
+  Ssrcommon.tacSIGMA >>=
+    apply_all_views_aux ~clear_if_id vs finalization conclusion
+
+(* We apply a view to a term given by the user, e.g. `case/V: x`. `x` is
+   `subject` *)
+let apply_all_views_to subject ~simple_types vs ~conclusion = begin
+  let rec process_all_vs = function
+    | [] -> tclUNIT ()
+    | v :: vs -> is_tac_in_term v >>= function
+      | `Tac _ -> Ssrcommon.errorstrm Pp.(str"tactic view not supported")
+      | `Term v -> pile_up_view ~clear_if_id:false v <*> process_all_vs vs in
+  State.vsASSERT_EMPTY <*>
+  State.vsINIT ~subject_name:[] ~to_clear:[] ~view:subject <*>
+  Ssrcommon.tacSIGMA >>= fun s0 ->
+  process_all_vs vs <*>
+  State.vsCONSUME (fun ~names:_ t ~to_clear:_ ->
+    finalize_view s0 ~simple_types t >>= conclusion)
+end
 
 (* Entry points *********************************************************)
 
-let tclIPAT_VIEWS ~views:vs ?(clear_if_id=false) ~conclusion:tac =
-  let end_view_application s0 =
-    State.vsCONSUME (fun ~name t ~to_clear ->
-      let to_clear = Option.cata (fun x -> [x]) [] name @ to_clear in
-      finalize_view s0 t >>= pose_proof name <*> tac ~to_clear) in
-  tclINDEPENDENT begin
+let tclIPAT_VIEWS ~views:vs ?(clear_if_id=false) ~conclusion =
+  tclINDEPENDENTL begin
     State.vsASSERT_EMPTY <*>
-    Ssrcommon.tacSIGMA >>=
-      apply_all_views ~clear_if_id end_view_application vs <*>
-    State.vsASSERT_EMPTY
-  end
+    apply_all_views vs ~conclusion ~clear_if_id >>= fun was_tac ->
+    State.vsASSERT_EMPTY <*>
+    tclUNIT was_tac
+  end >>= reduce_or
 
-let tclWITH_FWD_VIEWS ~simple_types ~subject ~views:vs ~conclusion:tac =
-  let ending_tac s0 =
-    State.vsCONSUME (fun ~name:_ t ~to_clear:_ ->
-      finalize_view s0 ~simple_types t >>= tac) in
-  tclINDEPENDENT begin
-    State.vsASSERT_EMPTY <*>
-    State.vsINIT (subject,[]) <*>
-    Ssrcommon.tacSIGMA >>=
-      apply_all_views ~clear_if_id:false ending_tac vs <*>
-    State.vsASSERT_EMPTY
-  end
+let tclWITH_FWD_VIEWS ~simple_types ~subject ~views:vs ~conclusion =
+  tclINDEPENDENT (apply_all_views_to subject ~simple_types vs ~conclusion)
 
 (* vim: set filetype=ocaml foldmethod=marker: *)

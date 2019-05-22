@@ -89,8 +89,8 @@ struct
     | Some f2 -> normalize (CList.filter_with f1 f2)
 
   let apply_subfilter_array filter subfilter =
-    (** In both cases we statically know that the argument will contain at
-        least one [false] *)
+    (* In both cases we statically know that the argument will contain at
+       least one [false] *)
     match filter with
     | None -> Some (Array.to_list subfilter)
     | Some f ->
@@ -126,6 +126,19 @@ struct
 
 end
 
+module Abstraction = struct
+
+  type abstraction =
+    | Abstract
+    | Imitate
+
+  type t = abstraction list
+
+  let identity = []
+
+  let abstract_last l = Abstract :: l
+end
+
 (* The kinds of existential variables are now defined in [Evar_kinds] *)
 
 (* The type of mappings for existential variables *)
@@ -143,19 +156,18 @@ type evar_info = {
   evar_hyps : named_context_val;
   evar_body : evar_body;
   evar_filter : Filter.t;
+  evar_abstract_arguments : Abstraction.t;
   evar_source : Evar_kinds.t Loc.located;
-  evar_candidates : constr list option; (* if not None, list of allowed instances *)
-  evar_extra : Store.t }
+  evar_candidates : constr list option; (* if not None, list of allowed instances *)}
 
 let make_evar hyps ccl = {
   evar_concl = ccl;
   evar_hyps = hyps;
   evar_body = Evar_empty;
   evar_filter = Filter.identity;
+  evar_abstract_arguments = Abstraction.identity;
   evar_source = Loc.tag @@ Evar_kinds.InternalHole;
-  evar_candidates = None;
-  evar_extra = Store.empty
-}
+  evar_candidates = None; }
 
 let instance_mismatch () =
   anomaly (Pp.str "Signature and its instance do not match.")
@@ -210,7 +222,7 @@ let map_evar_body f = function
 let map_evar_info f evi =
   {evi with
     evar_body = map_evar_body f evi.evar_body;
-    evar_hyps = map_named_val f evi.evar_hyps;
+    evar_hyps = map_named_val (fun d -> NamedDecl.map_constr f d) evi.evar_hyps;
     evar_concl = f evi.evar_concl;
     evar_candidates = Option.map (List.map f) evi.evar_candidates }
 
@@ -398,7 +410,7 @@ let rename evk id (evtoid, idtoev) =
 let reassign_name_defined evk evk' (evtoid, idtoev as names) =
   let id = try Some (EvMap.find evk evtoid) with Not_found -> None in
   match id with
-  | None -> names (** evk' must not be defined *)
+  | None -> names (* evk' must not be defined *)
   | Some id ->
     (EvMap.add evk' id (EvMap.remove evk evtoid),
     Id.Map.add id evk' (Id.Map.remove id idtoev))
@@ -413,8 +425,13 @@ end
 
 type goal_kind = ToShelve | ToGiveUp
 
+type evar_flags =
+  { obligation_evars : Evar.Set.t;
+    restricted_evars : Evar.t Evar.Map.t;
+    typeclass_evars : Evar.Set.t }
+
 type evar_map = {
-  (** Existential variables *)
+  (* Existential variables *)
   defn_evars : evar_info EvMap.t;
   undf_evars : evar_info EvMap.t;
   evar_names : EvNames.t;
@@ -425,6 +442,7 @@ type evar_map = {
   last_mods  : Evar.Set.t;
   (** Metas *)
   metas      : clbinding Metamap.t;
+  evar_flags : evar_flags;
   (** Interactive proofs *)
   effects    : Safe_typing.private_constants;
   future_goals : Evar.t list; (** list of newly created evars, to be
@@ -441,20 +459,84 @@ type evar_map = {
   extras : Store.t;
 }
 
+let get_is_maybe_typeclass, (is_maybe_typeclass_hook : (evar_map -> constr -> bool) Hook.t) = Hook.make ~default:(fun evd c -> false) ()
+
+let is_maybe_typeclass sigma c = Hook.get get_is_maybe_typeclass sigma c
+
 (*** Lifting primitive from Evar.Map. ***)
 
 let rename evk id evd =
   { evd with evar_names = EvNames.rename evk id evd.evar_names }
 
-let add_with_name ?name d e i = match i.evar_body with
+let add_with_name ?name ?(typeclass_candidate = true) d e i = match i.evar_body with
 | Evar_empty ->
   let evar_names = EvNames.add_name_undefined name e i d.evar_names in
-  { d with undf_evars = EvMap.add e i d.undf_evars; evar_names }
+  let evar_flags =
+    if typeclass_candidate && is_maybe_typeclass d i.evar_concl then
+      let flags = d.evar_flags in
+      { flags with typeclass_evars = Evar.Set.add e flags.typeclass_evars }
+    else d.evar_flags
+  in
+  { d with undf_evars = EvMap.add e i d.undf_evars; evar_names; evar_flags }
 | Evar_defined _ ->
   let evar_names = EvNames.remove_name_defined e d.evar_names in
   { d with defn_evars = EvMap.add e i d.defn_evars; evar_names }
 
-let add d e i = add_with_name d e i
+(** Evd.add is a low-level function mainly used to update the evar_info
+    associated to an evar, so we prevent registering its typeclass status. *)
+let add d e i = add_with_name ~typeclass_candidate:false d e i
+
+(*** Evar flags: typeclasses, restricted or obligation flag *)
+
+let get_typeclass_evars evd = evd.evar_flags.typeclass_evars
+
+let set_typeclass_evars evd tcs =
+  let flags = evd.evar_flags in
+  { evd with evar_flags = { flags with typeclass_evars = tcs } }
+
+let is_typeclass_evar evd evk =
+  let flags = evd.evar_flags in
+  Evar.Set.mem evk flags.typeclass_evars
+
+let get_obligation_evars evd = evd.evar_flags.obligation_evars
+
+let set_obligation_evar evd evk =
+  let flags = evd.evar_flags in
+  let evar_flags = { flags with obligation_evars = Evar.Set.add evk flags.obligation_evars } in
+  { evd with evar_flags }
+
+let is_obligation_evar evd evk =
+  let flags = evd.evar_flags in
+  Evar.Set.mem evk flags.obligation_evars
+
+(** Inheritance of flags: for evar-evar and restriction cases *)
+
+let inherit_evar_flags evar_flags evk evk' =
+  let evk_typeclass = Evar.Set.mem evk evar_flags.typeclass_evars in
+  let evk_obligation = Evar.Set.mem evk evar_flags.obligation_evars in
+  if not (evk_obligation || evk_typeclass) then evar_flags
+  else
+    let typeclass_evars =
+      if evk_typeclass then
+        let typeclass_evars = Evar.Set.remove evk evar_flags.typeclass_evars in
+        Evar.Set.add evk' typeclass_evars
+      else evar_flags.typeclass_evars
+    in
+    let obligation_evars =
+      if evk_obligation then
+        let obligation_evars = Evar.Set.remove evk evar_flags.obligation_evars in
+        Evar.Set.add evk' obligation_evars
+      else evar_flags.obligation_evars
+    in
+    { evar_flags with obligation_evars; typeclass_evars }
+
+(** Removal: in all other cases of definition *)
+
+let remove_evar_flags evk evar_flags =
+  { typeclass_evars = Evar.Set.remove evk evar_flags.typeclass_evars;
+    obligation_evars = Evar.Set.remove evk evar_flags.obligation_evars;
+    (* Restriction information is kept. *)
+    restricted_evars = evar_flags.restricted_evars }
 
 (** New evars *)
 
@@ -464,9 +546,9 @@ let evar_counter_summary_name = "evar counter"
 let evar_ctr, evar_counter_summary_tag = Summary.ref_tag 0 ~name:evar_counter_summary_name
 let new_untyped_evar () = incr evar_ctr; Evar.unsafe_of_int !evar_ctr
 
-let new_evar evd ?name evi =
+let new_evar evd ?name ?typeclass_candidate evi =
   let evk = new_untyped_evar () in
-  let evd = add_with_name evd ?name evk evi in
+  let evd = add_with_name evd ?name ?typeclass_candidate evk evi in
   (evd, evk)
 
 let remove d e =
@@ -478,7 +560,9 @@ let remove d e =
   in
   let future_goals = List.filter (fun e' -> not (Evar.equal e e')) d.future_goals in
   let future_goals_status = EvMap.remove e d.future_goals_status in
-  { d with undf_evars; defn_evars; principal_future_goal; future_goals; future_goals_status }
+  let evar_flags = remove_evar_flags e d.evar_flags in
+  { d with undf_evars; defn_evars; principal_future_goal; future_goals; future_goals_status;
+           evar_flags }
 
 let find d e =
   try EvMap.find e d.undf_evars
@@ -532,19 +616,19 @@ let is_defined d e = EvMap.mem e d.defn_evars
 
 let is_undefined d e = EvMap.mem e d.undf_evars
 
-let existential_value d (n, args) =
-  let info = find d n in
-  match evar_body info with
-  | Evar_defined c ->
-    instantiate_evar_array info c args
-  | Evar_empty ->
-    raise NotInstantiatedEvar
+let existential_opt_value d (n, args) =
+  match EvMap.find_opt n d.defn_evars with
+  | None -> None
+  | Some info ->
+    match evar_body info with
+    | Evar_defined c -> Some (instantiate_evar_array info c args)
+    | Evar_empty -> None (* impossible but w/e *)
+
+let existential_value d ev = match existential_opt_value d ev with
+  | None -> raise NotInstantiatedEvar
+  | Some v -> v
 
 let existential_value0 = existential_value
-
-let existential_opt_value d ev =
-  try Some (existential_value d ev)
-  with NotInstantiatedEvar -> None
 
 let existential_opt_value0 = existential_opt_value
 
@@ -583,12 +667,18 @@ let cmap f evd =
 let create_evar_defs sigma = { sigma with
   conv_pbs=[]; last_mods=Evar.Set.empty; metas=Metamap.empty }
 
+let empty_evar_flags =
+  { obligation_evars = Evar.Set.empty;
+    restricted_evars = Evar.Map.empty;
+    typeclass_evars = Evar.Set.empty }
+
 let empty = {
   defn_evars = EvMap.empty;
   undf_evars = EvMap.empty;
   universes  = UState.empty;
   conv_pbs   = [];
   last_mods  = Evar.Set.empty;
+  evar_flags = empty_evar_flags;
   metas      = Metamap.empty;
   effects    = Safe_typing.empty_private_constants;
   evar_names = EvNames.empty; (* id<->key for undefined evars *)
@@ -634,9 +724,7 @@ let evar_source evk d = (find d evk).evar_source
 let evar_ident evk evd = EvNames.ident evk evd.evar_names
 let evar_key id evd = EvNames.key id evd.evar_names
 
-let restricted = Store.field ()
-
-let define_aux ?dorestrict def undef evk body =
+let define_aux def undef evk body =
   let oldinfo =
     try EvMap.find evk undef
     with Not_found ->
@@ -646,24 +734,39 @@ let define_aux ?dorestrict def undef evk body =
         anomaly ~label:"Evd.define" (Pp.str "cannot define undeclared evar.")
   in
   let () = assert (oldinfo.evar_body == Evar_empty) in
-  let evar_extra = match dorestrict with
-    | Some evk' -> Store.set oldinfo.evar_extra restricted evk'
-    | None -> oldinfo.evar_extra in
-  let newinfo = { oldinfo with evar_body = Evar_defined body; evar_extra } in
+  let newinfo = { oldinfo with evar_body = Evar_defined body } in
   EvMap.add evk newinfo def, EvMap.remove evk undef
 
 (* define the existential of section path sp as the constr body *)
-let define evk body evd =
+let define_gen evk body evd evar_flags =
   let (defn_evars, undf_evars) = define_aux evd.defn_evars evd.undf_evars evk body in
   let last_mods = match evd.conv_pbs with
   | [] ->  evd.last_mods
   | _ -> Evar.Set.add evk evd.last_mods
   in
   let evar_names = EvNames.remove_name_defined evk evd.evar_names in
-  { evd with defn_evars; undf_evars; last_mods; evar_names }
+  { evd with defn_evars; undf_evars; last_mods; evar_names; evar_flags }
 
-let is_restricted_evar evi =
-  Store.get evi.evar_extra restricted
+(** By default, the obligation and evar tag of the evar is removed *)
+let define evk body evd =
+  let evar_flags = remove_evar_flags evk evd.evar_flags in
+  define_gen evk body evd evar_flags
+
+(** In case of an evar-evar solution, the flags are inherited *)
+let define_with_evar evk body evd =
+  let evk' = fst (destEvar body) in
+  let evar_flags = inherit_evar_flags evd.evar_flags evk evk' in
+  define_gen evk body evd evar_flags
+
+let is_restricted_evar evd evk =
+  try Some (Evar.Map.find evk evd.evar_flags.restricted_evars)
+  with Not_found -> None
+
+let declare_restricted_evar evar_flags evk evk' =
+  { evar_flags with restricted_evars = Evar.Map.add evk evk' evar_flags.restricted_evars }
+
+(* In case of restriction, we declare the restriction and inherit the obligation
+   and typeclass flags. *)
 
 let restrict evk filter ?candidates ?src evd =
   let evk' = new_untyped_evar () in
@@ -679,9 +782,11 @@ let restrict evk filter ?candidates ?src evd =
   let ctxt = Filter.filter_list filter (evar_context evar_info) in
   let id_inst = Array.map_of_list (NamedDecl.get_id %> mkVar) ctxt in
   let body = mkEvar(evk',id_inst) in
-  let (defn_evars, undf_evars) = define_aux ~dorestrict:evk' evd.defn_evars evd.undf_evars evk body in
+  let (defn_evars, undf_evars) = define_aux evd.defn_evars evd.undf_evars evk body in
+  let evar_flags = declare_restricted_evar evd.evar_flags evk evk' in
+  let evar_flags = inherit_evar_flags evar_flags evk evk' in
   { evd with undf_evars = EvMap.add evk' evar_info' undf_evars;
-    defn_evars; last_mods; evar_names }, evk'
+    defn_evars; last_mods; evar_names; evar_flags }, evk'
 
 let downcast evk ccl evd =
   let evar_info = EvMap.find evk evd.undf_evars in
@@ -718,33 +823,6 @@ let loc_of_conv_pb evd (pbty,env,t1,t2) =
   | Evar (evk2,_) -> fst (evar_source evk2 evd)
   | _             -> None
 
-(** The following functions return the set of evars immediately
-    contained in the object *)
-
-(* excluding defined evars *)
-
-let evars_of_term c =
-  let rec evrec acc c =
-    match kind c with
-    | Evar (n, l) -> Evar.Set.add n (Array.fold_left evrec acc l)
-    | _ -> Constr.fold evrec acc c
-  in
-  evrec Evar.Set.empty c
-
-let evars_of_named_context nc =
-  Context.Named.fold_outside
-    (NamedDecl.fold_constr (fun constr s -> Evar.Set.union s (evars_of_term constr)))
-    nc
-    ~init:Evar.Set.empty
-
-let evars_of_filtered_evar_info evi =
-  Evar.Set.union (evars_of_term evi.evar_concl)
-    (Evar.Set.union
-	(match evi.evar_body with
-	| Evar_empty -> Evar.Set.empty
-	| Evar_defined b -> evars_of_term b)
-	(evars_of_named_context (evar_filtered_context evi)))
-
 (**********************************************************)
 (* Sort variables *)
 
@@ -762,8 +840,7 @@ let universe_context_set d = UState.context_set d.universes
 
 let to_universe_context evd = UState.context evd.universes
 
-let const_univ_entry ~poly evd = UState.const_univ_entry ~poly evd.universes
-let ind_univ_entry ~poly evd = UState.ind_univ_entry ~poly evd.universes
+let univ_entry ~poly evd = UState.univ_entry ~poly evd.universes
 
 let check_univ_decl ~poly evd decl = UState.check_univ_decl ~poly evd.universes decl
 
@@ -792,7 +869,7 @@ let new_univ_variable ?loc ?name rigid evd =
 
 let new_sort_variable ?loc ?name rigid d =
   let (d', u) = new_univ_variable ?loc rigid ?name d in
-    (d', Type u)
+    (d', Sorts.sort_of_univ u)
 
 let add_global_univ d u =
   { d with universes = UState.add_global_univ d.universes u }
@@ -800,6 +877,9 @@ let add_global_univ d u =
 let make_flexible_variable evd ~algebraic u =
   { evd with universes =
       UState.make_flexible_variable evd.universes ~algebraic u }
+
+let make_nonalgebraic_variable evd u =
+  { evd with universes = UState.make_nonalgebraic_variable evd.universes u }
 
 (****************************************)
 (* Operations on constants              *)
@@ -853,10 +933,10 @@ let normalize_universe_instance evd l =
 
 let normalize_sort evars s =
   match s with
-  | Prop | Set -> s
+  | SProp | Prop | Set -> s
   | Type u -> 
     let u' = normalize_universe evars u in
-    if u' == u then s else Type u'
+    if u' == u then s else Sorts.sort_of_univ u'
 
 (* FIXME inefficient *)
 let set_eq_sort env d s1 s2 =
@@ -1019,6 +1099,7 @@ let set_metas evd metas = {
   universes  = evd.universes;
   conv_pbs = evd.conv_pbs;
   last_mods = evd.last_mods;
+  evar_flags = evd.evar_flags;
   metas;
   effects = evd.effects;
   evar_names = evd.evar_names;
@@ -1247,14 +1328,14 @@ module MiniEConstr = struct
         | None -> c
       end
     | App (f, args) when isEvar f ->
-      (** Enforce smart constructor invariant on applications *)
+      (* Enforce smart constructor invariant on applications *)
       let ev = destEvar f in
       begin match safe_evar_value sigma ev with
         | None -> c
         | Some f -> whd_evar sigma (mkApp (f, args))
       end
     | Cast (c0, k, t) when isEvar c0 ->
-      (** Enforce smart constructor invariant on casts. *)
+      (* Enforce smart constructor invariant on casts. *)
       let ev = destEvar c0 in
       begin match safe_evar_value sigma ev with
         | None -> c
@@ -1282,6 +1363,13 @@ module MiniEConstr = struct
     in
     UnivSubst.nf_evars_and_universes_opt_subst evar_value (universe_subst sigma) c
 
+  let to_constr_opt sigma c =
+    let evar_value ev = Some (existential_value sigma ev) in
+    try
+      Some (UnivSubst.nf_evars_and_universes_opt_subst evar_value (universe_subst sigma) c)
+    with NotInstantiatedEvar ->
+      None
+
   let of_named_decl d = d
   let unsafe_to_named_decl d = d
   let of_rel_decl d = d
@@ -1289,3 +1377,30 @@ module MiniEConstr = struct
   let to_rel_decl sigma d = Context.Rel.Declaration.map_constr (to_constr sigma) d
 
 end
+
+(** The following functions return the set of evars immediately
+    contained in the object *)
+
+(* excluding defined evars *)
+
+let evars_of_term evd c =
+  let rec evrec acc c =
+    match MiniEConstr.kind evd c with
+    | Evar (n, l) -> Evar.Set.add n (Array.fold_left evrec acc l)
+    | _ -> Constr.fold evrec acc c
+  in
+  evrec Evar.Set.empty c
+
+let evars_of_named_context evd nc =
+  Context.Named.fold_outside
+    (NamedDecl.fold_constr (fun constr s -> Evar.Set.union s (evars_of_term evd constr)))
+    nc
+    ~init:Evar.Set.empty
+
+let evars_of_filtered_evar_info evd evi =
+  Evar.Set.union (evars_of_term evd evi.evar_concl)
+    (Evar.Set.union
+       (match evi.evar_body with
+       | Evar_empty -> Evar.Set.empty
+       | Evar_defined b -> evars_of_term evd b)
+       (evars_of_named_context evd (evar_filtered_context evi)))

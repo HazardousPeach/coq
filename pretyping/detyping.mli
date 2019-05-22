@@ -37,7 +37,7 @@ val print_allow_match_default_clause : bool ref
 
 val subst_cases_pattern : substitution -> cases_pattern -> cases_pattern
 
-val subst_glob_constr : substitution -> glob_constr -> glob_constr
+val subst_glob_constr : env -> substitution -> glob_constr -> glob_constr
 
 val factorize_eqns : 'a cases_clauses_g -> 'a disjunctive_cases_clauses_g
 
@@ -68,9 +68,6 @@ val detype_closed_glob : ?lax:bool -> bool -> Id.Set.t -> env -> evar_map -> clo
 val lookup_name_as_displayed  : env -> evar_map -> constr -> Id.t -> int option
 val lookup_index_as_renamed : env -> evar_map -> constr -> int -> int option
 
-(* XXX: This is a hack and should go away *)
-val set_detype_anonymous : (?loc:Loc.t -> int -> Id.t) -> unit
-
 val force_wildcard : unit -> bool
 val synthetize_type : unit -> bool
 
@@ -87,7 +84,7 @@ val subst_genarg_hook :
 
 module PrintingInductiveMake :
   functor (Test : sig
-    val encode : Libnames.qualid -> Names.inductive
+    val encode : Environ.env -> Libnames.qualid -> Names.inductive
     val member_message : Pp.t -> bool -> Pp.t
     val field : string
     val title : string
@@ -95,7 +92,7 @@ module PrintingInductiveMake :
     sig
       type t = Names.inductive
       val compare : t -> t -> int
-      val encode : Libnames.qualid -> Names.inductive
+      val encode : Environ.env -> Libnames.qualid -> Names.inductive
       val subst : substitution -> t -> t
       val printer : t -> Pp.t
       val key : Goptions.option_name

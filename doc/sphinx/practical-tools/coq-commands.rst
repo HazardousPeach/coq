@@ -34,6 +34,11 @@ allow dynamic linking of tactics). You can switch to the OCaml toplevel
 with the command ``Drop.``, and come back to the |Coq|
 toplevel with the command ``Coqloop.loop();;``.
 
+.. flag:: Coqtop Exit On Error
+
+   This option, off by default, causes coqtop to exit with status code
+   ``1`` if a command produces an error instead of recovering from it.
+
 Batch compilation (coqc)
 ------------------------
 
@@ -163,14 +168,14 @@ and ``coqtop``, unless stated otherwise:
   is equivalent to runningRequire dirpath.
 :-require dirpath: Load |Coq| compiled library dirpath and import it.
   This is equivalent to running Require Import dirpath.
-:-batch: Exit just after argument parsing. Available for `coqtop` only.
-:-compile *file.v*: Compile file *file.v* into *file.vo*. This option
+:-batch: Exit just after argument parsing. Available for ``coqtop`` only.
+:-compile *file.v*: Deprecated; use ``coqc`` instead. Compile file *file.v* into *file.vo*. This option
   implies -batch (exit just after argument parsing). It is available only
-  for `coqtop`, as this behavior is the purpose of `coqc`.
-:-compile-verbose *file.v*: Same as -compile but also output the
+  for `coqtop`, as this behavior is the purpose of ``coqc``.
+:-compile-verbose *file.v*: Deprecated. Use ``coqc -verbose``. Same as -compile but also output the
   content of *file.v* as it is compiled.
 :-verbose: Output the content of the input file as it is compiled.
-  This option is available for `coqc` only; it is the counterpart of
+  This option is available for ``coqc`` only; it is the counterpart of
   -compile-verbose.
 :-w (all|none|w₁,…,wₙ): Configure the display of warnings. This
   option expects all, none or a comma-separated list of warning names or
@@ -198,24 +203,31 @@ and ``coqtop``, unless stated otherwise:
 :-type-in-type: Collapse the universe hierarchy of |Coq|.
 
   .. warning:: This makes the logic inconsistent.
-:-mangle-names *ident*: Experimental: Do not depend on this option. Replace
+:-mangle-names *ident*: *Experimental.* Do not depend on this option. Replace
   Coq's auto-generated name scheme with names of the form *ident0*, *ident1*,
-  etc. The command ``Set Mangle Names`` turns the behavior on in a document,
-  and ``Set Mangle Names Prefix "ident"`` changes the used prefix. This feature
+  etc. Within Coq, the flag :flag:`Mangle Names` turns this behavior on,
+  and the :opt:`Mangle Names Prefix` option sets the prefix to use. This feature
   is intended to be used as a linter for developments that want to be robust to
   changes in the auto-generated name scheme. The options are provided to
   facilitate tracking down problems.
+:-set *string*: Enable flags and set options. *string* should be
+   ``Option Name=value``, the value is interpreted according to the
+   type of the option. For flags ``Option Name`` is equivalent to
+   ``Option Name=true``. For instance ``-set "Universe Polymorphism"``
+   will enable :flag:`Universe Polymorphism`. Note that the quotes are
+   shell syntax, Coq does not see them.
+:-unset *string*: As ``-set`` but used to disable options and flags.
 :-compat *version*: Attempt to maintain some backward-compatibility
   with a previous version.
 :-dump-glob *file*: Dump references for global names in file *file*
   (to be used by coqdoc, see :ref:`coqdoc`). By default, if *file.v* is being
   compiled, *file.glob* is used.
 :-no-glob: Disable the dumping of references for global names.
-:-image *file*: Set the binary image to be used by `coqc` to be *file*
+:-image *file*: Set the binary image to be used by ``coqc`` to be *file*
   instead of the standard one. Not of general use.
 :-bindir *directory*: Set the directory containing |Coq| binaries to be
-  used by `coqc`. It is equivalent to doing export COQBIN= *directory*
-  before launching `coqc`.
+  used by ``coqc``. It is equivalent to doing export COQBIN= *directory*
+  before launching ``coqc``.
 :-where: Print the location of |Coq|’s standard library and exit.
 :-config: Print the locations of |Coq|’s binaries, dependencies, and
   libraries, then exit.

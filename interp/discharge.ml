@@ -8,8 +8,6 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-open Names
-open CErrors
 open Util
 open Term
 open Constr
@@ -17,16 +15,9 @@ open Vars
 open Declarations
 open Cooking
 open Entries
-open Context.Rel.Declaration
 
 (********************************)
 (* Discharging mutual inductive *)
-
-let detype_param =
-  function
-  | LocalAssum (Name id, p) -> id, LocalAssumEntry p
-  | LocalDef (Name id, p,_) -> id, LocalDefEntry p
-  | _ -> anomaly (Pp.str "Unnamed inductive local variable.")
 
 (* Replace
 
@@ -57,7 +48,7 @@ let abstract_inductive decls nparamdecls inds =
 (* To be sure to be the same as before, should probably be moved to process_inductive *)
   let params' = let (_,arity,_,_,_) = List.hd inds' in
 		let (params,_) = decompose_prod_n_assum nparamdecls' arity in
-                List.map detype_param params
+    params
   in
   let ind'' =
   List.map
@@ -78,23 +69,23 @@ let refresh_polymorphic_type_of_inductive (_,mip) =
   | RegularArity s -> s.mind_user_arity, false
   | TemplateArity ar ->
     let ctx = List.rev mip.mind_arity_ctxt in
-      mkArity (List.rev ctx, Type ar.template_level), true
+      mkArity (List.rev ctx, Sorts.sort_of_univ ar.template_level), true
 
 let process_inductive info modlist mib =
   let section_decls = Lib.named_of_variable_context info.Lib.abstr_ctx in
   let nparamdecls = Context.Rel.length mib.mind_params_ctxt in
   let subst, ind_univs =
     match mib.mind_universes with
-    | Monomorphic_ind ctx -> Univ.empty_level_subst, Monomorphic_ind_entry ctx
-    | Polymorphic_ind auctx ->
+    | Monomorphic ctx -> Univ.empty_level_subst, Monomorphic_entry ctx
+    | Polymorphic auctx ->
       let subst, auctx = Lib.discharge_abstract_universe_context info auctx in
+      let nas = Univ.AUContext.names auctx in
       let auctx = Univ.AUContext.repr auctx in
-      subst, Polymorphic_ind_entry auctx
-    | Cumulative_ind cumi ->
-      let auctx = Univ.ACumulativityInfo.univ_context cumi in
-      let subst, auctx = Lib.discharge_abstract_universe_context info auctx in
-      let auctx = Univ.AUContext.repr auctx in
-      subst, Cumulative_ind_entry (Univ.CumulativityInfo.from_universe_context auctx)
+      subst, Polymorphic_entry (nas, auctx)
+  in
+  let variance = match mib.mind_variance with
+    | None -> None
+    | Some _ -> Some (InferCumulativity.dummy_variance ind_univs)
   in
   let discharge c = Vars.subst_univs_level_constr subst (expmod_constr modlist c) in
   let inds =
@@ -112,7 +103,7 @@ let process_inductive info modlist mib =
   let (params',inds') = abstract_inductive section_decls' nparamdecls inds in
   let record = match mib.mind_record with
     | PrimRecord info ->
-      Some (Some (Array.map pi1 info))
+      Some (Some (Array.map (fun (x,_,_,_) -> x) info))
     | FakeRecord -> Some None
     | NotRecord -> None
   in
@@ -121,6 +112,7 @@ let process_inductive info modlist mib =
     mind_entry_params = params';
     mind_entry_inds = inds';
     mind_entry_private = mib.mind_private;
+    mind_entry_variance = variance;
     mind_entry_universes = ind_univs
   }
 

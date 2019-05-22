@@ -1,12 +1,40 @@
-## Changes between Coq 8.9 and Coq 8.10
+## Changes between Coq 8.10 and Coq 8.11
 
 ### ML API
+
+- Functions and types deprecated in 8.10 have been removed in Coq
+  8.11.
+
+## Changes between Coq 8.9 and Coq 8.10
+
+### ML4 Pre Processing
+
+- Support for `.ml4` files, processed by camlp5 has been removed in
+  favor of `.mlg` files processed by `coqpp`.
+
+  Porting is usually straightforward, and involves renaming the
+  `file.ml4` file to `file.mlg` and adding a few brackets.
+
+  See "Transitioning away from Camlp5" below for update instructions.
+
+### ML API
+
+SProp was added, see <SProp.md>
 
 General deprecation
 
 - All functions marked [@@ocaml.deprecated] in 8.8 have been
   removed. Please, make sure your plugin is warning-free in 8.8 before
   trying to port it over 8.9.
+
+Warnings
+
+- Coq now builds plugins with `-warn-error` enabled by default. The
+  amount of dangerous warnings in plugin code was very high, so we now
+  require plugins in the CI to adhere to the Coq warning policy. We
+  _strongly_ recommend against disabling the default set of warnings.
+  If you have special needs, see the documentation of your build
+  system and/or OCaml for further help.
 
 Names
 
@@ -18,6 +46,10 @@ Names
   KerName.make2 is now KerName.make
   Constant.make3 has been removed, use Constant.make2
   Constant.repr3 has been removed, use Constant.repr2
+
+- `Names.transparent_state` has been moved to its own module `TransparentState`.
+  This module gathers utility functions that used to be defined in several
+  places.
 
 Coqlib:
 
@@ -31,6 +63,52 @@ Macros:
 
 - The RAW_TYPED AS and GLOB_TYPED AS stanzas of the ARGUMENT EXTEND macro are
   deprecated. Use TYPED AS instead.
+
+- coqpp (.mlg) based VERNAC EXTEND accesses attributes through a `#[ x
+  = att ]` syntax, where `att : 'a Attributes.attribute` and `x` will
+  be bound with type `'a` in the expression, unlike the old system
+  where `atts : Vernacexpr.vernac_flags` was bound in the expression
+  and had to be manually parsed.
+
+- `PRINTED BY` now binds `env` and `sigma`, and expects printers which take
+  as parameters term printers parametrized by an environment and an `evar_map`.
+
+Printers
+
+- `Ppconstr.pr_constr_expr`, `Ppconstr.lconstr_expr`,
+  `Ppconstr.pr_constr_pattern_expr` and `Ppconstr.pr_lconstr_pattern_expr`
+  now all take an environment and an `evar_map`.
+
+Libobject
+
+- A Higher-level API for objects with fixed scope was introduced. It supports the following kinds of objects:
+
+  * Local objects, meaning that objects cannot be imported from outside.
+  * Global objects, meaning that they can be imported (by importing the module that contains the object).
+  * Superglobal objects, meaning that objects survive to closing a module, and
+    are imported when the file which contains them is Required (even without
+    Import).
+  * Objects that survive section closing or don't (see `nodischarge` variants,
+    however we discourage defining such objects)
+
+  This API is made of the following functions:
+  * `Libobject.local_object`
+  * `Libobject.local_object_nodischarge`
+  * `Libobject.global_object`
+  * `Libobject.global_object_nodischarge`
+  * `Libobject.superglobal_object`
+  * `Libobject.superglobal_object_nodischarge`
+
+AST
+
+- Minor changes in the AST have been performed, for example
+  https://github.com/coq/coq/pull/9165
+
+Implicit Arguments
+
+- `Impargs.declare_manual_implicits` is restricted to only support declaration
+  of implicit binders at constant declaration time. `Impargs.set_implicits` should
+  be used for redeclaration of implicit arguments.
 
 ## Changes between Coq 8.8 and Coq 8.9
 

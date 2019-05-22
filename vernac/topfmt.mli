@@ -46,6 +46,7 @@ val emacs_logger : ?pre_hdr:Pp.t -> Feedback.level -> Pp.t -> unit
 val default_styles : unit -> unit
 val parse_color_config : string -> unit
 val dump_tags : unit -> (string * Terminal.style) list
+val set_emacs_print_strings : unit -> unit
 
 (** Initialization of interpretation of tags *)
 val init_terminal_output : color:bool -> unit
@@ -60,12 +61,16 @@ type execution_phase =
   | LoadingPrelude
   | LoadingRcFile
   | InteractiveLoop
+  | CompilationPhase
+
+val in_phase : phase:execution_phase -> ('a -> 'b) -> 'a -> 'b
 
 val pr_loc : Loc.t -> Pp.t
-val pr_phase : ?loc:Loc.t -> execution_phase -> Pp.t option
-val print_err_exn : execution_phase -> exn -> unit
+val pr_phase : ?loc:Loc.t -> unit -> Pp.t option
+val print_err_exn : exn -> unit
 
 (** [with_output_to_file file f x] executes [f x] with logging
     redirected to a file [file] *)
 val with_output_to_file : string -> ('a -> 'b) -> 'a -> 'b
 
+val pr_cmd_header : Vernacexpr.vernac_control -> Pp.t

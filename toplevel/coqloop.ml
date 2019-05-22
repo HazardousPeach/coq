@@ -150,10 +150,11 @@ let print_highlight_location ib loc =
 
 let valid_buffer_loc ib loc =
   let (b,e) = Loc.unloc loc in b-ib.start >= 0 && e-ib.start < ib.len && b<=e
+
 (* Toplevel error explanation. *)
-let error_info_for_buffer ?loc phase buf =
+let error_info_for_buffer ?loc buf =
   match loc with
-  | None -> Topfmt.pr_phase ?loc phase
+  | None -> Topfmt.pr_phase ?loc ()
   | Some loc ->
       let fname = loc.Loc.fname in
         (* We are in the toplevel *)
@@ -161,17 +162,17 @@ let error_info_for_buffer ?loc phase buf =
       | Loc.ToplevelInput ->
         let nloc = adjust_loc_buf buf loc in
         if valid_buffer_loc buf loc then
-          match Topfmt.pr_phase ~loc:nloc phase with
+          match Topfmt.pr_phase ~loc:nloc () with
           | None -> None
           | Some hd -> Some (hd ++ fnl () ++ print_highlight_location buf nloc)
         (* in the toplevel, but not a valid buffer *)
-        else Topfmt.pr_phase ~loc phase
+        else Topfmt.pr_phase ~loc ()
       (* we are in batch mode, don't adjust location *)
-      | Loc.InFile _ -> Topfmt.pr_phase ~loc phase
+      | Loc.InFile _ -> Topfmt.pr_phase ~loc ()
 
 (* Actual printing routine *)
-let print_error_for_buffer ?loc phase lvl msg buf =
-  let pre_hdr = error_info_for_buffer ?loc phase buf in
+let print_error_for_buffer ?loc lvl msg buf =
+  let pre_hdr = error_info_for_buffer ?loc buf in
   if !print_emacs
   then Topfmt.emacs_logger ?pre_hdr lvl msg
   else Topfmt.std_logger   ?pre_hdr lvl msg
@@ -190,9 +191,10 @@ end
     from cycling. *)
 let make_prompt () =
   try
-    (Names.Id.to_string (Proof_global.get_current_proof_name ())) ^ " < "
-  with Proof_global.NoCurrentProof ->
+    (Names.Id.to_string (Vernacstate.Proof_global.get_current_proof_name ())) ^ " < "
+  with Vernacstate.Proof_global.NoCurrentProof ->
     "Coq < "
+  [@@ocaml.warning "-3"]
 
 (* the coq prompt added to the default one when in emacs mode
    The prompt contains the current state label [n] (for global
@@ -242,10 +244,10 @@ let set_prompt prompt =
 let parse_to_dot =
   let rec dot st = match Stream.next st with
     | Tok.KEYWORD ("."|"...") -> ()
-    | Tok.EOI -> raise Stm.End_of_input
+    | Tok.EOI -> ()
     | _ -> dot st
   in
-  Pcoq.Gram.Entry.of_parser "Coqtoplevel.dot" dot
+  Pcoq.Entry.of_parser "Coqtoplevel.dot" dot
 
 (* If an error occurred while parsing, we try to read the input until a dot
    token is encountered.
@@ -255,13 +257,13 @@ let rec discard_to_dot () =
   try
     Pcoq.Entry.parse parse_to_dot top_buffer.tokens
   with
-    | Token.Error _ | CLexer.Error.E _ -> discard_to_dot ()
-    | Stm.End_of_input -> raise Stm.End_of_input
+    | CLexer.Error.E _ -> discard_to_dot ()
     | e when CErrors.noncritical e -> ()
 
 let read_sentence ~state input =
   (* XXX: careful with ignoring the state Eugene!*)
-  try G_toplevel.parse_toplevel input
+  let open Vernac.State in
+  try Stm.parse_sentence ~doc:state.doc state.sid ~entry:G_toplevel.vernac_toplevel input
   with reraise ->
     let reraise = CErrors.push reraise in
     discard_to_dot ();
@@ -277,11 +279,11 @@ let extract_default_loc loc doc_id sid : Loc.t option =
   | None ->
     try
       let doc = Stm.get_doc doc_id in
-      Option.cata fst None Stm.(get_ast ~doc sid)
+      Option.cata (fun {CAst.loc} -> loc) None Stm.(get_ast ~doc sid)
     with _ -> loc
 
 (** Coqloop Console feedback handler *)
-let coqloop_feed phase (fb : Feedback.feedback) = let open Feedback in
+let coqloop_feed (fb : Feedback.feedback) = let open Feedback in
   match fb.contents with
   | Processed   -> ()
   | Incomplete  -> ()
@@ -300,9 +302,9 @@ let coqloop_feed phase (fb : Feedback.feedback) = let open Feedback in
   (* TopErr.print_error_for_buffer ?loc lvl msg top_buffer *)
   | Message (Warning,loc,msg) ->
     let loc = extract_default_loc loc fb.doc_id fb.span_id in
-    TopErr.print_error_for_buffer ?loc phase Warning msg top_buffer
+    TopErr.print_error_for_buffer ?loc Warning msg top_buffer
   | Message (lvl,loc,msg) ->
-    TopErr.print_error_for_buffer ?loc phase lvl msg top_buffer
+    TopErr.print_error_for_buffer ?loc lvl msg top_buffer
 
 (** Main coq loop : read vernacular expressions until Drop is entered.
     Ctrl-C is handled internally as Sys.Break instead of aborting Coq.
@@ -322,7 +324,8 @@ let loop_flush_all () =
 let pequal cmp1 cmp2 (a1,a2) (b1,b2) = cmp1 a1 b1 && cmp2 a2 b2
 let evleq e1 e2 = CList.equal Evar.equal e1 e2
 let cproof p1 p2 =
-  let (a1,a2,a3,a4,_),(b1,b2,b3,b4,_) = Proof.proof p1, Proof.proof p2 in
+  let Proof.{goals=a1;stack=a2;shelf=a3;given_up=a4} = Proof.data p1 in
+  let Proof.{goals=b1;stack=b2;shelf=b3;given_up=b4} = Proof.data p2 in
   evleq a1 b1 &&
   CList.equal (pequal evleq evleq) a2 b2 &&
   CList.equal Evar.equal a3 b3 &&
@@ -338,9 +341,7 @@ let print_anyway_opts = [
 let print_anyway c =
   let open Vernacexpr in
   match c with
-  | VernacExpr (_, VernacSetOption (_, opt, _))
-  | VernacExpr (_, VernacUnsetOption (_, opt)) ->
-    List.mem opt print_anyway_opts
+  | VernacExpr (_, VernacSetOption (_, opt, _)) -> List.mem opt print_anyway_opts
   | _ -> false
 
 (* We try to behave better when goal printing raises an exception
@@ -351,7 +352,7 @@ let print_anyway c =
 let top_goal_print ~doc c oldp newp =
   try
     let proof_changed = not (Option.equal cproof oldp newp) in
-    let print_goals = proof_changed && Proof_global.there_are_pending_proofs () ||
+    let print_goals = proof_changed && Vernacstate.Proof_global.there_are_pending_proofs () ||
                       print_anyway c in
     if not !Flags.quiet && print_goals then begin
       let dproof = Stm.get_prev_proof ~doc (Stm.get_current_state ~doc) in
@@ -362,9 +363,14 @@ let top_goal_print ~doc c oldp newp =
     let (e, info) = CErrors.push exn in
     let loc = Loc.get_loc info in
     let msg = CErrors.iprint (e, info) in
-    TopErr.print_error_for_buffer ?loc Topfmt.InteractiveLoop Feedback.Error msg top_buffer
+    TopErr.print_error_for_buffer ?loc Feedback.Error msg top_buffer
+  [@@ocaml.warning "-3"]
 
-(* Careful to keep this loop tail-rec *)
+let exit_on_error =
+  let open Goptions in
+  declare_bool_option_and_ref ~depr:false ~name:"coqtop-exit-on-error" ~key:["Coqtop";"Exit";"On";"Error"]
+    ~value:false
+
 let rec vernac_loop ~state =
   let open CAst in
   let open Vernac.State in
@@ -377,26 +383,30 @@ let rec vernac_loop ~state =
   try
     let input = top_buffer.tokens in
     match read_sentence ~state input with
-    | {v=VernacBacktrack(bid,_,_)} ->
+    | Some (VernacBacktrack(bid,_,_)) ->
       let bid = Stateid.of_int bid in
       let doc, res = Stm.edit_at ~doc:state.doc bid in
       assert (res = `NewTip);
       let state = { state with doc; sid = bid } in
       vernac_loop ~state
 
-    | {v=VernacQuit} ->
+    | Some VernacQuit ->
       exit 0
-    | {v=VernacDrop} ->
+
+    | Some VernacDrop ->
       if Mltop.is_ocaml_top()
       then (drop_last_doc := Some state; state)
       else (Feedback.msg_warning (str "There is no ML toplevel."); vernac_loop ~state)
-    | {v=VernacControl c; loc} ->
+
+    | Some VernacControl { loc; v=c } ->
       let nstate = Vernac.process_expr ~state (make ?loc c) in
       top_goal_print ~doc:state.doc c state.proof nstate.proof;
       vernac_loop ~state:nstate
+
+    | None ->
+      top_stderr (fnl ()); exit 0
+
   with
-  | Stm.End_of_input ->
-    top_stderr (fnl ()); exit 0
   (* Exception printing should be done by the feedback listener,
      however this is not yet ready so we rely on the exception for
      now. *)
@@ -404,7 +414,8 @@ let rec vernac_loop ~state =
     let (e, info) = CErrors.push any in
     let loc = Loc.get_loc info in
     let msg = CErrors.iprint (e, info) in
-    TopErr.print_error_for_buffer ?loc Topfmt.InteractiveLoop Feedback.Error msg top_buffer;
+    TopErr.print_error_for_buffer ?loc Feedback.Error msg top_buffer;
+    if exit_on_error () then exit 1;
     vernac_loop ~state
 
 let rec loop ~state =
@@ -430,7 +441,7 @@ let loop ~opts ~state =
   let open Coqargs in
   print_emacs := opts.print_emacs;
   (* We initialize the console only if we run the toploop_run *)
-  let tl_feed = Feedback.add_feeder (coqloop_feed Topfmt.InteractiveLoop) in
+  let tl_feed = Feedback.add_feeder coqloop_feed in
   if Dumpglob.dump () then begin
     Flags.if_verbose warning "Dumpglob cannot be used in interactive mode.";
     Dumpglob.noglob ()

@@ -8,39 +8,40 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-type compilation_mode = BuildVo | BuildVio | Vio2Vo
-type color = [`ON | `AUTO | `OFF]
+type color = [`ON | `AUTO | `EMACS | `OFF]
 
-type coq_cmdopts = {
+val default_toplevel : Names.DirPath.t
+
+type native_compiler = NativeOff | NativeOn of { ondemand : bool }
+
+type option_command = OptionSet of string option | OptionUnset
+
+type t = {
 
   load_init   : bool;
   load_rcfile : bool;
   rcfile      : string option;
 
-  ml_includes : string list;
-  vo_includes : (string * Names.DirPath.t * bool) list;
+  ml_includes : Mltop.coq_path list;
+  vo_includes : Mltop.coq_path list;
   vo_requires : (string * string option * bool option) list;
 
-  (* Fuse these two? Currently, [batch_mode] is only used to
-     distinguish coqc / coqtop in help display. *)
-  batch_mode : bool;
-  compilation_mode : compilation_mode;
-
-  toplevel_name : Names.DirPath.t;
-
-  compile_list: (string * bool) list;  (* bool is verbosity  *)
-  compilation_output_name : string option;
+  toplevel_name : Stm.interactive_top;
 
   load_vernacular_list : (string * bool) list;
-
-  vio_checking: bool;
-  vio_tasks   : (int list * string) list;
-  vio_files   : string list;
-  vio_files_j : int;
+  batch : bool;
 
   color : color;
 
   impredicative_set : Declarations.set_predicativity;
+  indices_matter : bool;
+  enable_VM : bool;
+  native_compiler : native_compiler;
+  allow_sprop : bool;
+  cumulative_sprop : bool;
+
+  set_options : (Goptions.option_name * option_command) list;
+
   stm_flags   : Stm.AsyncOpts.stm_opt;
   debug       : bool;
   diffs_set   : bool;
@@ -59,9 +60,13 @@ type coq_cmdopts = {
   print_emacs : bool;
 
   inputstate  : string option;
-  outputstate : string option;
-
 }
 
-val parse_args : string list -> coq_cmdopts * string list
-val exitcode : coq_cmdopts -> int
+(* Default options *)
+val default : t
+
+val parse_args : help:(unit -> unit) -> init:t -> string list -> t * string list
+val exitcode : t -> int
+
+val require_libs : t -> (string * string option * bool option) list
+val build_load_path : t -> Mltop.coq_path list

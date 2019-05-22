@@ -41,7 +41,7 @@ Local Open Scope Int_scope.
 Local Notation int := I.t.
 
 Definition key := X.t.
-Hint Transparent key.
+Hint Transparent key : core.
 
 (** * Trees *)
 
@@ -53,6 +53,7 @@ Variable elt : Type.
 
    The fifth field of [Node] is the height of the tree *)
 
+#[universes(template)]
 Inductive tree :=
   | Leaf : tree
   | Node : tree -> key -> elt -> tree -> int -> tree.
@@ -235,6 +236,7 @@ Fixpoint join l : key -> elt -> t -> t :=
     - [o] is the result of [find x m].
 *)
 
+#[universes(template)]
 Record triple := mktriple { t_left:t; t_opt:option elt; t_right:t }.
 Notation "<< l , b , r >>" := (mktriple l b r) (at level 9).
 
@@ -291,6 +293,7 @@ Variable cmp : elt->elt->bool.
 
 (** ** Enumeration of the elements of a tree *)
 
+#[universes(template)]
 Inductive enumeration :=
  | End : enumeration
  | More : key -> elt -> t -> enumeration -> enumeration.
@@ -488,8 +491,8 @@ Functional Scheme map2_opt_ind := Induction for map2_opt Sort Prop.
 
 (** * Automation and dedicated tactics. *)
 
-Hint Constructors tree MapsTo In bst.
-Hint Unfold lt_tree gt_tree.
+Hint Constructors tree MapsTo In bst : core.
+Hint Unfold lt_tree gt_tree : core.
 
 Tactic Notation "factornode" ident(l) ident(x) ident(d) ident(r) ident(h)
  "as" ident(s) :=
@@ -569,7 +572,7 @@ Lemma MapsTo_In : forall k e m, MapsTo k e m -> In k m.
 Proof.
  induction 1; auto.
 Qed.
-Hint Resolve MapsTo_In.
+Hint Resolve MapsTo_In : core.
 
 Lemma In_MapsTo : forall k m, In k m -> exists e, MapsTo k e m.
 Proof.
@@ -588,7 +591,7 @@ Lemma MapsTo_1 :
 Proof.
  induction m; simpl; intuition_in; eauto.
 Qed.
-Hint Immediate MapsTo_1.
+Hint Immediate MapsTo_1 : core.
 
 Lemma In_1 :
  forall m x y, X.eq x y -> In x m -> In y m.
@@ -627,7 +630,7 @@ Proof.
  unfold gt_tree in *; intuition_in; order.
 Qed.
 
-Hint Resolve lt_leaf gt_leaf lt_tree_node gt_tree_node.
+Hint Resolve lt_leaf gt_leaf lt_tree_node gt_tree_node : core.
 
 Lemma lt_left : forall x y l r e h,
  lt_tree x (Node l y e r h) -> lt_tree x l.
@@ -653,7 +656,7 @@ Proof.
  intuition_in.
 Qed.
 
-Hint Resolve lt_left lt_right gt_left gt_right.
+Hint Resolve lt_left lt_right gt_left gt_right : core.
 
 Lemma lt_tree_not_in :
  forall x m, lt_tree x m -> ~ In x m.
@@ -679,7 +682,7 @@ Proof.
  eauto.
 Qed.
 
-Hint Resolve lt_tree_not_in lt_tree_trans gt_tree_not_in gt_tree_trans.
+Hint Resolve lt_tree_not_in lt_tree_trans gt_tree_not_in gt_tree_trans : core.
 
 (** * Empty map *)
 
@@ -811,7 +814,7 @@ Lemma create_bst :
 Proof.
  unfold create; auto.
 Qed.
-Hint Resolve create_bst.
+Hint Resolve create_bst : core.
 
 Lemma create_in :
  forall l x e r y,
@@ -828,7 +831,7 @@ Proof.
  (apply lt_tree_node || apply gt_tree_node); auto;
  (eapply lt_tree_trans || eapply gt_tree_trans); eauto. 
 Qed.
-Hint Resolve bal_bst.
+Hint Resolve bal_bst : core.
 
 Lemma bal_in : forall l x e r y,
  In y (bal l x e r) <-> X.eq y x \/ In y l \/ In y r.
@@ -869,7 +872,7 @@ Proof.
  apply MX.eq_lt with x; auto.
  apply MX.lt_eq with x; auto.
 Qed.
-Hint Resolve add_bst.
+Hint Resolve add_bst : core.
 
 Lemma add_1 : forall m x y e, X.eq x y -> MapsTo y e (add x e m).
 Proof.
@@ -949,7 +952,7 @@ Proof.
  destruct 1.
  apply H2; intuition.
 Qed.
-Hint Resolve remove_min_bst.
+Hint Resolve remove_min_bst : core.
 
 Lemma remove_min_gt_tree : forall l x e r h,
  bst (Node l x e r h) ->
@@ -968,7 +971,7 @@ Proof.
  assert (X.lt m#1 x) by order.
  decompose [or] H; order.
 Qed.
-Hint Resolve remove_min_gt_tree.
+Hint Resolve remove_min_gt_tree : core.
 
 Lemma remove_min_find : forall l x e r h y,
  bst (Node l x e r h) ->
@@ -1120,7 +1123,7 @@ Proof.
  intuition; [ apply MX.lt_eq with x | ]; eauto.
  intuition; [ apply MX.eq_lt with x | ]; eauto.
 Qed.
-Hint Resolve join_bst.
+Hint Resolve join_bst : core.
 
 Lemma join_find : forall l x d r y,
  bst l -> bst r -> lt_tree x l -> gt_tree x r ->
@@ -1256,7 +1259,7 @@ Proof.
  rewrite remove_min_in, e1; simpl; auto.
  change (gt_tree (m2',xd)#2#1 (m2',xd)#1). rewrite <-e1; eauto.
 Qed.
-Hint Resolve concat_bst.
+Hint Resolve concat_bst : core.
 
 Lemma concat_find : forall m1 m2 y, bst m1 -> bst m2 ->
  (forall y1 y2, In y1 m1 -> In y2 m2 -> X.lt y1 y2) ->
@@ -1344,7 +1347,7 @@ Proof.
  intros; unfold elements; apply elements_aux_sort; auto.
  intros; inversion H0.
 Qed.
-Hint Resolve elements_sort.
+Hint Resolve elements_sort : core.
 
 Lemma elements_nodup : forall s : t elt, bst s -> NoDupA eqk (elements s).
 Proof.
@@ -1612,7 +1615,7 @@ destruct (map_option_2 H) as (d0 & ? & ?).
 destruct (map_option_2 H') as (d0' & ? & ?).
 eapply X.lt_trans with x; eauto using MapsTo_In.
 Qed.
-Hint Resolve map_option_bst.
+Hint Resolve map_option_bst : core.
 
 Ltac nonify e :=
  replace e with (@None elt) by
@@ -1711,7 +1714,7 @@ apply X.lt_trans with x1.
 destruct (map2_opt_2 H1 H6 Hy); intuition.
 destruct (map2_opt_2 H2 H7 Hy'); intuition.
 Qed.
-Hint Resolve map2_opt_bst.
+Hint Resolve map2_opt_bst : core.
 
 Ltac map2_aux :=
  match goal with
@@ -1817,6 +1820,7 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Module Raw := Raw I X.
  Import Raw.Proofs.
 
+ #[universes(template)]
  Record bst (elt:Type) :=
   Bst {this :> Raw.tree elt; is_bst : Raw.bst this}.
 
@@ -1831,36 +1835,36 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Implicit Types e : elt.
 
  Definition empty : t elt := Bst (empty_bst elt).
- Definition is_empty m : bool := Raw.is_empty m.(this).
- Definition add x e m : t elt := Bst (add_bst x e m.(is_bst)).
- Definition remove x m : t elt := Bst (remove_bst x m.(is_bst)).
- Definition mem x m : bool := Raw.mem x m.(this).
- Definition find x m : option elt := Raw.find x m.(this).
- Definition map f m : t elt' := Bst (map_bst f m.(is_bst)).
+ Definition is_empty m : bool := Raw.is_empty (this m).
+ Definition add x e m : t elt := Bst (add_bst x e (is_bst m)).
+ Definition remove x m : t elt := Bst (remove_bst x (is_bst m)).
+ Definition mem x m : bool := Raw.mem x (this m).
+ Definition find x m : option elt := Raw.find x (this m).
+ Definition map f m : t elt' := Bst (map_bst f (is_bst m)).
  Definition mapi (f:key->elt->elt') m : t elt' :=
-  Bst (mapi_bst f m.(is_bst)).
+  Bst (mapi_bst f (is_bst m)).
  Definition map2 f m (m':t elt') : t elt'' :=
-  Bst (map2_bst f m.(is_bst) m'.(is_bst)).
- Definition elements m : list (key*elt) := Raw.elements m.(this).
- Definition cardinal m := Raw.cardinal m.(this).
- Definition fold (A:Type) (f:key->elt->A->A) m i := Raw.fold (A:=A) f m.(this) i.
- Definition equal cmp m m' : bool := Raw.equal cmp m.(this) m'.(this).
+  Bst (map2_bst f (is_bst m) (is_bst m')).
+ Definition elements m : list (key*elt) := Raw.elements (this m).
+ Definition cardinal m := Raw.cardinal (this m).
+ Definition fold (A:Type) (f:key->elt->A->A) m i := Raw.fold (A:=A) f (this m) i.
+ Definition equal cmp m m' : bool := Raw.equal cmp (this m) (this m').
 
- Definition MapsTo x e m : Prop := Raw.MapsTo x e m.(this).
- Definition In x m : Prop := Raw.In0 x m.(this).
- Definition Empty m : Prop := Empty m.(this).
+ Definition MapsTo x e m : Prop := Raw.MapsTo x e (this m).
+ Definition In x m : Prop := Raw.In0 x (this m).
+ Definition Empty m : Prop := Empty (this m).
 
  Definition eq_key : (key*elt) -> (key*elt) -> Prop := @PX.eqk elt.
  Definition eq_key_elt : (key*elt) -> (key*elt) -> Prop := @PX.eqke elt.
  Definition lt_key : (key*elt) -> (key*elt) -> Prop := @PX.ltk elt.
 
  Lemma MapsTo_1 : forall m x y e, E.eq x y -> MapsTo x e m -> MapsTo y e m.
- Proof. intros m; exact (@MapsTo_1 _ m.(this)). Qed.
+ Proof. intros m; exact (@MapsTo_1 _ (this m)). Qed.
 
  Lemma mem_1 : forall m x, In x m -> mem x m = true.
  Proof.
  unfold In, mem; intros m x; rewrite In_alt; simpl; apply mem_1; auto.
- apply m.(is_bst).
+ apply (is_bst m).
  Qed.
 
  Lemma mem_2 : forall m x, mem x m = true -> In x m.
@@ -1872,9 +1876,9 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Proof. exact (@empty_1 elt). Qed.
 
  Lemma is_empty_1 : forall m, Empty m -> is_empty m = true.
- Proof. intros m; exact (@is_empty_1 _ m.(this)). Qed.
+ Proof. intros m; exact (@is_empty_1 _ (this m)). Qed.
  Lemma is_empty_2 : forall m, is_empty m = true -> Empty m.
- Proof. intros m; exact (@is_empty_2 _ m.(this)). Qed.
+ Proof. intros m; exact (@is_empty_2 _ (this m)). Qed.
 
  Lemma add_1 : forall m x y e, E.eq x y -> MapsTo y e (add x e m).
  Proof. intros m x y e; exact (@add_1 elt _ x y e). Qed.
@@ -1886,22 +1890,22 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Lemma remove_1 : forall m x y, E.eq x y -> ~ In y (remove x m).
  Proof.
  unfold In, remove; intros m x y; rewrite In_alt; simpl; apply remove_1; auto.
- apply m.(is_bst).
+ apply (is_bst m).
  Qed.
  Lemma remove_2 : forall m x y e, ~ E.eq x y -> MapsTo y e m -> MapsTo y e (remove x m).
- Proof. intros m x y e; exact (@remove_2 elt _ x y e m.(is_bst)). Qed.
+ Proof. intros m x y e; exact (@remove_2 elt _ x y e (is_bst m)). Qed.
  Lemma remove_3 : forall m x y e, MapsTo y e (remove x m) -> MapsTo y e m.
- Proof. intros m x y e; exact (@remove_3 elt _ x y e m.(is_bst)). Qed.
+ Proof. intros m x y e; exact (@remove_3 elt _ x y e (is_bst m)). Qed.
 
 
  Lemma find_1 : forall m x e, MapsTo x e m -> find x m = Some e.
- Proof. intros m x e; exact (@find_1 elt _ x e m.(is_bst)). Qed.
+ Proof. intros m x e; exact (@find_1 elt _ x e (is_bst m)). Qed.
  Lemma find_2 : forall m x e, find x m = Some e -> MapsTo x e m.
- Proof. intros m; exact (@find_2 elt m.(this)). Qed.
+ Proof. intros m; exact (@find_2 elt (this m)). Qed.
 
  Lemma fold_1 : forall m (A : Type) (i : A) (f : key -> elt -> A -> A),
         fold f m i = fold_left (fun a p => f (fst p) (snd p) a) (elements m) i.
- Proof. intros m; exact (@fold_1 elt m.(this) m.(is_bst)). Qed.
+ Proof. intros m; exact (@fold_1 elt (this m) (is_bst m)). Qed.
 
  Lemma elements_1 : forall m x e,
    MapsTo x e m -> InA eq_key_elt (x,e) (elements m).
@@ -1916,13 +1920,13 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Qed.
 
  Lemma elements_3 : forall m, sort lt_key (elements m).
- Proof. intros m; exact (@elements_sort elt m.(this) m.(is_bst)). Qed.
+ Proof. intros m; exact (@elements_sort elt (this m) (is_bst m)). Qed.
 
  Lemma elements_3w : forall m, NoDupA eq_key (elements m).
- Proof. intros m; exact (@elements_nodup elt m.(this) m.(is_bst)). Qed.
+ Proof. intros m; exact (@elements_nodup elt (this m) (is_bst m)). Qed.
 
  Lemma cardinal_1 : forall m, cardinal m = length (elements m).
- Proof. intro m; exact (@elements_cardinal elt m.(this)). Qed.
+ Proof. intro m; exact (@elements_cardinal elt (this m)). Qed.
 
  Definition Equal m m' := forall y, find y m = find y m'.
  Definition Equiv (eq_elt:elt->elt->Prop) m m' :=
@@ -1958,7 +1962,7 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
 
  Lemma map_1 : forall (elt elt':Type)(m: t elt)(x:key)(e:elt)(f:elt->elt'),
         MapsTo x e m -> MapsTo x (f e) (map f m).
- Proof. intros elt elt' m x e f; exact (@map_1 elt elt' f m.(this) x e). Qed.
+ Proof. intros elt elt' m x e f; exact (@map_1 elt elt' f (this m) x e). Qed.
 
  Lemma map_2 : forall (elt elt':Type)(m:t elt)(x:key)(f:elt->elt'), In x (map f m) -> In x m.
  Proof.
@@ -1969,7 +1973,7 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Lemma mapi_1 : forall (elt elt':Type)(m: t elt)(x:key)(e:elt)
         (f:key->elt->elt'), MapsTo x e m ->
         exists y, E.eq y x /\ MapsTo x (f y e) (mapi f m).
- Proof. intros elt elt' m x e f; exact (@mapi_1 elt elt' f m.(this) x e). Qed.
+ Proof. intros elt elt' m x e f; exact (@mapi_1 elt elt' f (this m) x e). Qed.
  Lemma mapi_2 : forall (elt elt':Type)(m: t elt)(x:key)
         (f:key->elt->elt'), In x (mapi f m) -> In x m.
  Proof.
@@ -1983,8 +1987,8 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Proof.
  unfold find, map2, In; intros elt elt' elt'' m m' x f.
  do 2 rewrite In_alt; intros; simpl; apply map2_1; auto.
- apply m.(is_bst).
- apply m'.(is_bst).
+ apply (is_bst m).
+ apply (is_bst m').
  Qed.
 
  Lemma map2_2 : forall (elt elt' elt'':Type)(m: t elt)(m': t elt')
@@ -1993,8 +1997,8 @@ Module IntMake (I:Int)(X: OrderedType) <: S with Module E := X.
  Proof.
  unfold In, map2; intros elt elt' elt'' m m' x f.
  do 3 rewrite In_alt; intros; simpl in *; eapply map2_2; eauto.
- apply m.(is_bst).
- apply m'.(is_bst).
+ apply (is_bst m).
+ apply (is_bst m').
  Qed.
 
 End IntMake.
@@ -2066,7 +2070,7 @@ Module IntMake_ord (I:Int)(X: OrderedType)(D : OrderedType) <:
   Proof.
    destruct c; simpl; intros; P.MX.elim_comp; auto.
   Qed.
-  Hint Resolve cons_Cmp.
+  Hint Resolve cons_Cmp : core.
 
   Lemma compare_end_Cmp :
    forall e2, Cmp (compare_end e2) nil (P.flatten_e e2).
@@ -2120,7 +2124,7 @@ Module IntMake_ord (I:Int)(X: OrderedType)(D : OrderedType) <:
   (* Proofs about [eq] and [lt] *)
 
   Definition selements (m1 : t) :=
-   LO.MapS.Build_slist (P.elements_sort m1.(is_bst)).
+   LO.MapS.Build_slist (P.elements_sort (is_bst m1)).
 
   Definition seq (m1 m2 : t) := LO.eq (selements m1) (selements m2).
   Definition slt (m1 m2 : t) := LO.lt (selements m1) (selements m2).

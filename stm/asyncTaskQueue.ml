@@ -60,7 +60,7 @@ module Make(T : Task) () = struct
   type request = Request of T.request
 
   type more_data =
-    | MoreDataUnivLevel of UnivGen.universe_id list
+    | MoreDataUnivLevel of UnivGen.univ_unique_id list
 
   let slave_respond (Request r) =
     let res = T.perform r in
@@ -118,18 +118,40 @@ module Make(T : Task) () = struct
   let spawn id =
     let name = Printf.sprintf "%s:%d" !T.name id in
     let proc, ic, oc =
+      (* Filter arguments for slaves. *)
       let rec set_slave_opt = function
         | [] -> !async_proofs_flags_for_workers @
                 ["-worker-id"; name;
                  "-async-proofs-worker-priority";
-                   CoqworkmgrApi.(string_of_priority !async_proofs_worker_priority)]
-        | ("-emacs"|"-emacs-U"|"-batch")::tl -> set_slave_opt tl
-        | ("-async-proofs" |"-vio2vo"
-          |"-load-vernac-source" |"-l" |"-load-vernac-source-verbose" |"-lv"
-          |"-compile" |"-compile-verbose"
-          |"-async-proofs-worker-priority" |"-worker-id") :: _ :: tl ->
+                 CoqworkmgrApi.(string_of_priority !async_proofs_worker_priority)]
+        (* Options to discard: 0 arguments *)
+        | ("-emacs"|"-batch")::tl ->
           set_slave_opt tl
-        | x::tl -> x :: set_slave_opt tl in
+        (* Options to discard: 1 argument *)
+        | ( "-async-proofs" | "-vio2vo" | "-o"
+          | "-load-vernac-source" | "-l" | "-load-vernac-source-verbose" | "-lv"
+          | "-compile" | "-compile-verbose"
+          | "-async-proofs-cache" | "-async-proofs-j" | "-async-proofs-tac-j"
+          | "-async-proofs-private-flags" | "-async-proofs-tactic-error-resilience"
+          | "-async-proofs-command-error-resilience" | "-async-proofs-delegation-threshold"
+          | "-async-proofs-worker-priority" | "-worker-id") :: _ :: tl ->
+          set_slave_opt tl
+        (* We need to pass some options with one argument *)
+        | ( "-I" | "-include" | "-top" | "-topfile" | "-coqlib" | "-exclude-dir" | "-compat"
+          | "-load-ml-object" | "-load-ml-source" | "-require" | "-w" | "-color" | "-init-file"
+          | "-profile-ltac-cutoff" | "-main-channel" | "-control-channel" | "-mangle-names" | "-set" | "-unset"
+          | "-diffs" | "-mangle-name" | "-dump-glob" | "-bytecode-compiler" | "-native-compiler" as x) :: a :: tl ->
+          x :: a :: set_slave_opt tl
+        (* We need to pass some options with two arguments *)
+        | ( "-R" | "-Q" as x) :: a1 :: a2 :: tl ->
+          x :: a1 :: a2 :: set_slave_opt tl
+        (* Finally we pass all options starting in '-'; check this is safe w.r.t the weird vio* option set *)
+        | x :: tl when x.[0] = '-' ->
+          x :: set_slave_opt tl
+        (* We assume this is a file, filter out *)
+        | _ :: tl ->
+          set_slave_opt tl
+      in
       let args =
         Array.of_list (set_slave_opt (List.tl (Array.to_list Sys.argv))) in
       let env = Array.append (T.extra_env ()) (Unix.environment ()) in
@@ -190,7 +212,7 @@ module Make(T : Task) () = struct
         let () = TQueue.broadcast queue in
         Worker.kill proc
     in
-    let _ = Thread.create kill_if () in
+    let _ = CThread.create kill_if () in
 
     try while true do
       report_status ~id "Idle";
@@ -250,7 +272,7 @@ module Make(T : Task) () = struct
     {
       active = Pool.create queue ~size;
       queue;
-      cleaner = if size > 0 then Some (Thread.create cleaner queue) else None;
+      cleaner = if size > 0 then Some (CThread.create cleaner queue) else None;
     }
 
   let destroy { active; queue } =
@@ -307,10 +329,12 @@ module Make(T : Task) () = struct
   let main_loop () =
     (* We pass feedback to master *)
     let slave_feeder oc fb =
-      Marshal.to_channel oc (RespFeedback (debug_with_pid fb)) []; flush oc in
+      Control.protect_sigalrm (fun () ->
+          Marshal.to_channel oc (RespFeedback (debug_with_pid fb)) []; flush oc) ()
+    in
     ignore (Feedback.add_feeder (fun x -> slave_feeder (Option.get !slave_oc) x));
     (* We ask master to allocate universe identifiers *)
-    UnivGen.set_remote_new_univ_id (bufferize (fun () ->
+    UnivGen.set_remote_new_univ_id (bufferize @@ Control.protect_sigalrm (fun () ->
       marshal_response (Option.get !slave_oc) RespGetCounterNewUnivLevel;
       match unmarshal_more_data (Option.get !slave_ic) with
       | MoreDataUnivLevel l -> l));

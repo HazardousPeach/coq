@@ -10,7 +10,6 @@
 
 open Pp
 open CErrors
-open Indtypes
 open Type_errors
 open Pretype_errors
 open Indrec
@@ -29,7 +28,6 @@ exception EvaluatedError of Pp.t * exn option
 let explain_exn_default = function
   (* Basic interaction exceptions *)
   | Stream.Error txt -> hov 0 (str "Syntax error: " ++ str txt ++ str ".")
-  | Token.Error txt -> hov 0 (str "Syntax error: " ++ str txt ++ str ".")
   | CLexer.Error.E err -> hov 0 (str (CLexer.Error.to_string err))
   | Sys_error msg -> hov 0 (str "System error: " ++ guill msg)
   | Out_of_memory -> hov 0 (str "Out of memory.")
@@ -60,14 +58,14 @@ let process_vernac_interp_error exn = match fst exn with
 	mt() in
     wrap_vernac_error exn (str "Universe inconsistency" ++ msg ++ str ".")
   | TypeError(ctx,te) ->
-      let te = Himsg.map_ptype_error EConstr.of_constr te in
+      let te = map_ptype_error EConstr.of_constr te in
       wrap_vernac_error exn (Himsg.explain_type_error ctx Evd.empty te)
   | PretypeError(ctx,sigma,te) ->
       wrap_vernac_error exn (Himsg.explain_pretype_error ctx sigma te)
-  | Notation.NumeralNotationError(ctx,sigma,te) ->
-      wrap_vernac_error exn (Himsg.explain_numeral_notation_error ctx sigma te)
-  | Typeclasses_errors.TypeClassError(env, te) ->
-      wrap_vernac_error exn (Himsg.explain_typeclass_error env te)
+  | Notation.PrimTokenNotationError(kind,ctx,sigma,te) ->
+      wrap_vernac_error exn (Himsg.explain_prim_token_notation_error kind ctx sigma te)
+  | Typeclasses_errors.TypeClassError(env, sigma, te) ->
+      wrap_vernac_error exn (Himsg.explain_typeclass_error env sigma te)
   | Implicit_quantifiers.MismatchedContextInstance(e,c,l,x) ->
     wrap_vernac_error exn (Himsg.explain_mismatched_contexts e c l x)
   | InductiveError e ->

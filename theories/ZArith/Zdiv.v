@@ -21,11 +21,8 @@ Local Open Scope Z_scope.
     specifications and properties are in [BinInt]. *)
 
 Notation Zdiv_eucl_POS := Z.pos_div_eucl (only parsing).
-Notation Zdiv_eucl := Z.div_eucl (compat "8.7").
-Notation Zdiv := Z.div (compat "8.7").
 Notation Zmod := Z.modulo (only parsing).
 
-Notation Zdiv_eucl_eq := Z.div_eucl_eq (compat "8.7").
 Notation Z_div_mod_eq_full := Z.div_mod (only parsing).
 Notation Zmod_POS_bound := Z.pos_div_eucl_bound (only parsing).
 Notation Zmod_pos_bound := Z.mod_pos_bound (only parsing).
@@ -73,7 +70,7 @@ Proof.
  intros; unfold Remainder, Remainder_alt; omega with *.
 Qed.
 
-Hint Unfold Remainder.
+Hint Unfold Remainder : core.
 
 (** Now comes the fully general result about Euclidean division. *)
 

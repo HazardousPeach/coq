@@ -16,6 +16,7 @@ open Names
 open Nameops
 open Term
 open Constr
+open Context
 open Termops
 open EConstr
 open Vars
@@ -69,7 +70,7 @@ let use_injection_in_context = function
   | None -> !injection_in_context
   | Some flags -> flags.injection_in_context
 
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "injection in context";
@@ -101,8 +102,8 @@ let rewrite_core_unif_flags = {
   modulo_conv_on_closed_terms = None;
   use_metas_eagerly_in_conv_on_closed_terms = true;
   use_evars_eagerly_in_conv_on_closed_terms = false;
-  modulo_delta = empty_transparent_state;
-  modulo_delta_types = empty_transparent_state;
+  modulo_delta = TransparentState.empty;
+  modulo_delta_types = TransparentState.empty;
   check_applied_meta_types = true;
   use_pattern_unification = true;
   use_meta_bound_pattern_unification = true;
@@ -169,7 +170,7 @@ let instantiate_lemma gl c ty l l2r concl =
   [eqclause]
 
 let rewrite_conv_closed_core_unif_flags = {
-  modulo_conv_on_closed_terms = Some full_transparent_state;
+  modulo_conv_on_closed_terms = Some TransparentState.full;
     (* We have this flag for historical reasons, it has e.g. the consequence *)
     (* to rewrite "?x+2" in "y+(1+1)=0" or to rewrite "?x+?x" in "2+(1+1)=0" *)
 
@@ -178,8 +179,8 @@ let rewrite_conv_closed_core_unif_flags = {
     (* Combined with modulo_conv_on_closed_terms, this flag allows since 8.2 *)
     (* to rewrite e.g. "?x+(2+?x)" in "1+(1+2)=0" *)
 
-  modulo_delta = empty_transparent_state;
-  modulo_delta_types = full_transparent_state;
+  modulo_delta = TransparentState.empty;
+  modulo_delta_types = TransparentState.full;
   check_applied_meta_types = true;
   use_pattern_unification = true;
     (* To rewrite "?n x y" in "y+x=0" when ?n is *)
@@ -204,7 +205,7 @@ let rewrite_conv_closed_unif_flags = {
 }
 
 let rewrite_keyed_core_unif_flags = {
-  modulo_conv_on_closed_terms = Some full_transparent_state;
+  modulo_conv_on_closed_terms = Some TransparentState.full;
     (* We have this flag for historical reasons, it has e.g. the consequence *)
     (* to rewrite "?x+2" in "y+(1+1)=0" or to rewrite "?x+?x" in "2+(1+1)=0" *)
 
@@ -213,8 +214,8 @@ let rewrite_keyed_core_unif_flags = {
     (* Combined with modulo_conv_on_closed_terms, this flag allows since 8.2 *)
     (* to rewrite e.g. "?x+(2+?x)" in "1+(1+2)=0" *)
 
-  modulo_delta = full_transparent_state;
-  modulo_delta_types = full_transparent_state;
+  modulo_delta = TransparentState.full;
+  modulo_delta_types = TransparentState.full;
   check_applied_meta_types = true;
   use_pattern_unification = true;
     (* To rewrite "?n x y" in "y+x=0" when ?n is *)
@@ -256,7 +257,7 @@ let tclNOTSAMEGOAL tac =
     Proofview.Goal.goals >>= fun gls ->
     let check accu gl' =
       gl' >>= fun gl' ->
-      let accu = accu || Goal.V82.same_goal sigma ev (project gl') (goal gl') in
+      let accu = accu || Proofview.Progress.goal_equal sigma ev (project gl') (goal gl') in
       Proofview.tclUNIT accu
     in
     Proofview.Monad.List.fold_left check false gls >>= fun has_same ->
@@ -355,7 +356,7 @@ let find_elim hdcncl lft2rgt dep cls ot =
       match EConstr.kind sigma hdcncl with 
       | Ind (ind_sp,u) -> 
 	let pr1 = 
-	  lookup_eliminator ind_sp (elimination_sort_of_clause cls gl) 
+          lookup_eliminator env ind_sp (elimination_sort_of_clause cls gl)
 	in
         begin match lft2rgt, cls with
         | Some true, None
@@ -416,7 +417,7 @@ let leibniz_rewrite_ebindings_clause cls lft2rgt tac c t l with_evars frzevars d
   find_elim hdcncl lft2rgt dep cls (Some t) >>= fun elim ->
       general_elim_clause with_evars frzevars tac cls c t l
       (match lft2rgt with None -> false | Some b -> b)
-      {elimindex = None; elimbody = (elim,NoBindings); elimrename = None}
+      {elimindex = None; elimbody = (elim,NoBindings) }
   end
 
 let adjust_rewriting_direction args lft2rgt =
@@ -437,7 +438,7 @@ let rewrite_side_tac tac sidetac = side_tac tac (Option.map fst sidetac)
 
 let general_rewrite_ebindings_clause cls lft2rgt occs frzevars dep_proof_ok ?tac
     ((c,l) : constr with_bindings) with_evars =
-  if occs != AllOccurrences then (
+  if not (Locusops.is_all_occurrences occs) then (
     rewrite_side_tac (Hook.get forward_general_setoid_rewrite_clause cls lft2rgt occs (c,l) ~new_goals:[]) tac)
   else
     Proofview.Goal.enter begin fun gl ->
@@ -445,7 +446,7 @@ let general_rewrite_ebindings_clause cls lft2rgt occs frzevars dep_proof_ok ?tac
       let env = Proofview.Goal.env gl in
     let ctype = get_type_of env sigma c in
     let rels, t = decompose_prod_assum sigma (whd_betaiotazeta sigma ctype) in
-      match match_with_equality_type sigma t with
+      match match_with_equality_type env sigma t with
       | Some (hdcncl,args) -> (* Fast path: direct leibniz-like rewrite *)
 	  let lft2rgt = adjust_rewriting_direction args lft2rgt in
           leibniz_rewrite_ebindings_clause cls lft2rgt tac c (it_mkProd_or_LetIn t rels)
@@ -461,7 +462,7 @@ let general_rewrite_ebindings_clause cls lft2rgt occs frzevars dep_proof_ok ?tac
                   Proofview.tclEVARMAP >>= fun sigma ->
 	          let env' = push_rel_context rels env in
 	          let rels',t' = splay_prod_assum env' sigma t in (* Search for underlying eq *)
-	          match match_with_equality_type sigma t' with
+                  match match_with_equality_type env sigma t' with
 	            | Some (hdcncl,args) ->
 		  let lft2rgt = adjust_rewriting_direction args lft2rgt in
 		  leibniz_rewrite_ebindings_clause cls lft2rgt tac c
@@ -595,15 +596,16 @@ let init_setoid () =
   if is_dirpath_prefix_of classes_dirpath (Lib.cwd ()) then ()
   else check_required_library ["Coq";"Setoids";"Setoid"]
 
-let check_setoid cl = 
+let check_setoid cl =
+  let concloccs = Locusops.occurrences_map (fun x -> x) cl.concl_occs in
   Option.fold_left
-    ( List.fold_left 
+    (List.fold_left
 	(fun b ((occ,_),_) -> 
-	  b||(Locusops.occurrences_map (fun x -> x) occ <> AllOccurrences)
+          b||(not (Locusops.is_all_occurrences (Locusops.occurrences_map (fun x -> x) occ)))
 	)
     )
-    ((Locusops.occurrences_map (fun x -> x) cl.concl_occs <> AllOccurrences) &&
-	(Locusops.occurrences_map (fun x -> x) cl.concl_occs <> NoOccurrences))
+    (not (Locusops.is_all_occurrences concloccs) &&
+     (concloccs <> NoOccurrences))
     cl.onhyps
 
 let replace_core clause l2r eq =
@@ -635,7 +637,7 @@ let replace_using_leibniz clause c1 c2 l2r unsafe try_prove_eq_opt =
   let evd = 
     if unsafe then Some (Tacmach.New.project gl)
     else
-      try Some (Evarconv.the_conv_x (Proofview.Goal.env gl) t1 t2 (Tacmach.New.project gl))
+      try Some (Evarconv.unify_delay (Proofview.Goal.env gl) (Tacmach.New.project gl) t1 t2)
       with Evarconv.UnableToUnify _ -> None
   in
   match evd with
@@ -714,7 +716,7 @@ exception DiscrFound of
 
 let keep_proof_equalities_for_injection = ref false
 
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "injection on prop arguments";
@@ -741,7 +743,7 @@ let find_positions env sigma ~keep_proofs ~no_discr t1 t2 =
     let hd2,args2 = whd_all_stack env sigma t2 in
     match (EConstr.kind sigma hd1, EConstr.kind sigma hd2) with
       | Construct ((ind1,i1 as sp1),u1), Construct (sp2,_)
-          when Int.equal (List.length args1) (constructor_nallargs_env env sp1)
+          when Int.equal (List.length args1) (constructor_nallargs env sp1)
             ->
 	  let sorts' =
             Sorts.List.intersect sorts (allowed_sorts env (fst sp1))
@@ -749,7 +751,7 @@ let find_positions env sigma ~keep_proofs ~no_discr t1 t2 =
           (* both sides are fully applied constructors, so either we descend,
              or we can discriminate here. *)
 	  if eq_constructor sp1 sp2 then
-	    let nparams = inductive_nparams_env env ind1 in
+            let nparams = inductive_nparams env ind1 in
 	    let params1,rargs1 = List.chop nparams args1 in
 	    let _,rargs2 = List.chop nparams args2 in
             let (mib,mip) = lookup_mind_specif env ind1 in
@@ -886,7 +888,8 @@ let descend_then env sigma head dirn =
       let brl =
         List.map build_branch
           (List.interval 1 (Array.length mip.mind_consnames)) in
-      let ci = make_case_info env ind RegularStyle in
+      let rci = Sorts.Relevant in (* TODO relevance *)
+      let ci = make_case_info env ind rci RegularStyle in
       Inductiveops.make_case_or_project env sigma indf ci p head (Array.of_list brl)))
 
 (* Now we need to construct the discriminator, given a discriminable
@@ -931,7 +934,8 @@ let build_selector env sigma dirn c ind special default =
     it_mkLambda_or_LetIn endpt args in
   let brl =
     List.map build_branch(List.interval 1 (Array.length mip.mind_consnames)) in
-  let ci = make_case_info env ind RegularStyle in
+  let rci = Sorts.Relevant in (* TODO relevance *)
+  let ci = make_case_info env ind rci RegularStyle in
   let ans = Inductiveops.make_case_or_project env sigma indf ci p c (Array.of_list brl) in
   ans
 
@@ -962,9 +966,10 @@ let rec build_discriminator env sigma true_0 false_0 dirn c = function
 
 let gen_absurdity id =
   Proofview.Goal.enter begin fun gl ->
+  let env = pf_env gl in
   let sigma = project gl in
   let hyp_typ = pf_get_hyp_typ id gl in
-  if is_empty_type sigma hyp_typ
+  if is_empty_type env sigma hyp_typ
   then
     simplest_elim (mkVar id)
   else
@@ -996,7 +1001,7 @@ let discrimination_pf e (t,t1,t2) discriminator lbeq =
   Proofview.tclEFFECTS eff <*>
     pf_constr_of_global eq_elim >>= fun eq_elim ->
     Proofview.tclUNIT
-       (applist (eq_elim, [t;t1;mkNamedLambda e t discriminator;i;t2]), absurd_term)
+       (applist (eq_elim, [t;t1;mkNamedLambda (make_annot e Sorts.Relevant) t discriminator;i;t2]), absurd_term)
 
 
 let eq_baseid = Id.of_string "e"
@@ -1014,7 +1019,7 @@ let discr_positions env sigma (lbeq,eqn,(t,t1,t2)) eq_clause cpath dirn =
   build_coq_True () >>= fun true_0 ->
   build_coq_False () >>= fun false_0 ->
   let e = next_ident_away eq_baseid (vars_of_env env) in
-  let e_env = push_named (Context.Named.Declaration.LocalAssum (e,t)) env in
+  let e_env = push_named (Context.Named.Declaration.LocalAssum (make_annot e Sorts.Relevant,t)) env in
   let discriminator =
     try
       Proofview.tclUNIT
@@ -1024,11 +1029,11 @@ let discr_positions env sigma (lbeq,eqn,(t,t1,t2)) eq_clause cpath dirn =
   in
     discriminator >>= fun discriminator ->
     discrimination_pf e (t,t1,t2) discriminator lbeq >>= fun (pf, absurd_term) ->
-    let pf_ty = mkArrow eqn absurd_term in
+    let pf_ty = mkArrow eqn Sorts.Relevant absurd_term in
     let absurd_clause = apply_on_clause (pf,pf_ty) eq_clause in
     let pf = Clenvtac.clenv_value_cast_meta absurd_clause in
     tclTHENS (assert_after Anonymous absurd_term)
-      [onLastHypId gen_absurdity; (Proofview.V82.tactic (Tacmach.refine pf))]
+      [onLastHypId gen_absurdity; (Proofview.V82.tactic (Refiner.refiner ~check:true EConstr.Unsafe.(to_constr pf)))]
 
 let discrEq (lbeq,_,(t,t1,t2) as u) eq_clause =
   let sigma = eq_clause.evd in
@@ -1062,7 +1067,7 @@ let onNegatedEquality with_evars tac =
     let ccl = Proofview.Goal.concl gl in
     let env = Proofview.Goal.env gl in
     match EConstr.kind sigma (hnf_constr env sigma ccl) with
-    | Prod (_,t,u) when is_empty_type sigma u ->
+    | Prod (_,t,u) when is_empty_type env sigma u ->
         tclTHEN introf
           (onLastHypId (fun id ->
             onEquality with_evars tac (mkVar id,NoBindings)))
@@ -1113,7 +1118,7 @@ let make_tuple env sigma (rterm,rty) lind =
   assert (not (noccurn sigma lind rty));
   let sigdata = find_sigma_data env (get_sort_of env sigma rty) in
   let sigma, a = type_of ~refresh:true env sigma (mkRel lind) in
-  let na = Context.Rel.Declaration.get_name (lookup_rel lind env) in
+  let na = Context.Rel.Declaration.get_annot (lookup_rel lind env) in
   (* We move [lind] to [1] and lift other rels > [lind] by 1 *)
   let rty = lift (1-lind) (liftn lind (lind+1) rty) in
   (* Now [lind] is [mkRel 1] and we abstract on (na:a) *)
@@ -1193,9 +1198,8 @@ let sig_clausal_form env sigma sort_of_ty siglen ty dflt =
       (* is the default value typable with the expected type *)
       let dflt_typ = unsafe_type_of env sigma dflt in
       try
-        let sigma = Evarconv.the_conv_x_leq env dflt_typ p_i sigma in
-        let sigma =
-          Evarconv.solve_unif_constraints_with_heuristics env sigma in
+        let sigma = Evarconv.unify_leq_delay env sigma dflt_typ p_i in
+        let sigma = Evarconv.solve_unif_constraints_with_heuristics env sigma in
         sigma, dflt
       with Evarconv.UnableToUnify _ ->
 	user_err Pp.(str "Cannot solve a unification problem.")
@@ -1210,11 +1214,11 @@ let sig_clausal_form env sigma sort_of_ty siglen ty dflt =
       match evopt with
 	| Some w ->
           let w_type = unsafe_type_of env sigma w in
-          begin match Evarconv.cumul env sigma w_type a with
-            | Some sigma ->
+          begin match Evarconv.unify_leq_delay env sigma w_type a with
+            | sigma ->
               let sigma, exist_term = Evd.fresh_global env sigma sigdata.intro in
               sigma, applist(exist_term,[a;p_i_minus_1;w;tuple_tail])
-            | None ->
+            | exception Evarconv.UnableToUnify _ ->
               user_err Pp.(str "Cannot solve a unification problem.")
           end
 	| None ->
@@ -1354,8 +1358,8 @@ let inject_if_homogenous_dependent_pair ty =
         tclTHENS (cut (mkApp (ceq,new_eq_args)))
           [clear [destVar sigma hyp];
            Tacticals.New.pf_constr_of_global inj2 >>= fun inj2 ->
-           Proofview.V82.tactic (Tacmach.refine
-             (mkApp(inj2,[|ar1.(0);mkConst c;ar1.(1);ar1.(2);ar1.(3);ar2.(3);hyp|])))
+           Proofview.V82.tactic (Refiner.refiner ~check:true EConstr.Unsafe.(to_constr
+             (mkApp(inj2,[|ar1.(0);mkConst c;ar1.(1);ar1.(2);ar1.(3);ar2.(3);hyp|]))))
           ])]
   with Exit ->
     Proofview.tclUNIT ()
@@ -1374,13 +1378,13 @@ let simplify_args env sigma t =
 
 let inject_at_positions env sigma l2r (eq,_,(t,t1,t2)) eq_clause posns tac =
   let e = next_ident_away eq_baseid (vars_of_env env) in
-  let e_env = push_named (LocalAssum (e,t)) env in
+  let e_env = push_named (LocalAssum (make_annot e Sorts.Relevant,t)) env in
   let evdref = ref sigma in
   let filter (cpath, t1', t2') =
     try
       (* arbitrarily take t1' as the injector default value *)
       let sigma, (injbody,resty) = build_injector e_env !evdref t1' (mkVar e) cpath in
-      let injfun = mkNamedLambda e t injbody in
+      let injfun = mkNamedLambda (make_annot e Sorts.Relevant) t injbody in
       let sigma,congr = Evd.fresh_global env sigma eq.congr in
       let pf = applist(congr,[t;resty;injfun;t1;t2]) in
       let sigma, pf_typ = Typing.type_of env sigma pf in
@@ -1400,7 +1404,7 @@ let inject_at_positions env sigma l2r (eq,_,(t,t1,t2)) eq_clause posns tac =
       (Proofview.tclIGNORE (Proofview.Monad.List.map
          (fun (pf,ty) -> tclTHENS (cut ty)
            [inject_if_homogenous_dependent_pair ty;
-            Proofview.V82.tactic (Tacmach.refine pf)])
+            Proofview.V82.tactic (Refiner.refiner ~check:true EConstr.Unsafe.(to_constr pf))])
          (if l2r then List.rev injectors else injectors)))
       (tac (List.length injectors)))
 
@@ -1501,7 +1505,7 @@ let intro_decomp_eq tac data (c, t) =
     decompEqThen !keep_proof_equalities_for_injection (fun _ -> tac) data cl
   end
 
-let _ = declare_intro_decomp_eq intro_decomp_eq
+let () = declare_intro_decomp_eq intro_decomp_eq
 
 (* [subst_tuple_term dep_pair B]
 
@@ -1565,9 +1569,9 @@ let subst_tuple_term env sigma dep_pair1 dep_pair2 b =
   (* We build the expected goal *)
   let abst_B =
     List.fold_right
-      (fun (e,t) body -> lambda_create env sigma (t,subst_term sigma e body)) e1_list b in
+      (fun (e,t) body -> lambda_create env sigma (Sorts.Relevant,t,subst_term sigma e body)) e1_list b in
   let pred_body = beta_applist sigma (abst_B,proj_list) in
-  let body = mkApp (lambda_create env sigma (typ,pred_body),[|dep_pair1|]) in
+  let body = mkApp (lambda_create env sigma (Sorts.Relevant,typ,pred_body),[|dep_pair1|]) in
   let expected_goal = beta_applist sigma (abst_B,List.map fst e2_list) in
   (* Simulate now the normalisation treatment made by Logic.mk_refgoals *)
   let expected_goal = nf_betaiota env sigma expected_goal in
@@ -1609,10 +1613,10 @@ let cutSubstInHyp l2r eqn id =
   tclTHEN (Proofview.Unsafe.tclEVARS sigma)
     (tclTHENFIRST
     (tclTHENLIST [
-       (change_in_hyp None (make_change_arg typ) (id,InHypTypeOnly));
+       (change_in_hyp ~check:true None (make_change_arg typ) (id,InHypTypeOnly));
        (replace_core (onHyp id) l2r eqn)
     ])
-    (change_in_hyp None (make_change_arg expected) (id,InHypTypeOnly)))
+    (change_in_hyp ~check:true None (make_change_arg expected) (id,InHypTypeOnly)))
   end
 
 let try_rewrite tac =
@@ -1666,7 +1670,7 @@ user = raise user error specific to rewrite
 
 let regular_subst_tactic = ref true
 
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "more regular behavior of tactic subst";
@@ -1724,7 +1728,7 @@ let subst_one dep_proof_ok x (hyp,rhs,dir) =
   tclTHENLIST
     ((if need_rewrite then
       [revert (List.map snd dephyps);
-       general_rewrite dir AllOccurrences true dep_proof_ok (mkVar hyp);
+       general_rewrite dir AtLeastOneOccurrence true dep_proof_ok (mkVar hyp);
        (tclMAP (fun (dest,id) -> intro_move (Some id) dest) dephyps)]
       else
        [Proofview.tclUNIT ()]) @
@@ -1742,7 +1746,7 @@ let subst_one_var dep_proof_ok x =
       (* Find a non-recursive definition for x *)
       let res =
         try
-          (** [is_eq_x] ensures nf_evar on its side *)
+          (* [is_eq_x] ensures nf_evar on its side *)
           let hyps = Proofview.Goal.hyps gl in
           let test hyp _ = is_eq_x gl x hyp in
           Context.Named.fold_outside test ~init:() hyps;
@@ -1911,8 +1915,8 @@ let replace_term dir_opt c  =
 
 (* Declare rewriting tactic for intro patterns "<-" and "->" *)
 
-let _ =
+let () =
   let gmr l2r with_evars tac c = general_rewrite_clause l2r with_evars tac c in
   Hook.set Tactics.general_rewrite_clause gmr
 
-let _ = Hook.set Tactics.subst_one subst_one
+let () = Hook.set Tactics.subst_one subst_one

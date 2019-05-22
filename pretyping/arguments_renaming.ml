@@ -13,6 +13,7 @@ open Names
 open Globnames
 open Term
 open Constr
+open Context
 open Environ
 open Util
 open Libobject
@@ -43,7 +44,7 @@ let subst_rename_args (subst, (_, (r, names as orig))) =
   if r==r' then orig else (r', names)
 
 let discharge_rename_args = function
-  | _, (ReqGlobal (c, names), _ as req) ->
+  | _, (ReqGlobal (c, names), _ as req) when not (isVarRef c && Lib.is_in_section c) ->
      (try 
        let vars = Lib.variable_section_segment_of_reference c in
        let var_names = List.map (fst %> NamedDecl.get_id %> Name.mk_name) vars in
@@ -69,19 +70,23 @@ let rename_arguments local r names =
 
 let arguments_names r = GlobRef.Map.find r !name_table
 
-let rec rename_prod c = function 
-  | [] -> c
-  | (Name _ as n) :: tl -> 
-      (match kind_of_type c with
-      | ProdType (_, s, t) -> mkProd (n, s, rename_prod t tl)
-      | _ -> c)
-  | _ :: tl -> 
-      match kind_of_type c with
-      | ProdType (n, s, t) -> mkProd (n, s, rename_prod t tl)
-      | _ -> c
-        
 let rename_type ty ref =
-  try rename_prod ty (arguments_names ref)
+  let name_override old_name override =
+    match override with
+    | Name _ as x -> {old_name with binder_name=x}
+    | Anonymous -> old_name in
+  let rec rename_type_aux c = function
+    | [] -> c
+    | rename :: rest as renamings ->
+        match kind_of_type c with
+        | ProdType (old, s, t) ->
+            mkProd (name_override old rename, s, rename_type_aux t rest)
+        | LetInType(old, s, b, t) ->
+            mkLetIn (old ,s, b, rename_type_aux t renamings)
+        | CastType (t,_) -> rename_type_aux t renamings
+        | SortType _ -> c
+        | AtomicType _ -> c in
+  try rename_type_aux ty (arguments_names ref)
   with Not_found -> ty
 
 let rename_type_of_constant env c =

@@ -45,7 +45,7 @@ end
 
 (** We typically label nodes of [Trace.tree] with messages to
     print. But we don't want to compute the result. *)
-type lazy_msg = unit -> Pp.t
+type lazy_msg = Environ.env -> Evd.evar_map -> Pp.t
 
 (** Info trace. *)
 module Info : sig
@@ -60,7 +60,7 @@ module Info : sig
   type state = tag Trace.incr
   type tree = tag Trace.forest
 
-  val print : tree -> Pp.t
+  val print : Environ.env -> Evd.evar_map -> tree -> Pp.t
 
   (** [collapse n t] flattens the first [n] levels of [Tactic] in an
       info trace, effectively forgetting about the [n] top level of
@@ -98,7 +98,7 @@ module P : sig
   val wprod : w -> w -> w
 
   (** Recording info trace (true) or not. *)
-  type e = bool
+  type e = { trace: bool; name : Names.Id.t; poly : bool }
 
   type u = Info.state
 

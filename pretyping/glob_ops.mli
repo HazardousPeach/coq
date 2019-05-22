@@ -15,6 +15,8 @@ open Glob_term
 
 val glob_sort_eq : Glob_term.glob_sort -> Glob_term.glob_sort -> bool
 
+val glob_sort_family : 'a glob_sort_gen -> Sorts.family
+
 val cases_pattern_eq : 'a cases_pattern_g -> 'a cases_pattern_g -> bool
 
 val alias_of_pat : 'a cases_pattern_g -> Name.t
@@ -89,16 +91,18 @@ val map_pattern : (glob_constr -> glob_constr) ->
 
 (** Conversion from glob_constr to cases pattern, if possible
 
+    Evaluation is forced.
     Take the current alias as parameter,
     @raise Not_found if translation is impossible *)
-val cases_pattern_of_glob_constr : Name.t -> 'a glob_constr_g -> 'a cases_pattern_g
+val cases_pattern_of_glob_constr : Environ.env -> Name.t -> 'a glob_constr_g -> 'a cases_pattern_g
 
-val glob_constr_of_closed_cases_pattern : 'a cases_pattern_g -> Name.t * 'a glob_constr_g
+val glob_constr_of_closed_cases_pattern : Environ.env -> 'a cases_pattern_g -> Name.t * 'a glob_constr_g
 
 (** A canonical encoding of cases pattern into constr such that
     composed with [cases_pattern_of_glob_constr Anonymous] gives identity *)
-val glob_constr_of_cases_pattern : 'a cases_pattern_g -> 'a glob_constr_g
+val glob_constr_of_cases_pattern : Environ.env -> 'a cases_pattern_g -> 'a glob_constr_g
 
-val add_patterns_for_params_remove_local_defs : constructor -> 'a cases_pattern_g list -> 'a cases_pattern_g list
+val add_patterns_for_params_remove_local_defs : Environ.env -> constructor ->
+  'a cases_pattern_g list -> 'a cases_pattern_g list
 
 val empty_lvar : Ltac_pretype.ltac_var_map

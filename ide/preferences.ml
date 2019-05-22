@@ -12,10 +12,10 @@ open Configwin
 
 let pref_file = Filename.concat (Minilib.coqide_config_home ()) "coqiderc"
 let accel_file = Filename.concat (Minilib.coqide_config_home ()) "coqide.keys"
-let lang_manager = GSourceView2.source_language_manager ~default:true
+let lang_manager = GSourceView3.source_language_manager ~default:true
 let () = lang_manager#set_search_path
   ((Minilib.coqide_data_dirs ())@lang_manager#search_path)
-let style_manager = GSourceView2.source_style_scheme_manager ~default:true
+let style_manager = GSourceView3.source_style_scheme_manager ~default:true
 let () = style_manager#set_search_path
   ((Minilib.coqide_data_dirs ())@style_manager#search_path)
 
@@ -27,6 +27,7 @@ type tag = {
   tag_underline : bool;
   tag_strikethrough : bool;
 }
+
 
 (** Generic preferences *)
 
@@ -73,11 +74,11 @@ object (self)
   method default = default
 end
 
-let stick (pref : 'a preference) (obj : #GObj.widget as 'obj)
+let stick (pref : 'a preference) (obj : < connect : #GObj.widget_signals ; .. >)
   (cb : 'a -> unit) =
   let _ = cb pref#get in
   let p_id = pref#connect#changed ~callback:(fun v -> cb v) in
-  let _ = obj#misc#connect#destroy ~callback:(fun () -> pref#connect#disconnect p_id) in
+  let _ = obj#connect#destroy ~callback:(fun () -> pref#connect#disconnect p_id) in
   ()
 
 (** Useful marshallers *)
@@ -248,9 +249,19 @@ let loaded_accel_file =
   try get_config_file "coqide.keys"
   with Not_found -> Filename.concat (Option.default "" (Glib.get_home_dir ())) ".coqide.keys"
 
-(** Hooks *)
+let get_unicode_bindings_local_file () =
+  try Some (get_config_file "coqide.bindings")
+  with Not_found -> None
 
-(** New style preferences *)
+let get_unicode_bindings_default_file () =
+  let name = "default.bindings" in
+  let chk d = Sys.file_exists (Filename.concat d name) in
+  try
+    let dir = List.find chk (Minilib.coqide_data_dirs ()) in
+    Some (Filename.concat dir name)
+  with Not_found -> None
+
+(** Hooks *)
 
 let cmd_coqtop =
   new preference ~name:["cmd_coqtop"] ~init:None ~repr:Repr.(option string)
@@ -326,7 +337,7 @@ let modifier_for_navigation =
 
 let modifier_for_templates =
   new preference ~name:["modifier_for_templates"] ~init:"<Control><Shift>" ~repr:Repr.(string)
- 
+
 let modifier_for_tactics =
   new preference ~name:["modifier_for_tactics"] ~init:"<Control><Alt>" ~repr:Repr.(string)
 
@@ -366,33 +377,6 @@ let text_font =
   in
   new preference ~name:["text_font"] ~init ~repr:Repr.(string)
 
-let is_standard_doc_url url =
-  let wwwcompatprefix = "http://www.lix.polytechnique.fr/coq/" in
-  let n = String.length Coq_config.wwwcoq in
-  let n' = String.length Coq_config.wwwrefman in
-  url = Coq_config.localwwwrefman ||
-  url = Coq_config.wwwrefman ||
-  url = wwwcompatprefix ^ String.sub Coq_config.wwwrefman n (n'-n)
-
-let doc_url =
-object
-  inherit [string] preference
-    ~name:["doc_url"] ~init:Coq_config.wwwrefman ~repr:Repr.(string)
-    as super
-
-  method! set v =
-    if not (is_standard_doc_url v) &&
-      v <> use_default_doc_url &&
-      (* Extra hack to support links to last released doc version *)
-      v <> Coq_config.wwwcoq ^ "doc" &&
-      v <> Coq_config.wwwcoq ^ "doc/"
-    then super#set v
-
-end
-
-let library_url =
-  new preference ~name:["library_url"] ~init:Coq_config.wwwstdlib ~repr:Repr.(string)
-
 let show_toolbar =
   new preference ~name:["show_toolbar"] ~init:true ~repr:Repr.(bool)
 
@@ -424,8 +408,8 @@ let vertical_tabs =
 let opposite_tabs =
   new preference ~name:["opposite_tabs"] ~init:false ~repr:Repr.(bool)
 
-let background_color =
-  new preference ~name:["background_color"] ~init:"cornsilk" ~repr:Repr.(string)
+(* let background_color = *)
+(*   new preference ~name:["background_color"] ~init:"cornsilk" ~repr:Repr.(string) *)
 
 let attach_tag (pref : string preference) (tag : GText.tag) f =
   tag#set_property (f pref#get);
@@ -440,8 +424,11 @@ let attach_fg (pref : string preference) (tag : GText.tag) =
 let processing_color =
   new preference ~name:["processing_color"] ~init:"light blue" ~repr:Repr.(string)
 
+let incompletely_processed_color =
+  new preference ~name:["incompletely_processed_color"] ~init:"light sky blue" ~repr:Repr.(string)
+
 let _ = attach_bg processing_color Tags.Script.to_process
-let _ = attach_bg processing_color Tags.Script.incomplete
+let _ = attach_bg incompletely_processed_color Tags.Script.incomplete
 
 let tags = ref Util.String.Map.empty
 
@@ -574,7 +561,8 @@ let tab_length =
 let highlight_current_line =
   new preference ~name:["highlight_current_line"] ~init:false ~repr:Repr.(bool)
 
-let nanoPG =
+let microPG =
+  (* Legacy name in preference is "nanoPG" *)
   new preference ~name:["nanoPG"] ~init:false ~repr:Repr.(bool)
 
 let user_queries =
@@ -602,7 +590,7 @@ object (self)
     | None -> set#set_active true
     | Some c ->
       set#set_active false;
-      but#set_color (Tags.color_of_string c)
+      but#set_color (Gdk.Color.color_parse c)
     in
     track tag.tag_bg_color bg_color bg_unset;
     track tag.tag_fg_color fg_color fg_unset;
@@ -614,7 +602,7 @@ object (self)
   method tag =
     let get but set =
       if set#active then None
-      else Some (Tags.string_of_color but#color)
+      else Some (Gdk.Color.color_to_string but#color)
     in
     {
       tag_bg_color = get bg_color bg_unset;
@@ -656,8 +644,6 @@ let tag_button () =
   let box = GPack.hbox () in
   new tag_button (Gobject.unsafe_cast box#as_widget)
 
-(** Old style preferences *)
-
 let save_pref () =
   if not (Sys.file_exists (Minilib.coqide_config_home ()))
   then Unix.mkdir (Minilib.coqide_config_home ()) 0o700;
@@ -669,15 +655,18 @@ let save_pref () =
   Config_lexer.print_file pref_file prefs
 
 let load_pref () =
-  let () = try GtkData.AccelMap.load loaded_accel_file with _ -> () in
-
+  (* Load main preference file *)
+  let () =
     let m = Config_lexer.load_file loaded_pref_file in
     let iter name v =
       if Util.String.Map.mem name !preferences then
         try (Util.String.Map.find name !preferences).set v with _ -> ()
       else unknown_preferences := Util.String.Map.add name v !unknown_preferences
     in
-    Util.String.Map.iter iter m
+    Util.String.Map.iter iter m in
+  (* Load file for bindings *)
+  let () = try GtkData.AccelMap.load loaded_accel_file with _ -> () in
+  ()
 
 let pstring name p = string ~f:p#set name p#get
 let pbool name p = bool ~f:p#set name p#get
@@ -688,11 +677,11 @@ let pmodifiers ?(all = false) name p = modifiers
   name
   (str_to_mod_list p#get)
 
-let configure ?(apply=(fun () -> ())) () =
+let configure ?(apply=(fun () -> ())) parent =
   let cmd_coqtop =
     string
       ~f:(fun s -> cmd_coqtop#set (if s = "AUTO" then None else Some s))
-      "       coqtop" (match cmd_coqtop#get with |None -> "AUTO" | Some x -> x) in
+      "    coqidetop" (match cmd_coqtop#get with |None -> "AUTO" | Some x -> x) in
   let cmd_coqc = pstring "       coqc" cmd_coqc in
   let cmd_make = pstring "       make" cmd_make in
   let cmd_coqmakefile = pstring "coqmakefile" cmd_coqmakefile in
@@ -718,7 +707,7 @@ let configure ?(apply=(fun () -> ())) () =
 
   let config_color =
     let box = GPack.vbox () in
-    let table = GPack.table
+    let grid = GPack.grid
       ~row_spacings:5
       ~col_spacings:5
       ~border_width:2
@@ -730,27 +719,28 @@ let configure ?(apply=(fun () -> ())) () =
     in
     let iter i (text, pref) =
       let label = GMisc.label
-        ~text ~packing:(table#attach ~expand:`X ~left:0 ~top:i) ()
+        ~text ~packing:(grid#attach (*~expand:`X*) ~left:0 ~top:i) ()
       in
       let () = label#set_xalign 0. in
       let button = GButton.color_button
-        ~color:(Tags.color_of_string pref#get)
-        ~packing:(table#attach ~left:1 ~top:i) ()
+        ~color:(Gdk.Color.color_parse pref#get)
+        ~packing:(grid#attach ~left:1 ~top:i) ()
       in
       let _ = button#connect#color_set ~callback:begin fun () ->
-        pref#set (Tags.string_of_color button#color)
+        pref#set (Gdk.Color.color_to_string button#color)
       end in
       let reset _ =
         pref#reset ();
-        button#set_color Tags.(color_of_string pref#get)
+        button#set_color (Gdk.Color.color_parse pref#get)
       in
       let _ = reset_button#connect#clicked ~callback:reset in
       ()
     in
     let () = Util.List.iteri iter [
-      ("Background color", background_color);
+(*       ("Background color", background_color); *)
       ("Background color of processed text", processed_color);
       ("Background color of text being processed", processing_color);
+      ("Background color of incompletely processed Qed", incompletely_processed_color);
       ("Background color of errors", error_color);
       ("Foreground color of errors", error_fg_color);
     ] in
@@ -767,7 +757,7 @@ let configure ?(apply=(fun () -> ())) () =
       ~packing:(box#pack ~expand:true)
       ()
     in
-    let table = GPack.table
+    let grid = GPack.grid
       ~row_spacings:5
       ~col_spacings:5
       ~border_width:2
@@ -777,13 +767,13 @@ let configure ?(apply=(fun () -> ())) () =
     let cb = ref [] in
     let iter text tag =
       let label = GMisc.label
-        ~text ~packing:(table#attach ~expand:`X ~left:0 ~top:!i) ()
+        ~text ~packing:(grid#attach (*~expand:`X*) ~left:0 ~top:!i) ()
       in
       let () = label#set_xalign 0. in
       let button = tag_button () in
       let callback () = tag#set button#tag in
       button#set_tag tag#get;
-      table#attach ~left:1 ~top:!i button#coerce;
+      grid#attach ~left:1 ~top:!i button#coerce;
       incr i;
       cb := callback :: !cb;
     in
@@ -810,38 +800,25 @@ let configure ?(apply=(fun () -> ())) () =
     let () = button "Show progress bar" show_progress_bar in
     let () = button "Insert spaces instead of tabs" spaces_instead_of_tabs in
     let () = button "Highlight current line" highlight_current_line in
-    let () = button "Emacs/PG keybindings (μPG mode)" nanoPG in
+    let () = button "Emacs/PG keybindings (μPG mode)" microPG in
     let callback () = () in
     custom ~label box callback true
   in
 
-(*
-  let show_toolbar =
-    bool
-      ~f:(fun s ->
-	    current.show_toolbar <- s;
-	    !show_toolbar s)
-      "Show toolbar" current.show_toolbar
-  in
   let window_height =
     string
-    ~f:(fun s -> current.window_height <- (try int_of_string s with _ -> 600);
-	  !resize_window ();
-       )
-      "Window height"
-      (string_of_int current.window_height)
+    ~f:(fun s -> try window_height#set (int_of_string s) with _ -> ())
+      "Default window height at starting time"
+      (string_of_int window_height#get)
   in
+
   let window_width =
     string
-    ~f:(fun s -> current.window_width <-
-	  (try int_of_string s with _ -> 800))
-      "Window width"
-      (string_of_int current.window_width)
+    ~f:(fun s -> try window_width#set (int_of_string s) with _ -> ())
+      "Default window width at starting time"
+      (string_of_int window_width#get)
   in
-*)
-(*
-  let config_appearance = [show_toolbar; window_width; window_height] in
-*)
+
   let global_auto_revert = pbool "Enable global auto revert" global_auto_revert in
   let global_auto_revert_delay =
     string
@@ -961,32 +938,7 @@ let configure ?(apply=(fun () -> ())) () =
                    else cmd_browse#get])
       cmd_browse#get
   in
-  let doc_url =
-    let predefined = [
-      "file://"^(List.fold_left Filename.concat (Envars.docdir ()) ["refman";"html"]);
-      Coq_config.wwwrefman;
-      use_default_doc_url
-    ] in
-    combo
-      "Manual URL"
-      ~f:doc_url#set
-      ~new_allowed: true
-      (predefined@[if List.mem doc_url#get predefined then ""
-                   else doc_url#get])
-      doc_url#get in
-  let library_url =
-    let predefined = [
-      "file://"^(List.fold_left Filename.concat (Envars.docdir ()) ["stdlib";"html"]);
-      Coq_config.wwwstdlib
-    ] in
-    combo
-      "Library URL"
-      ~f:(fun s -> library_url#set s)
-      ~new_allowed: true
-      (predefined@[if List.mem library_url#get predefined then ""
-                   else library_url#get])
-      library_url#get
-  in
+(*
   let automatic_tactics =
     strings
       ~f:automatic_tactics#set
@@ -995,12 +947,14 @@ let configure ?(apply=(fun () -> ())) () =
       automatic_tactics#get
 
   in
+*)
 
   let contextual_menus_on_goal = pbool "Contextual menus on goal" contextual_menus_on_goal in
 
   let misc = [contextual_menus_on_goal;stop_before;reset_on_tab_switch;
               vertical_tabs;opposite_tabs] in
 
+(*
   let add_user_query () =
     let input_string l v =
       match GToolbox.input_string ~title:l v with
@@ -1030,6 +984,7 @@ let configure ?(apply=(fun () -> ())) () =
       user_queries#get
 
   in
+*)
 
 (* ATTENTION !!!!! L'onglet Fonts doit etre en premier pour eviter un bug !!!!
    (shame on Benjamin) *)
@@ -1049,26 +1004,25 @@ let configure ?(apply=(fun () -> ())) () =
      Section("Project", Some (`STOCK "gtk-page-setup"),
 	     [project_file_name;read_project;
 	     ]);
-(*
-     Section("Appearance",
-	     config_appearance);
-*)
+     Section("Appearance", Some `PREFERENCES, [window_width; window_height]);
      Section("Externals", None,
 	     [cmd_coqtop;cmd_coqc;cmd_make;cmd_coqmakefile; cmd_coqdoc;
-	      cmd_print;cmd_editor;cmd_browse;doc_url;library_url]);
+              cmd_print;cmd_editor;cmd_browse]);
+(*
      Section("Tactics Wizard", None,
 	     [automatic_tactics]);
+*)
      Section("Shortcuts", Some `PREFERENCES,
 	     [modifiers_valid; modifier_for_tactics;
         modifier_for_templates; modifier_for_display; modifier_for_navigation;
-        modifier_for_queries; user_queries]);
+        modifier_for_queries (*; user_queries *)]);
      Section("Misc", Some `ADD,
        misc)]
   in
 (*
   Format.printf "before edit: current.text_font = %s@." (Pango.Font.to_string current.text_font);
 *)
-  let x = edit ~apply "Customizations" cmds in
+  let x = edit ~apply "Customizations" ~parent cmds in
 (*
   Format.printf "after edit: current.text_font = %s@." (Pango.Font.to_string current.text_font);
 *)

@@ -13,12 +13,13 @@ open Environ
 open Evd
 open EConstr
 open Ltac_pretype
+open Evarutil
 
 (** To embed constr in glob_constr *)
 
 val register_constr_interp0 :
   ('r, 'g, 't) Genarg.genarg_type ->
-    (unbound_ltac_var_map -> env -> evar_map -> types -> 'g -> constr * evar_map) -> unit
+    (unbound_ltac_var_map -> bool -> env -> evar_map -> types -> 'g -> constr * evar_map) -> unit
 
 (** {6 Pretyping name management} *)
 
@@ -37,7 +38,7 @@ type t
 
 (** Build a pretyping environment from an ltac environment *)
 
-val make : env -> evar_map -> ltac_var_map -> t
+val make : hypnaming:naming_mode -> env -> evar_map -> ltac_var_map -> t
 
 (** Export the underlying environement *)
 
@@ -47,9 +48,9 @@ val vars_of_env : t -> Id.Set.t
 
 (** Push to the environment, returning the declaration(s) with interpreted names *)
 
-val push_rel : evar_map -> rel_declaration -> t -> rel_declaration * t
-val push_rel_context : ?force_names:bool -> evar_map -> rel_context -> t -> rel_context * t
-val push_rec_types : evar_map -> Name.t array * constr array -> t -> Name.t array * t
+val push_rel : hypnaming:naming_mode -> evar_map -> rel_declaration -> t -> rel_declaration * t
+val push_rel_context : hypnaming:naming_mode -> ?force_names:bool -> evar_map -> rel_context -> t -> rel_context * t
+val push_rec_types : hypnaming:naming_mode -> evar_map -> Name.t Context.binder_annot array * constr array -> t -> Name.t Context.binder_annot array * t
 
 (** Declare an evar using renaming information *)
 
@@ -84,5 +85,5 @@ val interp_ltac_id : t -> Id.t -> Id.t
 (** Interpreting a generic argument, typically a "ltac:(...)", taking
     into account the possible renaming *)
 
-val interp_glob_genarg : t -> evar_map -> constr ->
+val interp_glob_genarg : t -> bool -> evar_map -> constr ->
   Genarg.glob_generic_argument -> constr * evar_map

@@ -10,7 +10,7 @@
 
 open Constr
 
-let bt_lib_constr n = lazy (UnivGen.constr_of_global @@ Coqlib.lib_ref n)
+let bt_lib_constr n = lazy (UnivGen.constr_of_monomorphic_global @@ Coqlib.lib_ref n)
 
 let decomp_term sigma (c : Constr.t) =
   Constr.kind (EConstr.Unsafe.to_constr (Termops.strip_outer_cast sigma (EConstr.of_constr c)))
@@ -164,11 +164,12 @@ module Btauto = struct
 
   let reify env t = lapp eval [|convert_env env; convert t|]
 
-  let print_counterexample p env gl =
+  let print_counterexample p penv gl =
     let var = lapp witness [|p|] in
     let var = EConstr.of_constr var in
     (* Compute an assignment that dissatisfies the goal *)
-    let _, var = Tacmach.pf_reduction_of_red_expr gl (Genredexpr.CbvVm None) var in
+    let redfun, _ = Redexpr.reduction_of_red_expr (Refiner.pf_env gl) Genredexpr.(CbvVm None) in
+    let _, var = redfun Refiner.(pf_env gl) Refiner.(project gl) var in
     let var = EConstr.Unsafe.to_constr var in
     let rec to_list l = match decomp_term (Tacmach.project gl) l with
     | App (c, _)
@@ -192,10 +193,10 @@ module Btauto = struct
     let msg =
       try
         let var = to_list var in
-        let assign = List.combine env var in
+        let assign = List.combine penv var in
         let map_msg (key, v) =
           let b = if v then str "true" else str "false" in
-          let sigma, env = Pfedit.get_current_context () in
+          let sigma, env = Tacmach.project gl, Tacmach.pf_env gl in
           let term = Printer.pr_constr_env env sigma key in
           term ++ spc () ++ str ":=" ++ spc () ++ b
         in

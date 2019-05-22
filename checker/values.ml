@@ -10,28 +10,15 @@
 
 (** Abstract representations of values in a vo *)
 
-(** NB: UPDATE THIS FILE EACH TIME cic.mli IS MODIFIED !
+(** NB: This needs updating when the types in declarations.ml and
+   their dependencies are changed. *)
 
-To ensure this file is up-to-date, 'make' now compares the md5 of cic.mli
-with a copy we maintain here:
-
-MD5 a127e0c2322c7846914bbca9921309c7 checker/cic.mli
-
-*)
-
-(** We reify here the types of values present in a vo (see cic.mli),
+(** We reify here the types of values present in a vo.
     in order to validate its structure. Maybe this reification
     could become automatically generated someday ?
 
-    - [Any] stands for a value that we won't check,
-    - [Fail] means a value that shouldn't be there at all,
-    - [Tuple] provides a name and sub-values in this block
-    - [Sum] provides a name, a number of constant constructors,
-      and sub-values at each position of each possible constructed
-      variant
-    - [List] and [Opt] could have been defined via [Sum], but
-      having them here helps defining some recursive values below
-    - [Annot] is a no-op, just there for improving debug messages *)
+    See values.mli for the meaning of each constructor.
+*)
 
 type value =
   | Any
@@ -45,7 +32,9 @@ type value =
   | String
   | Annot of string * value
   | Dyn
+
   | Proxy of value ref
+  | Uint63
 
 let fix (f : value -> value) : value =
   let self = ref Any in
@@ -105,10 +94,10 @@ let v_cons = v_tuple "constructor" [|v_ind;Int|]
 
 
 (** kernel/univ *)
-
-let v_raw_level = v_sum "raw_level" 2 (* Prop, Set *) 
-  [|(*Level*)[|Int;v_dp|]; (*Var*)[|Int|]|]
-let v_level = v_tuple "level" [|Int;v_raw_level|] 
+let v_level_global = v_tuple "Level.Global.t" [|v_dp;Int|]
+let v_raw_level = v_sum "raw_level" 3 (* SProp, Prop, Set *)
+  [|(*Level*)[|v_level_global|]; (*Var*)[|Int|]|]
+let v_level = v_tuple "level" [|Int;v_raw_level|]
 let v_expr = v_tuple "levelexpr" [|v_level;Int|]
 let v_univ = List v_expr
 
@@ -122,15 +111,16 @@ let v_cstrs =
 let v_variance = v_enum "variance" 3
 
 let v_instance = Annot ("instance", Array v_level)
-let v_context = v_tuple "universe_context" [|v_instance;v_cstrs|]
-let v_abs_context = v_context (* only for clarity *)
-let v_abs_cum_info = v_tuple "cumulativity_info" [|v_abs_context; Array v_variance|]
+let v_abs_context = v_tuple "abstract_universe_context" [|Array v_name; v_cstrs|]
 let v_context_set = v_tuple "universe_context_set" [|v_hset v_level;v_cstrs|]
 
 (** kernel/term *)
 
-let v_sort = v_sum "sort" 2 (*Prop, Set*) [|[|v_univ(*Type*)|]|]
-let v_sortfam = v_enum "sorts_family" 3
+let v_sort = v_sum "sort" 3 (*SProp, Prop, Set*) [|[|v_univ(*Type*)|]|]
+let v_sortfam = v_enum "sorts_family" 4
+
+let v_relevance = v_sum "relevance" 2 [||]
+let v_binder_annot x = v_tuple "binder_annot" [|x;v_relevance|]
 
 let v_puniverses v = v_tuple "punivs" [|v;v_instance|]
 
@@ -139,7 +129,7 @@ let v_boollist = List v_bool
 let v_caseinfo =
   let v_cstyle = v_enum "case_style" 5 in
   let v_cprint = v_tuple "case_printing" [|v_boollist;Array v_boollist;v_cstyle|] in
-  v_tuple "case_info" [|v_ind;Int;Array Int;Array Int;v_cprint|]
+  v_tuple "case_info" [|v_ind;Int;Array Int;Array Int;v_relevance;v_cprint|]
 
 let v_cast = v_enum "cast_kind" 4
 
@@ -154,9 +144,9 @@ let rec v_constr =
     [|Fail "Evar"|]; (* Evar *)
     [|v_sort|]; (* Sort *)
     [|v_constr;v_cast;v_constr|]; (* Cast *)
-    [|v_name;v_constr;v_constr|]; (* Prod *)
-    [|v_name;v_constr;v_constr|]; (* Lambda *)
-    [|v_name;v_constr;v_constr;v_constr|]; (* LetIn *)
+    [|v_binder_annot v_name;v_constr;v_constr|]; (* Prod *)
+    [|v_binder_annot v_name;v_constr;v_constr|]; (* Lambda *)
+    [|v_binder_annot v_name;v_constr;v_constr;v_constr|]; (* LetIn *)
     [|v_constr;Array v_constr|]; (* App *)
     [|v_puniverses v_cst|]; (* Const *)
     [|v_puniverses v_ind|]; (* Ind *)
@@ -164,16 +154,18 @@ let rec v_constr =
     [|v_caseinfo;v_constr;v_constr;Array v_constr|]; (* Case *)
     [|v_fix|]; (* Fix *)
     [|v_cofix|]; (* CoFix *)
-    [|v_proj;v_constr|] (* Proj *)
+    [|v_proj;v_constr|]; (* Proj *)
+    [|Uint63|] (* Int *)
   |])
 
 and v_prec = Tuple ("prec_declaration",
-                    [|Array v_name; Array v_constr; Array v_constr|])
+                    [|Array (v_binder_annot v_name); Array v_constr; Array v_constr|])
 and v_fix = Tuple ("pfixpoint", [|Tuple ("fix2",[|Array Int;Int|]);v_prec|])
 and v_cofix = Tuple ("pcofixpoint",[|Int;v_prec|])
 
-let v_rdecl = v_sum "rel_declaration" 0 [| [|v_name; v_constr|];               (* LocalAssum *)
-                                           [|v_name; v_constr; v_constr|] |]   (* LocalDef *)
+let v_rdecl = v_sum "rel_declaration" 0
+    [| [|v_binder_annot v_name; v_constr|];               (* LocalAssum *)
+       [|v_binder_annot v_name; v_constr; v_constr|] |]   (* LocalDef *)
 let v_rctxt = List v_rdecl
 
 let v_section_ctxt = v_enum "emptylist" 1
@@ -181,8 +173,10 @@ let v_section_ctxt = v_enum "emptylist" 1
 
 (** kernel/mod_subst *)
 
+let v_univ_abstracted v = v_tuple "univ_abstracted" [|v;v_abs_context|]
+
 let v_delta_hint =
-  v_sum "delta_hint" 0 [|[|Int; Opt (v_pair v_abs_context v_constr)|];[|v_kn|]|]
+  v_sum "delta_hint" 0 [|[|Int; Opt (v_univ_abstracted v_constr)|];[|v_kn|]|]
 
 let v_resolver =
   v_tuple "delta_resolver"
@@ -225,21 +219,26 @@ let v_oracle =
 let v_pol_arity =
   v_tuple "polymorphic_arity" [|List(Opt v_level);v_univ|]
 
+let v_primitive =
+  v_enum "primitive" 25
+
 let v_cst_def =
   v_sum "constant_def" 0
-    [|[|Opt Int|]; [|v_cstr_subst|]; [|v_lazy_constr|]|]
+    [|[|Opt Int|]; [|v_cstr_subst|]; [|v_lazy_constr|]; [|v_primitive|]|]
 
 let v_typing_flags =
-  v_tuple "typing_flags" [|v_bool; v_bool; v_oracle; v_bool|]
+  v_tuple "typing_flags" [|v_bool; v_bool; v_oracle; v_bool; v_bool; v_bool; v_bool|]
 
-let v_const_univs = v_sum "constant_universes" 0 [|[|v_context_set|]; [|v_abs_context|]|]
+let v_univs = v_sum "universes" 0 [|[|v_context_set|]; [|v_abs_context|]|]
 
 let v_cb = v_tuple "constant_body"
   [|v_section_ctxt;
     v_cst_def;
     v_constr;
+    v_relevance;
     Any;
-    v_const_univs;
+    v_univs;
+    Opt v_context_set;
     v_bool;
     v_typing_flags|]
 
@@ -267,10 +266,11 @@ let v_one_ind = v_tuple "one_inductive_body"
     Int;
     Int;
     List v_sortfam;
-    Array v_constr;
+    Array (v_pair v_rctxt v_constr);
     Array Int;
     Array Int;
     v_wfp;
+    v_relevance;
     Int;
     Int;
     Any|]
@@ -279,11 +279,7 @@ let v_finite = v_enum "recursivity_kind" 3
 
 let v_record_info =
   v_sum "record_info" 2
-    [| [| Array (v_tuple "record" [| v_id; Array v_id; Array v_constr |]) |] |]
-
-let v_ind_pack_univs = 
-  v_sum "abstract_inductive_universes" 0
-    [|[|v_context_set|]; [|v_abs_context|]; [|v_abs_cum_info|]|]
+    [| [| Array (v_tuple "record" [| v_id; Array v_id; Array v_relevance; Array v_constr |]) |] |]
 
 let v_ind_pack = v_tuple "mutual_inductive_body"
   [|Array v_one_ind;
@@ -294,9 +290,24 @@ let v_ind_pack = v_tuple "mutual_inductive_body"
     Int;
     Int;
     v_rctxt;
-    v_ind_pack_univs; (* universes *)
+    v_univs; (* universes *)
+    Opt (Array v_variance);
     Opt v_bool;
     v_typing_flags|]
+
+let v_prim_ind = v_enum "prim_ind" 4
+
+let v_prim_type = v_enum "prim_type" 1
+
+let v_retro_action =
+  v_sum "retro_action" 0 [|
+    [|v_prim_ind; v_ind|];
+    [|v_prim_type; v_cst|];
+    [|v_cst|];
+  |]
+
+let v_retroknowledge =
+  v_sum "module_retroknowledge" 1 [|[|List v_retro_action|]|]
 
 let rec v_mae =
   Sum ("module_alg_expr",0,
@@ -328,7 +339,7 @@ and v_impl =
 and v_noimpl = v_unit
 and v_module =
   Tuple ("module_body",
-         [|v_mp;v_impl;v_sign;Opt v_mexpr;v_context_set;v_resolver;Any|])
+         [|v_mp;v_impl;v_sign;Opt v_mexpr;v_context_set;v_resolver;v_retroknowledge|])
 and v_modtype =
   Tuple ("module_type_body",
          [|v_mp;v_noimpl;v_sign;Opt v_mexpr;v_context_set;v_resolver;v_unit|])

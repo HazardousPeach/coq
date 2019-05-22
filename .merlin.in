@@ -1,4 +1,4 @@
-FLG -rectypes -thread -safe-string -w +a-4-9-27-41-42-44-45-48-50
+FLG -rectypes -thread -safe-string -w +a-4-9-27-41-42-44-45-48
 
 S clib
 B clib
@@ -40,6 +40,8 @@ S API
 B API
 S ide
 B ide
+S gramlib/.pack
+B gramlib/.pack
 
 S tools
 B tools
@@ -51,4 +53,4 @@ B dev
 S plugins/**
 B plugins/**
 
-PKG threads.posix camlp5
+PKG threads.posix

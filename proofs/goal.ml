@@ -50,28 +50,22 @@ module V82 = struct
     let evi = Evd.find evars gl in
     evi.Evd.evar_concl
 
-  (* Access to ".evar_extra" *)
-  let extra evars gl =
-    let evi = Evd.find evars gl in
-    evi.Evd.evar_extra
-
   (* Old style mk_goal primitive *)
-  let mk_goal evars hyps concl extra =
+  let mk_goal evars hyps concl =
     (* A goal created that way will not be used by refine and will not
        be shelved. It must not appear as a future_goal, so the future
        goals are restored to their initial value after the evar is
        created. *)
     let prev_future_goals = Evd.save_future_goals evars in
     let evi = { Evd.evar_hyps = hyps;
-		Evd.evar_concl = concl;
-		Evd.evar_filter = Evd.Filter.identity;
-		Evd.evar_body = Evd.Evar_empty;
-		Evd.evar_source = (Loc.tag Evar_kinds.GoalEvar);
-		Evd.evar_candidates = None;
-		Evd.evar_extra = extra }
+                Evd.evar_concl = concl;
+                Evd.evar_filter = Evd.Filter.identity;
+                Evd.evar_abstract_arguments = Evd.Abstraction.identity;
+                Evd.evar_body = Evd.Evar_empty;
+                Evd.evar_source = (Loc.tag Evar_kinds.GoalEvar);
+                Evd.evar_candidates = None }
     in
-    let evi = Typeclasses.mark_unresolvable evi in
-    let (evars, evk) = Evarutil.new_pure_evar_full evars evi in
+    let (evars, evk) = Evarutil.new_pure_evar_full evars ~typeclass_candidate:false evi in
     let evars = Evd.restore_future_goals evars prev_future_goals in
     let ctxt = Environ.named_context_of_val hyps in
     let inst = Array.map_of_list (NamedDecl.get_id %> EConstr.mkVar) ctxt in
@@ -79,34 +73,25 @@ module V82 = struct
     (evk, ev, evars)
 
   (* Instantiates a goal with an open term *)
-  let partial_solution sigma evk c =
+  let partial_solution env sigma evk c =
     (* Check that the goal itself does not appear in the refined term *)
     let _ =
       if not (Evarutil.occur_evar_upto sigma evk c) then ()
-      else Pretype_errors.error_occur_check Environ.empty_env sigma evk c
+      else Pretype_errors.error_occur_check env sigma evk c
     in
     Evd.define evk c sigma
 
   (* Instantiates a goal with an open term, using name of goal for evk' *)
-  let partial_solution_to sigma evk evk' c =
+  let partial_solution_to env sigma evk evk' c =
     let id = Evd.evar_ident evk sigma in
-    let sigma = partial_solution sigma evk c in
+    let sigma = partial_solution env sigma evk c in
     match id with
     | None -> sigma
     | Some id -> Evd.rename evk' id sigma
 
-  (* Parts of the progress tactical *)
-  let same_goal evars1 gl1 evars2 gl2 =
-    let evi1 = Evd.find evars1 gl1 in
-    let evi2 = Evd.find evars2 gl2 in
-    let c1 = EConstr.Unsafe.to_constr evi1.Evd.evar_concl in
-    let c2 = EConstr.Unsafe.to_constr evi2.Evd.evar_concl in
-    Constr.equal c1 c2 &&
-    Environ.eq_named_context_val evi1.Evd.evar_hyps evi2.Evd.evar_hyps
-
   let weak_progress glss gls =
     match glss.Evd.it with
-    | [ g ] -> not (same_goal glss.Evd.sigma g gls.Evd.sigma gls.Evd.it)
+    | [ g ] -> not (Proofview.Progress.goal_equal glss.Evd.sigma g gls.Evd.sigma gls.Evd.it)
     | _ -> true
 
   let progress glss gls =

@@ -22,27 +22,32 @@ val mismatched_props : env -> constr_expr list -> Constr.rel_context -> 'a
 
 (** Instance declaration *)
 
+val declare_instance : ?warn:bool -> env -> Evd.evar_map ->
+                       hint_info option -> bool -> GlobRef.t -> unit
+(** Declares the given global reference as an instance of its type.
+    Does nothing — or emit a “not-a-class” warning if the [warn] argument is set —
+    when said type is not a registered type class. *)
+
 val existing_instance : bool -> qualid -> Hints.hint_info_expr option -> unit
 (** globality, reference, optional priority and pattern information *)
 
 val declare_instance_constant :
   typeclass ->
-  Hints.hint_info_expr -> (** priority *)
-  bool -> (** globality *)
-  Impargs.manual_explicitation list -> (** implicits *)
+  Hints.hint_info_expr (** priority *) ->
+  bool (** globality *) ->
+  Impargs.manual_explicitation list (** implicits *) ->
   ?hook:(GlobRef.t -> unit) ->
-  Id.t -> (** name *)
+  Id.t (** name *) ->
   UState.universe_decl ->
-  bool -> (* polymorphic *)
-  Evd.evar_map -> (* Universes *)
-  Constr.t -> (** body *)
-  Constr.types -> (** type *)
+  bool (** polymorphic *) ->
+  Evd.evar_map (** Universes *) ->
+  Constr.t (** body *) ->
+  Constr.types (** type *) ->
   unit
 
 val new_instance :
-  ?abstract:bool -> (** Not abstract by default. *)
-  ?global:bool -> (** Not global by default. *)
-  ?refine:bool -> (** Allow refinement *)
+  pstate:Proof_global.t option ->
+  ?global:bool (** Not global by default. *) ->
   program_mode:bool ->
   Decl_kinds.polymorphic ->
   local_binder_expr list ->
@@ -52,7 +57,23 @@ val new_instance :
   ?tac:unit Proofview.tactic  ->
   ?hook:(GlobRef.t -> unit) ->
   Hints.hint_info_expr ->
-  Id.t
+  (* May open a proof *)
+  Id.t * Proof_global.t option
+
+val declare_new_instance :
+  ?global:bool (** Not global by default. *) ->
+  program_mode:bool ->
+  Decl_kinds.polymorphic ->
+  local_binder_expr list ->
+  ident_decl * Decl_kinds.binding_kind * constr_expr ->
+  Hints.hint_info_expr ->
+  unit
+
+(** {6 Low level interface used by Add Morphism, do not use } *)
+val mk_instance : typeclass -> hint_info -> bool -> GlobRef.t -> instance
+val add_instance : instance -> unit
+
+val add_class : env -> Evd.evar_map -> typeclass -> unit
 
 (** Setting opacity *)
 
@@ -61,9 +82,3 @@ val set_typeclass_transparency : evaluable_global_reference -> bool -> bool -> u
 (** For generation on names based on classes only *)
 
 val id_of_class : typeclass -> Id.t
-
-(** Context command *)
-
-(** returns [false] if, for lack of section, it declares an assumption
-    (unless in a module type). *)
-val context : Decl_kinds.polymorphic -> local_binder_expr list -> bool

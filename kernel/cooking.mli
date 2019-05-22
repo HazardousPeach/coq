@@ -13,19 +13,21 @@ open Declarations
 
 (** {6 Cooking the constants. } *)
 
-type recipe = { from : constant_body; info : Opaqueproof.cooking_info }
+type recipe = { from : Opaqueproof.opaque constant_body; info : Opaqueproof.cooking_info }
 
 type inline = bool
 
-type result = {
-  cook_body : constant_def;
+type 'opaque result = {
+  cook_body : (constr Mod_subst.substituted, 'opaque) constant_def;
   cook_type : types;
-  cook_universes : constant_universes;
+  cook_universes : universes;
+  cook_private_univs : Univ.ContextSet.t option;
+  cook_relevance : Sorts.relevance;
   cook_inline : inline;
   cook_context : Constr.named_context option;
 }
 
-val cook_constant : hcons:bool -> recipe -> result
+val cook_constant : hcons:bool -> recipe -> Opaqueproof.opaque result
 val cook_constr : Opaqueproof.cooking_info -> constr -> constr
 
 (** {6 Utility functions used in module [Discharge]. } *)

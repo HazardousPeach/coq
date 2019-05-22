@@ -15,6 +15,7 @@ open Univ
 open Term
 open Constr
 open Vars
+open Context
 open Termops
 open Declarations
 open Declareops
@@ -60,6 +61,8 @@ let lift_inductive_family n = liftn_inductive_family n 1
 
 let substnl_ind_family l n = map_ind_family (substnl l n)
 
+let relevance_of_inductive_family env ((ind,_),_ : inductive_family) =
+  Inductive.relevance_of_inductive env ind
 
 type inductive_type = IndType of inductive_family * EConstr.constr list
 
@@ -74,6 +77,9 @@ let liftn_inductive_type n d = map_inductive_type (EConstr.Vars.liftn n d)
 let lift_inductive_type n = liftn_inductive_type n 1
 
 let substnl_ind_type l n = map_inductive_type (EConstr.Vars.substnl l n)
+
+let relevance_of_inductive_type env (IndType (indf, _)) =
+  relevance_of_inductive_family env indf
 
 let mkAppliedInd (IndType ((ind,params), realargs)) =
   let open EConstr in
@@ -101,166 +107,150 @@ let mis_nf_constructor_type ((ind,u),mib,mip) j =
   and nconstr = Array.length mip.mind_consnames in
   let make_Ik k = mkIndU (((fst ind),ntypes-k-1),u) in
   if j > nconstr then user_err Pp.(str "Not enough constructors in the type.");
-    substl (List.init ntypes make_Ik) (subst_instance_constr u specif.(j-1))
+  let (ctx, cty) = specif.(j - 1) in
+  substl (List.init ntypes make_Ik) (subst_instance_constr u (Term.it_mkProd_or_LetIn cty ctx))
 
 (* Number of constructors *)
 
-let nconstructors ind =
-  let (_,mip) = Global.lookup_inductive ind in
-  Array.length mip.mind_consnames
-
-let nconstructors_env env ind =
+let nconstructors env ind =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   Array.length mip.mind_consnames
+
+let nconstructors_env env ind = nconstructors env ind
+[@@ocaml.deprecated "Alias for Inductiveops.nconstructors"]
 
 (* Arity of constructors excluding parameters, excluding local defs *)
 
-let constructors_nrealargs ind =
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_consnrealargs
-
-let constructors_nrealargs_env env ind =
+let constructors_nrealargs env ind =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealargs
+
+let constructors_nrealargs_env env ind = constructors_nrealargs env ind
+[@@ocaml.deprecated "Alias for Inductiveops.constructors_nrealargs"]
 
 (* Arity of constructors excluding parameters, including local defs *)
 
-let constructors_nrealdecls ind =
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_consnrealdecls
-
-let constructors_nrealdecls_env env ind =
+let constructors_nrealdecls env ind =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealdecls
+
+let constructors_nrealdecls_env env ind = constructors_nrealdecls env ind
+[@@ocaml.deprecated "Alias for Inductiveops.constructors_nrealdecls"]
 
 (* Arity of constructors including parameters, excluding local defs *)
 
-let constructor_nallargs (indsp,j) =
-  let (mib,mip) = Global.lookup_inductive indsp in
+let constructor_nallargs env (ind,j) =
+  let (mib,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealargs.(j-1) + mib.mind_nparams
 
-let constructor_nallargs_env env ((kn,i),j) =
-  let mib = Environ.lookup_mind kn env in
-  let mip = mib.mind_packets.(i) in
-  mip.mind_consnrealargs.(j-1) + mib.mind_nparams
+let constructor_nallargs_env env (indsp,j) = constructor_nallargs env (indsp,j)
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nallargs"]
 
 (* Arity of constructors including params, including local defs *)
 
-let constructor_nalldecls (indsp,j) = (* TOCHANGE en decls *)
-  let (mib,mip) = Global.lookup_inductive indsp in
+let constructor_nalldecls env (ind,j) = (* TOCHANGE en decls *)
+  let (mib,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealdecls.(j-1) + Context.Rel.length (mib.mind_params_ctxt)
 
-let constructor_nalldecls_env env ((kn,i),j) = (* TOCHANGE en decls *)
-  let mib = Environ.lookup_mind kn env in
-  let mip = mib.mind_packets.(i) in
-  mip.mind_consnrealdecls.(j-1) + Context.Rel.length (mib.mind_params_ctxt)
+let constructor_nalldecls_env env (indsp,j) = constructor_nalldecls env (indsp,j)
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nalldecls"]
 
 (* Arity of constructors excluding params, excluding local defs *)
 
-let constructor_nrealargs (ind,j) =
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_consnrealargs.(j-1)
-
-let constructor_nrealargs_env env (ind,j) =
+let constructor_nrealargs env (ind,j) =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealargs.(j-1)
+
+let constructor_nrealargs_env env (ind,j) = constructor_nrealargs env (ind,j)
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nrealargs"]
 
 (* Arity of constructors excluding params, including local defs *)
 
-let constructor_nrealdecls (ind,j) = (* TOCHANGE en decls *)
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_consnrealdecls.(j-1)
-
-let constructor_nrealdecls_env env (ind,j) = (* TOCHANGE en decls *)
+let constructor_nrealdecls env (ind,j) = (* TOCHANGE en decls *)
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_consnrealdecls.(j-1)
+
+let constructor_nrealdecls_env env (ind,j) = constructor_nrealdecls env (ind,j)
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nrealdecls"]
 
 (* Length of arity, excluding params, excluding local defs *)
 
-let inductive_nrealargs ind =
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_nrealargs
-
-let inductive_nrealargs_env env ind =
+let inductive_nrealargs env ind =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_nrealargs
+
+let inductive_nrealargs_env env ind = inductive_nrealargs env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nrealargs"]
 
 (* Length of arity, excluding params, including local defs *)
 
-let inductive_nrealdecls ind =
-  let (_,mip) = Global.lookup_inductive ind in
-  mip.mind_nrealdecls
-
-let inductive_nrealdecls_env env ind =
+let inductive_nrealdecls env ind =
   let (_,mip) = Inductive.lookup_mind_specif env ind in
   mip.mind_nrealdecls
 
+let inductive_nrealdecls_env env ind = inductive_nrealdecls env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nrealdecls"]
+
 (* Full length of arity (w/o local defs) *)
 
-let inductive_nallargs ind =
-  let (mib,mip) = Global.lookup_inductive ind in
-  mib.mind_nparams + mip.mind_nrealargs
-
-let inductive_nallargs_env env ind =
+let inductive_nallargs env ind =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   mib.mind_nparams + mip.mind_nrealargs
+
+let inductive_nallargs_env env ind = inductive_nallargs env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nallargs"]
 
 (* Length of arity (w/o local defs) *)
 
-let inductive_nparams ind =
-  let (mib,mip) = Global.lookup_inductive ind in
-  mib.mind_nparams
-
-let inductive_nparams_env env ind =
+let inductive_nparams env ind =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   mib.mind_nparams
+
+let inductive_nparams_env env ind = inductive_nparams env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nparams"]
 
 (* Length of arity (with local defs) *)
 
-let inductive_nparamdecls ind =
-  let (mib,mip) = Global.lookup_inductive ind in
-  Context.Rel.length mib.mind_params_ctxt
-
-let inductive_nparamdecls_env env ind =
+let inductive_nparamdecls env ind =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   Context.Rel.length mib.mind_params_ctxt
+
+let inductive_nparamdecls_env env ind = inductive_nparamdecls env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nparamsdecls"]
 
 (* Full length of arity (with local defs) *)
 
-let inductive_nalldecls ind =
-  let (mib,mip) = Global.lookup_inductive ind in
-  Context.Rel.length (mib.mind_params_ctxt) + mip.mind_nrealdecls
-
-let inductive_nalldecls_env env ind =
+let inductive_nalldecls env ind =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   Context.Rel.length (mib.mind_params_ctxt) + mip.mind_nrealdecls
+
+let inductive_nalldecls_env env ind = inductive_nalldecls env ind
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nalldecls"]
 
 (* Others *)
 
-let inductive_paramdecls (ind,u) =
-  let (mib,mip) = Global.lookup_inductive ind in
-    Inductive.inductive_paramdecls (mib,u)
-
-let inductive_paramdecls_env env (ind,u) =
+let inductive_paramdecls env (ind,u) =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
     Inductive.inductive_paramdecls (mib,u)
 
-let inductive_alldecls (ind,u) =
-  let (mib,mip) = Global.lookup_inductive ind in
-    Vars.subst_instance_context u mip.mind_arity_ctxt
+let inductive_paramdecls_env env (ind,u) = inductive_paramdecls env (ind,u)
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_paramsdecls"]
 
-let inductive_alldecls_env env (ind,u) =
+let inductive_alldecls env (ind,u) =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
     Vars.subst_instance_context u mip.mind_arity_ctxt
 
-let constructor_has_local_defs (indsp,j) =
-  let (mib,mip) = Global.lookup_inductive indsp in
+let inductive_alldecls_env env (ind,u) = inductive_alldecls env (ind,u)
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_alldecls"]
+
+let constructor_has_local_defs env (indsp,j) =
+  let (mib,mip) = Inductive.lookup_mind_specif env indsp in
   let l1 = mip.mind_consnrealdecls.(j-1) + Context.Rel.length (mib.mind_params_ctxt) in
   let l2 = recarg_length mip.mind_recargs j + mib.mind_nparams in
   not (Int.equal l1 l2)
 
-let inductive_has_local_defs ind =
-  let (mib,mip) = Global.lookup_inductive ind in
+let inductive_has_local_defs env ind =
+  let (mib,mip) = Inductive.lookup_mind_specif env ind in
   let l1 = Context.Rel.length (mib.mind_params_ctxt) + mip.mind_nrealdecls in
   let l2 = mib.mind_nparams + mip.mind_nrealargs in
   not (Int.equal l1 l2)
@@ -275,13 +265,12 @@ let has_dependent_elim mib =
   | NotRecord | FakeRecord -> true
 
 (* Annotation for cases *)
-let make_case_info env ind style =
+let make_case_info env ind r style =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   let ind_tags =
     Context.Rel.to_tags (List.firstn mip.mind_nrealdecls mip.mind_arity_ctxt) in
   let cstr_tags =
-    Array.map2 (fun c n ->
-      let d,_ = decompose_prod_assum c in
+    Array.map2 (fun (d, _) n ->
       Context.Rel.to_tags (List.firstn n d))
       mip.mind_nf_lc mip.mind_consnrealdecls in
   let print_info = { ind_tags; cstr_tags; style } in
@@ -289,6 +278,7 @@ let make_case_info env ind style =
     ci_npar    = mib.mind_nparams;
     ci_cstr_ndecls = mip.mind_consnrealdecls;
     ci_cstr_nargs = mip.mind_consnrealargs;
+    ci_relevance = r;
     ci_pp_info = print_info }
 
 (*s Useful functions *)
@@ -419,12 +409,14 @@ let build_dependent_inductive env ((ind, params) as indf) =
 (* builds the arity of an elimination predicate in sort [s] *)
 
 let make_arity_signature env sigma dep indf =
-  let (arsign,_) = get_arity env indf in
+  let (arsign,s) = get_arity env indf in
+  let r = Sorts.relevance_of_sort_family s in
+  let anon = make_annot Anonymous r in
   let arsign = List.map (fun d -> Termops.map_rel_decl EConstr.of_constr d) arsign in
   if dep then
     (* We need names everywhere *)
     Namegen.name_context env sigma
-      ((LocalAssum (Anonymous,EConstr.of_constr (build_dependent_inductive env indf)))::arsign)
+      ((LocalAssum (anon,EConstr.of_constr (build_dependent_inductive env indf)))::arsign)
       (* Costly: would be better to name once for all at definition time *)
   else
     (* No need to enforce names *)
@@ -453,25 +445,23 @@ let build_branch_type env sigma dep p cs =
 let compute_projections env (kn, i as ind) =
   let open Term in
   let mib = Environ.lookup_mind kn env in
-  let u = match mib.mind_universes with
-  | Monomorphic_ind _ -> Instance.empty
-  | Polymorphic_ind auctx -> make_abstract_instance auctx
-  | Cumulative_ind acumi ->
-    make_abstract_instance (ACumulativityInfo.univ_context acumi)
-  in
+  let u = make_abstract_instance (Declareops.inductive_polymorphic_context mib) in
   let x = match mib.mind_record with
   | NotRecord | FakeRecord ->
     anomaly Pp.(str "Trying to build primitive projections for a non-primitive record")
-  | PrimRecord info-> Name (pi1 (info.(i)))
+  | PrimRecord info ->
+    let id, _, _, _ = info.(i) in
+    make_annot (Name id) mib.mind_packets.(i).mind_relevance
   in
   let pkt = mib.mind_packets.(i) in
   let { mind_nparams = nparamargs; mind_params_ctxt = params } = mib in
   let subst = List.init mib.mind_ntypes (fun i -> mkIndU ((kn, mib.mind_ntypes - i - 1), u)) in
-  let rctx, _ = decompose_prod_assum (substl subst pkt.mind_nf_lc.(0)) in
+  let ctx, cty = pkt.mind_nf_lc.(0) in
+  let rctx, _ = decompose_prod_assum (substl subst (Term.it_mkProd_or_LetIn cty ctx)) in
   let ctx, paramslet = List.chop pkt.mind_consnrealdecls.(0) rctx in
-  (** We build a substitution smashing the lets in the record parameters so
-      that typechecking projections requires just a substitution and not
-      matching with a parameter context. *)
+  (* We build a substitution smashing the lets in the record parameters so
+     that typechecking projections requires just a substitution and not
+     matching with a parameter context. *)
   let indty =
     (* [ty] = [Ind inst] is typed in context [params] *)
     let inst = Context.Rel.to_extended_vect mkRel 0 paramslet in
@@ -479,25 +469,6 @@ let compute_projections env (kn, i as ind) =
     let ty = mkApp (indu, inst) in
     (* [Ind inst] is typed in context [params-wo-let] *)
     ty
-  in
-  let ci =
-    let print_info =
-      { ind_tags = []; cstr_tags = [|Context.Rel.to_tags ctx|]; style = LetStyle } in
-      { ci_ind     = ind;
-        ci_npar    = nparamargs;
-        ci_cstr_ndecls = pkt.mind_consnrealdecls;
-        ci_cstr_nargs = pkt.mind_consnrealargs;
-        ci_pp_info = print_info }
-  in
-  let len = List.length ctx in
-  let compat_body ccl i =
-    (* [ccl] is defined in context [params;x:indty] *)
-    (* [ccl'] is defined in context [params;x:indty;x:indty] *)
-    let ccl' = liftn 1 2 ccl in
-    let p = mkLambda (x, lift 1 indty, ccl') in
-    let branch = it_mkLambda_or_LetIn (mkRel (len - i)) ctx in
-    let body = mkCase (ci, p, mkRel 1, [|lift 1 branch|]) in
-      it_mkLambda_or_LetIn (mkLambda (x,indty,body)) params
   in
   let projections decl (proj_arg, j, pbs, subst) =
     match decl with
@@ -514,7 +485,7 @@ let compute_projections env (kn, i as ind) =
         let subst = c1 :: subst in
         (proj_arg, j+1, pbs, subst)
     | LocalAssum (na,t) ->
-      match na with
+      match na.binder_name with
       | Name id ->
         let lab = Label.of_id id in
         let kn = Projection.Repr.make ind ~proj_npars:mib.mind_nparams ~proj_arg lab in
@@ -528,10 +499,9 @@ let compute_projections env (kn, i as ind) =
         let ty = substl subst t in
         let term = mkProj (Projection.make kn true, mkRel 1) in
         let fterm = mkProj (Projection.make kn false, mkRel 1) in
-        let compat = compat_body ty (j - 1) in
         let etab = it_mkLambda_or_LetIn (mkLambda (x, indty, term)) params in
         let etat = it_mkProd_or_LetIn (mkProd (x, indty, ty)) params in
-        let body = (etab, etat, compat) in
+        let body = (etab, etat) in
         (proj_arg + 1, j + 1, body :: pbs, fterm :: subst)
       | Anonymous ->
         anomaly Pp.(str "Trying to build primitive projections for a non-primitive record")
@@ -540,13 +510,6 @@ let compute_projections env (kn, i as ind) =
     List.fold_right projections ctx (0, 1, [], [])
   in
   Array.rev_of_list pbs
-
-let legacy_match_projection env ind =
-  Array.map pi3 (compute_projections env ind)
-
-let compute_projections ind mib =
-  let ans = compute_projections ind mib in
-  Array.map (fun (prj, ty, _) -> (prj, ty)) ans
 
 (**************************************************)
 
@@ -632,7 +595,7 @@ let is_predicate_explicitly_dep env sigma pred arsign =
           From Coq > 8.2, using or not the effective dependency of
           the predicate is parametrable! *)
 
-          begin match na with
+          begin match na.binder_name with
           | Anonymous -> false
           | Name _ -> true
           end
@@ -654,9 +617,7 @@ let set_pattern_names env sigma ind brv =
   let (mib,mip) = Inductive.lookup_mind_specif env ind in
   let arities =
     Array.map
-      (fun c ->
-        Context.Rel.length ((prod_assum c)) -
-        mib.mind_nparams)
+      (fun (d, _) -> List.length d - mib.mind_nparams)
       mip.mind_nf_lc in
   Array.map2 (set_names env sigma) arities brv
 
@@ -676,9 +637,10 @@ let type_case_branches_with_names env sigma indspec p c =
 
 (* Type of Case predicates *)
 let arity_of_case_predicate env (ind,params) dep k =
-  let arsign,_ = get_arity env (ind,params) in
+  let arsign,s = get_arity env (ind,params) in
+  let r = Sorts.relevance_of_sort_family s in
   let mind = build_dependent_inductive env (ind,params) in
-  let concl = if dep then mkArrow mind (mkSort k) else mkSort k in
+  let concl = if dep then mkArrow mind r (mkSort k) else mkSort k in
   Term.it_mkProd_or_LetIn concl arsign
 
 (***********************************************)
@@ -746,16 +708,19 @@ let type_of_projection_knowing_arg env sigma p c ty =
    syntactic conditions *)
 
 let control_only_guard env sigma c =
+  let c = Evarutil.nf_evar sigma c in
   let check_fix_cofix e c =
-    match kind (EConstr.to_constr sigma c) with
+    (* [c] has already been normalized upfront *)
+    let c = EConstr.Unsafe.to_constr c in
+    match kind c with
     | CoFix (_,(_,_,_) as cofix) ->
       Inductive.check_cofix e cofix
-    | Fix (_,(_,_,_) as fix) ->
+    | Fix fix ->
       Inductive.check_fix e fix
     | _ -> ()
   in
   let rec iter env c =
     check_fix_cofix env c;
-    iter_constr_with_full_binders sigma EConstr.push_rel iter env c
+    EConstr.iter_with_full_binders sigma EConstr.push_rel iter env c
   in
   iter env c

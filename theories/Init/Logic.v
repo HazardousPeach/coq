@@ -383,6 +383,11 @@ Section Logic_lemmas.
 
     Register eq_trans as core.eq.trans.
 
+    Theorem eq_trans_r : x = y -> z = y -> x = z.
+    Proof.
+      destruct 2; trivial.
+    Defined.
+
     Theorem f_equal : x = y -> f x = f y.
     Proof.
       destruct 1; trivial.
@@ -396,6 +401,12 @@ Section Logic_lemmas.
     Qed.
 
   End equality.
+
+  Definition eq_sind_r :
+    forall (A:Type) (x:A) (P:A -> SProp), P x -> forall y:A, y = x -> P y.
+  Proof.
+    intros A x P H y H0. elim eq_sym with (1 := H0); assumption.
+  Defined.
 
   Definition eq_ind_r :
     forall (A:Type) (x:A) (P:A -> Prop), P x -> forall y:A, y = x -> P y.
@@ -695,8 +706,8 @@ Proof.
   - intros (x,(Hx,Huni)); split.
     + exists x; assumption.
     + intros x' x'' Hx' Hx''; transitivity x.
-      symmetry; auto.
-      auto.
+      * symmetry; auto.
+      * auto.
 Qed.
 
 Lemma forall_exists_unique_domain_coincide :

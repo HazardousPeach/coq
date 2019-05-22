@@ -37,7 +37,7 @@ let rec eq_notation_constr (vars1,vars2 as vars) t1 t2 = match t1, t2 with
    | _             -> false)
 | NApp (t1, a1), NApp (t2, a2) ->
   (eq_notation_constr vars) t1 t2 && List.equal (eq_notation_constr vars) a1 a2
-| NHole (_, _, _), NHole (_, _, _) -> true (** FIXME? *)
+| NHole (_, _, _), NHole (_, _, _) -> true (* FIXME? *)
 | NList (i1, j1, t1, u1, b1), NList (i2, j2, t2, u2, b2) ->
   Id.equal i1 i2 && Id.equal j1 j2 && (eq_notation_constr vars) t1 t2 &&
   (eq_notation_constr vars) u1 u2 && b1 == b2
@@ -51,7 +51,7 @@ let rec eq_notation_constr (vars1,vars2 as vars) t1 t2 = match t1, t2 with
 | NLetIn (na1, b1, t1, u1), NLetIn (na2, b2, t2, u2) ->
   Name.equal na1 na2 && eq_notation_constr vars b1 b2 &&
   Option.equal (eq_notation_constr vars) t1 t2 && (eq_notation_constr vars) u1 u2
-| NCases (_, o1, r1, p1), NCases (_, o2, r2, p2) -> (** FIXME? *)
+| NCases (_, o1, r1, p1), NCases (_, o2, r2, p2) -> (* FIXME? *)
   let eqpat (p1, t1) (p2, t2) =
     List.equal cases_pattern_eq p1 p2 &&
     (eq_notation_constr vars) t1 t2
@@ -75,7 +75,7 @@ let rec eq_notation_constr (vars1,vars2 as vars) t1 t2 = match t1, t2 with
   Option.equal (eq_notation_constr vars) o1 o2 &&
   (eq_notation_constr vars) u1 u2 &&
   (eq_notation_constr vars) r1 r2
-| NRec (_, ids1, ts1, us1, rs1), NRec (_, ids2, ts2, us2, rs2) -> (** FIXME? *)
+| NRec (_, ids1, ts1, us1, rs1), NRec (_, ids2, ts2, us2, rs2) -> (* FIXME? *)
   let eq (na1, o1, t1) (na2, o2, t2) =
     Name.equal na1 na2 &&
     Option.equal (eq_notation_constr vars) o1 o2 &&
@@ -89,9 +89,11 @@ let rec eq_notation_constr (vars1,vars2 as vars) t1 t2 = match t1, t2 with
   glob_sort_eq s1 s2
 | NCast (t1, c1), NCast (t2, c2) ->
   (eq_notation_constr vars) t1 t2 && cast_type_eq (eq_notation_constr vars) c1 c2
+| NInt i1, NInt i2 ->
+   Uint63.equal i1 i2
 | (NRef _ | NVar _ | NApp _ | NHole _ | NList _ | NLambda _ | NProd _
   | NBinderList _ | NLetIn _ | NCases _ | NLetTuple _ | NIf _
-  | NRec _ | NSort _ | NCast _ ), _ -> false
+  | NRec _ | NSort _ | NCast _ | NInt _), _ -> false
 
 (**********************************************************************)
 (* Re-interpret a notation as a glob_constr, taking care of binders   *)
@@ -220,6 +222,7 @@ let glob_constr_of_notation_constr_with_binders ?loc g f e nc =
   | NSort x -> GSort x
   | NHole (x, naming, arg)  -> GHole (x, naming, arg)
   | NRef x -> GRef (x,None)
+  | NInt i -> GInt i
 
 let glob_constr_of_notation_constr ?loc x =
   let rec aux () x =
@@ -435,6 +438,7 @@ let notation_constr_and_vars_of_glob_constr recvars a =
       NRec (fk,idl,dll,Array.map aux tl,Array.map aux bl)
   | GCast (c,k) -> NCast (aux c,map_cast_type aux k)
   | GSort s -> NSort s
+  | GInt i -> NInt i
   | GHole (w,naming,arg) ->
      if arg != None then has_ltac := true;
      NHole (w, naming, arg)
@@ -530,8 +534,10 @@ let rec subst_notation_constr subst bound raw =
   match raw with
   | NRef ref ->
       let ref',t = subst_global subst ref in
-	if ref' == ref then raw else
-	  fst (notation_constr_of_constr bound t)
+      if ref' == ref then raw else (match t with
+          | None -> NRef ref'
+          | Some t ->
+            fst (notation_constr_of_constr bound t.Univ.univ_abstracted_value))
 
   | NVar _ -> raw
 
@@ -621,6 +627,7 @@ let rec subst_notation_constr subst bound raw =
 	  NRec (fk,idl,dll',tl',bl')
 
   | NSort _ -> raw
+  | NInt _ -> raw
 
   | NHole (knd, naming, solve) ->
     let nknd = match knd with
@@ -775,7 +782,7 @@ let rec pat_binder_of_term t = DAst.map (function
   | GApp (t, l) ->
     begin match DAst.get t with
     | GRef (ConstructRef cstr,_) ->
-     let nparams = Inductiveops.inductive_nparams (fst cstr) in
+     let nparams = Inductiveops.inductive_nparams (Global.env()) (fst cstr) in
      let _,l = List.chop nparams l in
      PatCstr (cstr, List.map pat_binder_of_term l, Anonymous)
     | _ -> raise No_match
@@ -892,18 +899,18 @@ let bind_term_as_binding_env alp (terms,termlists,binders,binderlists as sigma) 
     | GVar id' ->
        (if not (Id.equal id id') then (fst alp,(id,id')::snd alp) else alp),
        sigma
-    | _ -> anomaly (str "A term which can be a binder has to be a variable.")
+    | t ->
+       (* The term is a non-variable pattern *)
+       raise No_match
   with Not_found ->
     (* The matching against a term allowing to find the instance has not been found yet *)
     (* If it will be a different name, we shall unfortunately fail *)
     (* TODO: look at the consequences for alp *)
     alp, add_env alp sigma var (DAst.make @@ GVar id)
 
-let force_cases_pattern c =
-  DAst.make ?loc:c.CAst.loc (DAst.get c)
-
 let bind_binding_as_term_env alp (terms,termlists,binders,binderlists as sigma) var c =
-  let pat = try force_cases_pattern (cases_pattern_of_glob_constr Anonymous c) with Not_found -> raise No_match in
+  let env = Global.env () in
+  let pat = try cases_pattern_of_glob_constr env Anonymous c with Not_found -> raise No_match in
   try
     (* If already bound to a binder, unify the term and the binder *)
     let patl' = Id.List.assoc var binders in
@@ -950,7 +957,7 @@ let match_fix_kind fk1 fk2 =
   match (fk1,fk2) with
   | GCoFix n1, GCoFix n2 -> Int.equal n1 n2
   | GFix (nl1,n1), GFix (nl2,n2) ->
-      let test (n1, _) (n2, _) = match n1, n2 with
+      let test n1 n2 = match n1, n2 with
       | _, None -> true
       | Some id1, Some id2 -> Int.equal id1 id2
       | _ -> false
@@ -1185,6 +1192,7 @@ let rec match_ inner u alp metas sigma a1 a2 =
     match_cast (match_in u alp metas) (match_in u alp metas sigma t1 t2) c1 c2
   | GSort (GType _), NSort (GType _) when not u -> sigma
   | GSort s1, NSort s2 when glob_sort_eq s1 s2 -> sigma
+  | GInt i1, NInt i2 when Uint63.equal i1 i2 -> sigma
   | GPatVar _, NHole _ -> (*Don't hide Metas, they bind in ltac*) raise No_match
   | a, NHole _ -> sigma
 
@@ -1212,7 +1220,7 @@ let rec match_ inner u alp metas sigma a1 a2 =
 
   | (GRef _ | GVar _ | GEvar _ | GPatVar _ | GApp _ | GLambda _ | GProd _
      | GLetIn _ | GCases _ | GLetTuple _ | GIf _ | GRec _ | GSort _ | GHole _
-     | GCast _ ), _ -> raise No_match
+     | GCast _ | GInt _ ), _ -> raise No_match
 
 and match_in u = match_ true u
 
@@ -1285,7 +1293,7 @@ let match_notation_constr u c (metas,pat) =
     | NtnTypeBinder (NtnBinderParsedAsConstr _) ->
        (match Id.List.assoc x binders with
         | [pat] ->
-          let v = glob_constr_of_cases_pattern pat in
+          let v = glob_constr_of_cases_pattern (Global.env()) pat in
           ((v,scl)::terms',termlists',binders',binderlists')
         | _ -> raise No_match)
     | NtnTypeBinder (NtnParsedAsIdent | NtnParsedAsPattern _) ->
@@ -1326,11 +1334,11 @@ let rec match_cases_pattern metas (terms,termlists,(),() as sigma) a1 a2 =
   | r1, NVar id2 when Id.List.mem_assoc id2 metas -> (bind_env_cases_pattern sigma id2 a1),(0,[])
   | PatVar Anonymous, NHole _ -> sigma,(0,[])
   | PatCstr ((ind,_ as r1),largs,Anonymous), NRef (ConstructRef r2) when eq_constructor r1 r2 ->
-      let l = try add_patterns_for_params_remove_local_defs r1 largs with Not_found -> raise No_match in
+      let l = try add_patterns_for_params_remove_local_defs (Global.env ()) r1 largs with Not_found -> raise No_match in
       sigma,(0,l)
   | PatCstr ((ind,_ as r1),args1,Anonymous), NApp (NRef (ConstructRef r2),l2)
       when eq_constructor r1 r2 ->
-      let l1 = try add_patterns_for_params_remove_local_defs r1 args1 with Not_found -> raise No_match in
+      let l1 = try add_patterns_for_params_remove_local_defs (Global.env()) r1 args1 with Not_found -> raise No_match in
       let le2 = List.length l2 in
       if Int.equal le2 0 (* Special case of a notation for a @Cstr *) || le2 > List.length l1
       then

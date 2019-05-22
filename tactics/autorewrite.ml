@@ -82,7 +82,7 @@ let print_rewrite_hintdb env sigma bas =
 	     str (if h.rew_l2r then "rewrite -> " else "rewrite <- ") ++
                Printer.pr_lconstr_env env sigma h.rew_lemma ++ str " of type " ++ Printer.pr_lconstr_env env sigma h.rew_type ++
 	       Option.cata (fun tac -> str " then use tactic " ++
-	       Pputils.pr_glb_generic (Global.env()) tac) (mt ()) h.rew_tac)
+               Pputils.pr_glb_generic env sigma tac) (mt ()) h.rew_tac)
 	   (find_rewrites bas))
 
 type raw_rew_rule = (constr Univ.in_universe_context_set * bool * Genarg.raw_generic_argument option) CAst.t
@@ -99,11 +99,15 @@ let one_base general_rewrite_maybe_in tac_main bas =
     Proofview.tclTHEN (Proofview.Unsafe.tclEVARS sigma)
     (general_rewrite_maybe_in dir c' tc)
   end in
-  let lrul = List.map (fun h -> 
+  let open Proofview.Notations in
+  Proofview.tclProofInfo [@ocaml.warning "-3"] >>= fun (_name, poly) ->
+  let lrul = List.map (fun h ->
   let tac = match h.rew_tac with
   | None -> Proofview.tclUNIT ()
   | Some (Genarg.GenArg (Genarg.Glbwit wit, tac)) ->
-    let ist = { Geninterp.lfun = Id.Map.empty; extra = Geninterp.TacStore.empty } in
+    let ist = { Geninterp.lfun = Id.Map.empty
+              ; poly
+              ; extra = Geninterp.TacStore.empty } in
     Ftactic.run (Geninterp.interp wit ist tac) (fun _ -> Proofview.tclUNIT ())
   in
     (h.rew_ctx,h.rew_lemma,h.rew_l2r,tac)) lrul in
@@ -145,7 +149,7 @@ let gen_auto_multi_rewrite conds tac_main lbas cl =
   let try_do_hyps treat_id l =
     autorewrite_multi_in ~conds (List.map treat_id l) tac_main lbas
   in
-  if cl.concl_occs != AllOccurrences &&
+  if not (Locusops.is_all_occurrences cl.concl_occs) &&
      cl.concl_occs != NoOccurrences
   then
     Tacticals.New.tclZEROMSG (str"The \"at\" syntax isn't available yet for the autorewrite tactic.")
@@ -196,17 +200,12 @@ let subst_hintrewrite (subst,(rbase,list as node)) =
     if list' == list then node else
       (rbase,list')
 
-let classify_hintrewrite x = Libobject.Substitute x
-
-
 (* Declaration of the Hint Rewrite library object *)
 let inHintRewrite : string * HintDN.t -> Libobject.obj =
-  Libobject.declare_object {(Libobject.default_object "HINT_REWRITE") with
-    Libobject.cache_function = cache_hintrewrite;
-    Libobject.load_function = (fun _ -> cache_hintrewrite);
-    Libobject.subst_function = subst_hintrewrite;
-    Libobject.classify_function = classify_hintrewrite }
-
+  let open Libobject in
+  declare_object @@ superglobal_object_nodischarge "HINT_REWRITE"
+    ~cache:cache_hintrewrite
+    ~subst:(Some subst_hintrewrite)
 
 open Clenv
 
@@ -226,7 +225,7 @@ let decompose_applied_relation metas env sigma c ctype left2right =
     let eqclause = Clenv.mk_clenv_from_env env sigma None (EConstr.of_constr c,ty) in
     let eqclause =
       if metas then eqclause
-      else clenv_pose_metas_as_evars eqclause (Evd.undefined_metas eqclause.evd)
+      else fst (clenv_pose_metas_as_evars eqclause (Evd.undefined_metas eqclause.evd))
     in
     let (equiv, args) = EConstr.decompose_app sigma (Clenv.clenv_type eqclause) in
     let rec split_last_two = function

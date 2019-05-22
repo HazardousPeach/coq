@@ -8,10 +8,11 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
+(* (c) Copyright 2006-2015 Microsoft Corporation and Inria.             *)
+
 {
 
 open Ltac_plugin
-open Pcoq
 open Pcoq.Constr
 open Ssrmatching
 open Ssrmatching.Internal
@@ -69,7 +70,7 @@ let input_ssrtermkind strm = match Util.stream_nth 0 strm with
   | Tok.KEYWORD "(" -> '('
   | Tok.KEYWORD "@" -> '@'
   | _ -> ' '
-let ssrtermkind = Pcoq.Gram.Entry.of_parser "ssrtermkind" input_ssrtermkind
+let ssrtermkind = Pcoq.Entry.of_parser "ssrtermkind" input_ssrtermkind
 
 }
 

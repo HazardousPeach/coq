@@ -27,8 +27,9 @@ val mk_new_meta : unit -> constr
 
 val new_evar_from_context :
   ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t ->
-  ?candidates:constr list -> ?store:Store.t ->
+  ?candidates:constr list ->
   ?naming:intro_pattern_naming_expr ->
+  ?typeclass_candidate:bool ->
   ?principal:bool ->
   named_context_val -> evar_map  -> types -> evar_map * EConstr.t
 
@@ -37,22 +38,25 @@ type naming_mode =
   | KeepUserNameAndRenameExistingEvenSectionNames
   | KeepExistingNames
   | FailIfConflict
+  | ProgramNaming
 
 val new_evar :
   ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t ->
-  ?candidates:constr list -> ?store:Store.t ->
+  ?abstract_arguments:Abstraction.t -> ?candidates:constr list ->
   ?naming:intro_pattern_naming_expr ->
+  ?typeclass_candidate:bool ->
   ?principal:bool -> ?hypnaming:naming_mode ->
   env -> evar_map -> types -> evar_map * EConstr.t
 
 val new_pure_evar :
   ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t ->
-  ?candidates:constr list -> ?store:Store.t ->
+  ?abstract_arguments:Abstraction.t -> ?candidates:constr list ->
   ?naming:intro_pattern_naming_expr ->
+  ?typeclass_candidate:bool ->
   ?principal:bool ->
   named_context_val -> evar_map -> types -> evar_map * Evar.t
 
-val new_pure_evar_full : evar_map -> evar_info -> evar_map * Evar.t
+val new_pure_evar_full : evar_map -> ?typeclass_candidate:bool -> evar_info -> evar_map * Evar.t
 
 (** Create a new Type existential variable, as we keep track of 
     them during type-checking and unification. *)
@@ -76,8 +80,10 @@ val new_global : evar_map -> GlobRef.t -> evar_map * constr
    of [inst] are typed in the occurrence context and their type (seen
    as a telescope) is [sign] *)
 val new_evar_instance :
-  ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t -> ?candidates:constr list ->
-  ?store:Store.t -> ?naming:intro_pattern_naming_expr ->
+  ?src:Evar_kinds.t Loc.located -> ?filter:Filter.t ->
+  ?abstract_arguments:Abstraction.t -> ?candidates:constr list ->
+  ?naming:intro_pattern_naming_expr ->
+  ?typeclass_candidate:bool ->
   ?principal:bool ->
  named_context_val -> evar_map -> types ->
   constr list -> evar_map * constr
@@ -177,6 +183,19 @@ val nf_evars_universes : evar_map -> Constr.constr -> Constr.constr
 exception Uninstantiated_evar of Evar.t
 val flush_and_check_evars :  evar_map -> constr -> Constr.constr
 
+(** [finalize env sigma f] combines universe minimisation,
+   evar-and-universe normalisation and universe restriction.
+
+    It minimizes universes in [sigma], calls [f] a normalisation
+   function with respect to the updated [sigma] and restricts the
+   local universes of [sigma] to those encountered while running [f].
+
+    Note that the normalizer passed to [f] holds some imperative state
+   in its closure. *)
+val finalize : ?abort_on_undefined_evars:bool -> evar_map ->
+  ((EConstr.t -> Constr.t) -> 'a) ->
+  evar_map * 'a
+
 (** {6 Term manipulation up to instantiation} *)
 
 (** Like {!Constr.kind} except that [kind_of_term sigma t] exposes [t]
@@ -254,15 +273,6 @@ val push_rel_context_to_named_context : ?hypnaming:naming_mode ->
   named_context_val * types * constr list * csubst
 
 val generalize_evar_over_rels : evar_map -> existential -> types * constr list
-
-(** Evar combinators *)
-
-val evd_comb0 : (evar_map -> evar_map * 'a) -> evar_map ref -> 'a
-[@@ocaml.deprecated "References to [evar_map] are deprecated, please update your API calls"]
-val evd_comb1 : (evar_map -> 'b -> evar_map * 'a) -> evar_map ref -> 'b -> 'a
-[@@ocaml.deprecated "References to [evar_map] are deprecated, please update your API calls"]
-val evd_comb2 : (evar_map -> 'b -> 'c -> evar_map * 'a) -> evar_map ref -> 'b -> 'c -> 'a
-[@@ocaml.deprecated "References to [evar_map] are deprecated, please update your API calls"]
 
 val subterm_source : Evar.t -> ?where:Evar_kinds.subevar_kind -> Evar_kinds.t Loc.located ->
   Evar_kinds.t Loc.located

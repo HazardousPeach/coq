@@ -13,8 +13,8 @@ open Util
 open Names
 open Globnames
 open Nameops
-open Term
 open Constr
+open Context
 open Glob_term
 open Pp
 open Mod_subst
@@ -46,7 +46,7 @@ let rec constr_pattern_eq p1 p2 = match p1, p2 with
 | PLetIn (v1, b1, t1, c1), PLetIn (v2, b2, t2, c2) ->
   Name.equal v1 v2 && constr_pattern_eq b1 b2 &&
   Option.equal constr_pattern_eq t1 t2 && constr_pattern_eq c1 c2
-| PSort s1, PSort s2 -> Glob_ops.glob_sort_eq s1 s2
+| PSort s1, PSort s2 -> Sorts.family_equal s1 s2
 | PMeta m1, PMeta m2 -> Option.equal Id.equal m1 m2
 | PIf (t1, l1, r1), PIf (t2, l2, r2) ->
   constr_pattern_eq t1 t2 && constr_pattern_eq l1 l2 && constr_pattern_eq r1 r2
@@ -61,9 +61,11 @@ let rec constr_pattern_eq p1 p2 = match p1, p2 with
   Int.equal i1 i2 && rec_declaration_eq f1 f2
 | PProj (p1, t1), PProj (p2, t2) ->
    Projection.equal p1 p2 && constr_pattern_eq t1 t2
+| PInt i1, PInt i2 ->
+   Uint63.equal i1 i2
 | (PRef _ | PVar _ | PEvar _ | PRel _ | PApp _ | PSoApp _
    | PLambda _ | PProd _ | PLetIn _ | PSort _ | PMeta _
-   | PIf _ | PCase _ | PFix _ | PCoFix _ | PProj _), _ -> false
+   | PIf _ | PCase _ | PFix _ | PCoFix _ | PProj _ | PInt _), _ -> false
 (** FIXME: fixpoint and cofixpoint should be relativized to pattern *)
 
 and pattern_eq (i1, j1, p1) (i2, j2, p2) =
@@ -90,7 +92,8 @@ let rec occur_meta_pattern = function
       (occur_meta_pattern c) ||
       (List.exists (fun (_,_,p) -> occur_meta_pattern p) br)
   | PMeta _ | PSoApp _ -> true
-  | PEvar _ | PVar _ | PRef _ | PRel _ | PSort _ | PFix _ | PCoFix _ -> false
+  | PEvar _ | PVar _ | PRef _ | PRel _ | PSort _ | PFix _ | PCoFix _
+    | PInt _ -> false
 
 let rec occurn_pattern n = function
   | PRel p -> Int.equal n p
@@ -111,7 +114,7 @@ let rec occurn_pattern n = function
       (List.exists (fun (_,_,p) -> occurn_pattern n p) br)
   | PMeta _ | PSoApp _ -> true
   | PEvar (_,args) -> Array.exists (occurn_pattern n) args
-  | PVar _ | PRef _ | PSort _ -> false
+  | PVar _ | PRef _ | PSort _ | PInt _ -> false
   | PFix (_,(_,tl,bl)) ->
      Array.exists (occurn_pattern n) tl || Array.exists (occurn_pattern (n+Array.length tl)) bl
   | PCoFix (_,(_,tl,bl)) ->
@@ -134,7 +137,7 @@ let rec head_pattern_bound t =
 	-> raise BoundPattern
     (* Perhaps they were arguments, but we don't beta-reduce *)
     | PLambda _ -> raise BoundPattern
-    | PCoFix _ -> anomaly ~label:"head_pattern_bound" (Pp.str "not a type.")
+    | PCoFix _ | PInt _ -> anomaly ~label:"head_pattern_bound" (Pp.str "not a type.")
 
 let head_of_constr_reference sigma c = match EConstr.kind sigma c with
   | Const (sp,_) -> ConstRef sp
@@ -150,16 +153,17 @@ let pattern_of_constr env sigma t =
     | Rel n  -> PRel n
     | Meta n -> PMeta (Some (Id.of_string ("META" ^ string_of_int n)))
     | Var id -> PVar id
-    | Sort Prop -> PSort GProp
-    | Sort Set -> PSort GSet
-    | Sort (Type _) -> PSort (GType [])
+    | Sort s -> PSort (Sorts.family s)
     | Cast (c,_,_)      -> pattern_of_constr env c
-    | LetIn (na,c,t,b) -> PLetIn (na,pattern_of_constr env c,Some (pattern_of_constr env t),
-				  pattern_of_constr (push_rel (LocalDef (na,c,t)) env) b)
-    | Prod (na,c,b)   -> PProd (na,pattern_of_constr env c,
-				pattern_of_constr (push_rel (LocalAssum (na, c)) env) b)
-    | Lambda (na,c,b) -> PLambda (na,pattern_of_constr env c,
-				  pattern_of_constr (push_rel (LocalAssum (na, c)) env) b)
+    | LetIn (na,c,t,b) -> PLetIn (na.binder_name,
+                                  pattern_of_constr env c,Some (pattern_of_constr env t),
+                                  pattern_of_constr (push_rel (LocalDef (na,c,t)) env) b)
+    | Prod (na,c,b)   -> PProd (na.binder_name,
+                                pattern_of_constr env c,
+                                pattern_of_constr (push_rel (LocalAssum (na, c)) env) b)
+    | Lambda (na,c,b) -> PLambda (na.binder_name,
+                                  pattern_of_constr env c,
+                                  pattern_of_constr (push_rel (LocalAssum (na, c)) env) b)
     | App (f,a) ->
         (match
           match kind f with
@@ -203,13 +207,14 @@ let pattern_of_constr env sigma t =
     | Fix (lni,(lna,tl,bl)) ->
        let push env na2 c2 = push_rel (LocalAssum (na2,c2)) env in
        let env' = Array.fold_left2 push env lna tl in
-       PFix (lni,(lna,Array.map (pattern_of_constr env) tl,
+       PFix (lni,(Array.map binder_name lna,Array.map (pattern_of_constr env) tl,
                   Array.map (pattern_of_constr env') bl))
     | CoFix (ln,(lna,tl,bl)) ->
        let push env na2 c2 = push_rel (LocalAssum (na2,c2)) env in
        let env' = Array.fold_left2 push env lna tl in
-       PCoFix (ln,(lna,Array.map (pattern_of_constr env) tl,
-                  Array.map (pattern_of_constr env') bl)) in
+       PCoFix (ln,(Array.map binder_name lna,Array.map (pattern_of_constr env) tl,
+                  Array.map (pattern_of_constr env') bl))
+    | Int i -> PInt i in
   pattern_of_constr env t
 
 (* To process patterns, we need a translation without typing at all. *)
@@ -231,7 +236,7 @@ let map_pattern_with_binders g f l = function
      let l' = Array.fold_left (fun l na -> g na l) l lna in
      PCoFix (ln,(lna,Array.map (f l) tl,Array.map (f l') bl))
   (* Non recursive *)
-  | (PVar _ | PEvar _ | PRel _ | PRef _  | PSort _  | PMeta _ as x) -> x
+  | (PVar _ | PEvar _ | PRel _ | PRef _  | PSort _  | PMeta _ | PInt _ as x) -> x
 
 let error_instantiate_pattern id l =
   let is = match l with
@@ -256,7 +261,7 @@ let instantiate_pattern env sigma lvar c =
               ctx
           in
 	  let c = substl inst c in
-	  (** FIXME: Stupid workaround to pattern_of_constr being evar sensitive *)
+          (* FIXME: Stupid workaround to pattern_of_constr being evar sensitive *)
 	  let c = Evarutil.nf_evar sigma c in
 	  pattern_of_constr env sigma (EConstr.Unsafe.to_constr c)
 	with Not_found (* List.index failed *) ->
@@ -275,63 +280,64 @@ let rec liftn_pattern k n = function
 
 let lift_pattern k = liftn_pattern k 1
 
-let rec subst_pattern subst pat =
+let rec subst_pattern env sigma subst pat =
   match pat with
   | PRef ref ->
     let ref',t = subst_global subst ref in
-    if ref' == ref then pat else
-      let env = Global.env () in
-      let evd = Evd.from_env env in
-      pattern_of_constr env evd t
+    if ref' == ref then pat else (match t with
+        | None -> PRef ref'
+        | Some t ->
+          pattern_of_constr env sigma t.Univ.univ_abstracted_value)
   | PVar _
   | PEvar _
-  | PRel _ -> pat
+  | PRel _
+  | PInt _ -> pat
   | PProj (p,c) -> 
       let p' = Projection.map (subst_mind subst) p in
-      let c' = subst_pattern subst c in
+      let c' = subst_pattern env sigma subst c in
 	if p' == p && c' == c then pat else
 	  PProj(p',c')
   | PApp (f,args) ->
-      let f' = subst_pattern subst f in
-      let args' = Array.Smart.map (subst_pattern subst) args in
+      let f' = subst_pattern env sigma subst f in
+      let args' = Array.Smart.map (subst_pattern env sigma subst) args in
 	if f' == f && args' == args then pat else
 	  PApp (f',args')
   | PSoApp (i,args) ->
-      let args' = List.Smart.map (subst_pattern subst) args in
+      let args' = List.Smart.map (subst_pattern env sigma subst) args in
 	if args' == args then pat else
 	  PSoApp (i,args')
   | PLambda (name,c1,c2) ->
-      let c1' = subst_pattern subst c1 in
-      let c2' = subst_pattern subst c2 in
+      let c1' = subst_pattern env sigma subst c1 in
+      let c2' = subst_pattern env sigma subst c2 in
 	if c1' == c1 && c2' == c2 then pat else
 	  PLambda (name,c1',c2')
   | PProd (name,c1,c2) ->
-      let c1' = subst_pattern subst c1 in
-      let c2' = subst_pattern subst c2 in
+      let c1' = subst_pattern env sigma subst c1 in
+      let c2' = subst_pattern env sigma subst c2 in
 	if c1' == c1 && c2' == c2 then pat else
 	  PProd (name,c1',c2')
   | PLetIn (name,c1,t,c2) ->
-      let c1' = subst_pattern subst c1 in
-      let t' = Option.Smart.map (subst_pattern subst) t in
-      let c2' = subst_pattern subst c2 in
+      let c1' = subst_pattern env sigma subst c1 in
+      let t' = Option.Smart.map (subst_pattern env sigma subst) t in
+      let c2' = subst_pattern env sigma subst c2 in
 	if c1' == c1 && t' == t && c2' == c2 then pat else
 	  PLetIn (name,c1',t',c2')
   | PSort _
   | PMeta _ -> pat
   | PIf (c,c1,c2) ->
-      let c' = subst_pattern subst c in
-      let c1' = subst_pattern subst c1 in
-      let c2' = subst_pattern subst c2 in
+      let c' = subst_pattern env sigma subst c in
+      let c1' = subst_pattern env sigma subst c1 in
+      let c2' = subst_pattern env sigma subst c2 in
 	if c' == c && c1' == c1 && c2' == c2 then pat else
 	  PIf (c',c1',c2')
   | PCase (cip,typ,c,branches) ->
       let ind = cip.cip_ind in
       let ind' = Option.Smart.map (subst_ind subst) ind in
       let cip' = if ind' == ind then cip else { cip with cip_ind = ind' } in
-      let typ' = subst_pattern subst typ in
-      let c' = subst_pattern subst c in
+      let typ' = subst_pattern env sigma subst typ in
+      let c' = subst_pattern env sigma subst c in
       let subst_branch ((i,n,c) as br) =
-	let c' = subst_pattern subst c in
+        let c' = subst_pattern env sigma subst c in
 	if c' == c then br else (i,n,c')
       in
       let branches' = List.Smart.map subst_branch branches in
@@ -339,13 +345,13 @@ let rec subst_pattern subst pat =
       then pat
       else PCase(cip', typ', c', branches')
   | PFix (lni,(lna,tl,bl)) ->
-      let tl' = Array.Smart.map (subst_pattern subst) tl in
-      let bl' = Array.Smart.map (subst_pattern subst) bl in
+      let tl' = Array.Smart.map (subst_pattern env sigma subst) tl in
+      let bl' = Array.Smart.map (subst_pattern env sigma subst) bl in
       if bl' == bl && tl' == tl then pat
       else PFix (lni,(lna,tl',bl'))
   | PCoFix (ln,(lna,tl,bl)) ->
-      let tl' = Array.Smart.map (subst_pattern subst) tl in
-      let bl' = Array.Smart.map (subst_pattern subst) bl in
+      let tl' = Array.Smart.map (subst_pattern env sigma subst) tl in
+      let bl' = Array.Smart.map (subst_pattern env sigma subst) bl in
       if bl' == bl && tl' == tl then pat
       else PCoFix (ln,(lna,tl',bl'))
 
@@ -404,8 +410,7 @@ let rec pat_of_raw metas vars = DAst.with_loc_val (fun ?loc -> function
       PLetIn (na, pat_of_raw metas vars c1,
                Option.map (pat_of_raw metas vars) t,
 	       pat_of_raw metas (na::vars) c2)
-  | GSort s ->
-      PSort s
+  | GSort gs -> PSort (Glob_ops.glob_sort_family gs)
   | GHole _ ->
       PMeta None
   | GCast (c,_) ->
@@ -465,17 +470,19 @@ let rec pat_of_raw metas vars = DAst.with_loc_val (fun ?loc -> function
       PCase (info, pred, pat_of_raw metas vars c, brs)
 
   | GRec (GFix (ln,n), ids, decls, tl, cl) ->
-    if Array.exists (function (Some n, GStructRec) -> false | _ -> true) ln then
-      err ?loc (Pp.str "\"struct\" annotation is expected.")
-    else
-      let ln = Array.map (fst %> Option.get) ln in
-      let ctxtl = Array.map2 (pat_of_glob_in_context metas vars) decls tl in
-      let tl = Array.map (fun (ctx,tl) -> it_mkPProd_or_LetIn tl ctx) ctxtl in
-      let vars = Array.fold_left (fun vars na -> Name na::vars) vars ids in
-      let ctxtl = Array.map2 (pat_of_glob_in_context metas vars) decls cl in
-      let cl = Array.map (fun (ctx,cl) -> it_mkPLambda_or_LetIn cl ctx) ctxtl in
-      let names = Array.map (fun id -> Name id) ids in
-      PFix ((ln,n), (names, tl, cl))
+    let get_struct_arg = function
+      | Some n -> n
+      | None -> err ?loc (Pp.str "\"struct\" annotation is expected.")
+        (* TODO why can't the annotation be omitted? *)
+    in
+    let ln = Array.map get_struct_arg ln in
+    let ctxtl = Array.map2 (pat_of_glob_in_context metas vars) decls tl in
+    let tl = Array.map (fun (ctx,tl) -> it_mkPProd_or_LetIn tl ctx) ctxtl in
+    let vars = Array.fold_left (fun vars na -> Name na::vars) vars ids in
+    let ctxtl = Array.map2 (pat_of_glob_in_context metas vars) decls cl in
+    let cl = Array.map (fun (ctx,cl) -> it_mkPLambda_or_LetIn cl ctx) ctxtl in
+    let names = Array.map (fun id -> Name id) ids in
+    PFix ((ln,n), (names, tl, cl))
 
   | GRec (GCoFix n, ids, decls, tl, cl) ->
       let ctxtl = Array.map2 (pat_of_glob_in_context metas vars) decls tl in
@@ -486,6 +493,7 @@ let rec pat_of_raw metas vars = DAst.with_loc_val (fun ?loc -> function
       let names = Array.map (fun id -> Name id) ids in
       PCoFix (n, (names, tl, cl))
 
+  | GInt i -> PInt i
   | GPatVar _ | GIf _ | GLetTuple _ | GCases _ | GEvar _ ->
       err ?loc (Pp.str "Non supported pattern."))
 

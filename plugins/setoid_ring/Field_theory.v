@@ -54,10 +54,10 @@ Record almost_field_theory : Prop := mk_afield {
 Section AlmostField.
 
 Variable AFth : almost_field_theory.
-Let ARth := AFth.(AF_AR).
-Let rI_neq_rO := AFth.(AF_1_neq_0).
-Let rdiv_def := AFth.(AFdiv_def).
-Let rinv_l := AFth.(AFinv_l).
+Let ARth := (AF_AR AFth).
+Let rI_neq_rO := (AF_1_neq_0 AFth).
+Let rdiv_def := (AFdiv_def AFth).
+Let rinv_l := (AFinv_l AFth).
 
 Add Morphism radd with signature (req ==> req ==> req) as radd_ext.
 Proof. exact (Radd_ext Reqe). Qed.
@@ -115,12 +115,12 @@ Notation "- x" := (copp x) : C_scope.
 Infix "=?" := ceqb : C_scope.
 Notation "[ x ]" := (phi x) (at level 0).
 
-Let phi_0 := CRmorph.(morph0).
-Let phi_1 := CRmorph.(morph1).
+Let phi_0 := (morph0 CRmorph).
+Let phi_1 := (morph1 CRmorph).
 
 Lemma ceqb_spec c c' : BoolSpec ([c] == [c']) True (c =? c')%coef.
 Proof.
-generalize (CRmorph.(morph_eq) c c').
+generalize ((morph_eq CRmorph) c c').
 destruct (c =? c')%coef; auto.
 Qed.
 
@@ -137,7 +137,7 @@ Variable get_sign_spec : sign_theory copp ceqb get_sign.
 Variable cdiv:C -> C -> C*C.
 Variable cdiv_th : div_theory req cadd cmul phi cdiv.
 
-Let rpow_pow := pow_th.(rpow_pow_N).
+Let rpow_pow := (rpow_pow_N pow_th).
 
 (* Polynomial expressions : (PExpr C) *)
 
@@ -428,7 +428,7 @@ Qed.
 
 Lemma pow_pos_cst c p : pow_pos rmul [c] p == [pow_pos cmul c p].
 Proof.
-induction p;simpl;trivial; now rewrite !CRmorph.(morph_mul), !IHp.
+induction p;simpl;trivial; now rewrite !(morph_mul CRmorph), !IHp.
 Qed.
 
 Lemma pow_pos_mul_l x y p :
@@ -730,6 +730,7 @@ Qed.
 
 (* The input: syntax of a field expression *)
 
+#[universes(template)]
 Inductive FExpr : Type :=
  | FEO : FExpr
  | FEI : FExpr
@@ -762,6 +763,7 @@ Strategy expand [FEeval].
 
 (* The result of the normalisation *)
 
+#[universes(template)]
 Record linear : Type := mk_linear {
    num : PExpr C;
    denum : PExpr C;
@@ -944,6 +946,7 @@ induction e2; intros p1 p2;
   now rewrite <- PEpow_mul_r.
 Qed.
 
+#[universes(template)]
 Record rsplit : Type := mk_rsplit {
    rsplit_left : PExpr C;
    rsplit_common : PExpr C;
@@ -1232,12 +1235,19 @@ Notation ring_correct :=
  (ring_correct Rsth Reqe ARth CRmorph pow_th cdiv_th).
 
 (* simplify a field expression into a fraction *)
-(* TODO: simplify when den is constant... *)
 Definition display_linear l num den :=
-  NPphi_dev l num / NPphi_dev l den.
+  let lnum := NPphi_dev l num in
+    match den with
+    | Pc c => if ceqb c cI then lnum else lnum / NPphi_dev l den
+    | _ => lnum / NPphi_dev l den
+    end.
 
 Definition display_pow_linear l num den :=
-  NPphi_pow l num / NPphi_pow l den.
+  let lnum := NPphi_pow l num in
+    match den with
+    | Pc c => if ceqb c cI then lnum else lnum / NPphi_pow l den
+    | _ => lnum / NPphi_pow l den
+    end.
 
 Theorem Field_rw_correct n lpe l :
    Ninterp_PElist l lpe ->
@@ -1249,7 +1259,18 @@ Theorem Field_rw_correct n lpe l :
 Proof.
   intros Hlpe lmp lmp_eq fe nfe eq_nfe H; subst nfe lmp.
   rewrite (Fnorm_FEeval_PEeval _ _ H).
-  unfold display_linear; apply rdiv_ext;
+  unfold display_linear.
+  destruct (Nnorm _ _ _) as [c | | ] eqn: HN;
+  try ( apply rdiv_ext;
+        eapply ring_rw_correct; eauto).
+  destruct (ceqb_spec c cI).
+    set (nnum := NPphi_dev _ _).
+    apply eq_trans with (nnum / NPphi_dev l (Pc c)).
+      apply rdiv_ext;
+      eapply ring_rw_correct; eauto.
+    rewrite Pphi_dev_ok; try eassumption.
+    now simpl; rewrite H0, phi_1, <- rdiv1.
+  apply rdiv_ext;
   eapply ring_rw_correct; eauto.
 Qed.
 
@@ -1263,8 +1284,19 @@ Theorem Field_rw_pow_correct n lpe l :
 Proof.
   intros Hlpe lmp lmp_eq fe nfe eq_nfe H; subst nfe lmp.
   rewrite (Fnorm_FEeval_PEeval _ _ H).
-  unfold display_pow_linear; apply rdiv_ext;
-  eapply ring_rw_pow_correct;eauto.
+  unfold display_pow_linear.
+  destruct (Nnorm _ _ _) as [c | | ] eqn: HN;
+  try ( apply rdiv_ext;
+        eapply ring_rw_pow_correct; eauto).
+  destruct (ceqb_spec c cI).
+    set (nnum := NPphi_pow _ _).
+    apply eq_trans with (nnum / NPphi_pow l (Pc c)).
+      apply rdiv_ext;
+      eapply ring_rw_pow_correct; eauto.
+    rewrite Pphi_pow_ok; try eassumption.
+    now simpl; rewrite H0, phi_1, <- rdiv1.
+  apply rdiv_ext;
+  eapply ring_rw_pow_correct; eauto.
 Qed.
 
 Theorem Field_correct n l lpe fe1 fe2 :
@@ -1584,7 +1616,7 @@ Section FieldAndSemiField.
 
   Definition F2AF f :=
     mk_afield
-      (Rth_ARth Rsth Reqe f.(F_R)) f.(F_1_neq_0) f.(Fdiv_def) f.(Finv_l).
+      (Rth_ARth Rsth Reqe (F_R f)) (F_1_neq_0 f) (Fdiv_def f) (Finv_l f).
 
   Record semi_field_theory : Prop := mk_sfield {
     SF_SR : semi_ring_theory rO rI radd rmul req;
@@ -1600,10 +1632,10 @@ End MakeFieldPol.
   Definition SF2AF R (rO rI:R) radd rmul rdiv rinv req Rsth
     (sf:semi_field_theory rO rI radd rmul rdiv rinv req)  :=
     mk_afield _ _
-      (SRth_ARth Rsth sf.(SF_SR))
-      sf.(SF_1_neq_0)
-      sf.(SFdiv_def)
-      sf.(SFinv_l).
+      (SRth_ARth Rsth (SF_SR sf))
+      (SF_1_neq_0 sf)
+      (SFdiv_def sf)
+      (SFinv_l sf).
 
 
 Section Complete.
@@ -1618,9 +1650,9 @@ Section Complete.
   Notation "x == y" := (req x y) (at level 70, no associativity).
  Variable Rsth : Setoid_Theory R req.
    Add Parametric Relation : R req
-     reflexivity  proved by Rsth.(@Equivalence_Reflexive _ _)
-     symmetry     proved by Rsth.(@Equivalence_Symmetric _ _)
-     transitivity proved by Rsth.(@Equivalence_Transitive _ _)
+     reflexivity  proved by (@Equivalence_Reflexive _ _ Rsth)
+     symmetry     proved by (@Equivalence_Symmetric _ _ Rsth)
+     transitivity proved by (@Equivalence_Transitive _ _ Rsth)
     as R_setoid3.
  Variable Reqe : ring_eq_ext radd rmul ropp req.
    Add Morphism radd with signature (req ==> req ==> req) as radd_ext3.
@@ -1633,10 +1665,10 @@ Section Complete.
 Section AlmostField.
 
  Variable AFth : almost_field_theory rO rI radd rmul rsub ropp rdiv rinv req.
- Let ARth := AFth.(AF_AR).
- Let rI_neq_rO := AFth.(AF_1_neq_0).
- Let rdiv_def := AFth.(AFdiv_def).
- Let rinv_l := AFth.(AFinv_l).
+ Let ARth := (AF_AR AFth).
+ Let rI_neq_rO := (AF_1_neq_0 AFth).
+ Let rdiv_def := (AFdiv_def AFth).
+ Let rinv_l := (AFinv_l AFth).
 
 Hypothesis S_inj : forall x y, 1+x==1+y -> x==y.
 
@@ -1702,10 +1734,10 @@ End AlmostField.
 Section Field.
 
  Variable Fth : field_theory rO rI radd rmul rsub ropp rdiv rinv req.
- Let Rth := Fth.(F_R).
- Let rI_neq_rO := Fth.(F_1_neq_0).
- Let rdiv_def := Fth.(Fdiv_def).
- Let rinv_l := Fth.(Finv_l).
+ Let Rth := (F_R Fth).
+ Let rI_neq_rO := (F_1_neq_0 Fth).
+ Let rdiv_def := (Fdiv_def Fth).
+ Let rinv_l := (Finv_l Fth).
  Let AFth := F2AF Rsth Reqe Fth.
  Let ARth := Rth_ARth Rsth Reqe Rth.
 
@@ -1786,5 +1818,5 @@ End Field.
 
 End Complete.
 
-Arguments FEO [C].
-Arguments FEI [C].
+Arguments FEO {C}.
+Arguments FEI {C}.

@@ -16,6 +16,7 @@ open Util
 open Names
 open Glob_term
 open Vernacexpr
+open Impargs
 open Constrexpr
 open Constrexpr_ops
 open Extend
@@ -30,6 +31,7 @@ open Pcoq.Prim
 open Pcoq.Constr
 open Pcoq.Module
 open Pvernac.Vernac_
+open Attributes
 
 let vernac_kw = [ ";"; ","; ">->"; ":<"; "<:"; "where"; "at" ]
 let _ = List.iter CLexer.add_keyword vernac_kw
@@ -41,6 +43,7 @@ let query_command = Entry.create "vernac:query_command"
 
 let subprf = Entry.create "vernac:subprf"
 
+let quoted_attributes = Entry.create "vernac:quoted_attributes"
 let class_rawexpr = Entry.create "vernac:class_rawexpr"
 let thm_token = Entry.create "vernac:thm_token"
 let def_body = Entry.create "vernac:def_body"
@@ -60,10 +63,10 @@ let make_bullet s =
   | _ -> assert false
 
 let parse_compat_version = let open Flags in function
-  | "8.9" -> Current
+  | "8.10" -> Current
+  | "8.9" -> V8_9
   | "8.8" -> V8_8
-  | "8.7" -> V8_7
-  | ("8.6" | "8.5" | "8.4" | "8.3" | "8.2" | "8.1" | "8.0") as s ->
+  | ("8.7" | "8.6" | "8.5" | "8.4" | "8.3" | "8.2" | "8.1" | "8.0") as s ->
     CErrors.user_err ~hdr:"get_compat_version"
       Pp.(str "Compatibility with version " ++ str s ++ str " not supported.")
   | s ->
@@ -73,13 +76,13 @@ let parse_compat_version = let open Flags in function
 }
 
 GRAMMAR EXTEND Gram
-  GLOBAL: vernac_control gallina_ext noedit_mode subprf;
+  GLOBAL: vernac_control quoted_attributes gallina_ext noedit_mode subprf;
   vernac_control: FIRST
-    [ [ IDENT "Time"; c = located_vernac -> { VernacTime (false,c) }
-      | IDENT "Redirect"; s = ne_string; c = located_vernac -> { VernacRedirect (s, c) }
-      | IDENT "Timeout"; n = natural; v = vernac_control -> { VernacTimeout(n,v) }
-      | IDENT "Fail"; v = vernac_control -> { VernacFail v }
-      | v = decorated_vernac -> { let (f, v) = v in VernacExpr(f, v) } ]
+    [ [ IDENT "Time"; c = vernac_control -> { CAst.make ~loc @@ VernacTime (false,c) }
+      | IDENT "Redirect"; s = ne_string; c = vernac_control -> { CAst.make ~loc @@ VernacRedirect (s, c) }
+      | IDENT "Timeout"; n = natural; v = vernac_control -> { CAst.make ~loc @@ VernacTimeout(n,v) }
+      | IDENT "Fail"; v = vernac_control -> { CAst.make ~loc @@ VernacFail v }
+      | v = decorated_vernac -> { let (f, v) = v in CAst.make ~loc @@ VernacExpr(f, v) } ]
     ]
   ;
   decorated_vernac:
@@ -112,8 +115,10 @@ GRAMMAR EXTEND Gram
     ]
   ;
   vernac_poly:
-    [ [ IDENT "Polymorphic"; v = vernac_aux -> { let (f, v) = v in (("polymorphic", VernacFlagEmpty) :: f, v) }
-      | IDENT "Monomorphic"; v = vernac_aux -> { let (f, v) = v in (("monomorphic", VernacFlagEmpty) :: f, v) }
+    [ [ IDENT "Polymorphic"; v = vernac_aux ->
+        { let (f, v) = v in (Attributes.vernac_polymorphic_flag :: f, v) }
+      | IDENT "Monomorphic"; v = vernac_aux ->
+        { let (f, v) = v in (Attributes.vernac_monomorphic_flag :: f, v) }
       | v = vernac_aux -> { v } ]
     ]
   ;
@@ -143,9 +148,6 @@ GRAMMAR EXTEND Gram
     ] ]
   ;
 
-  located_vernac:
-    [ [ v = vernac_control -> { CAst.make ~loc v } ] ]
-  ;
 END
 
 {
@@ -215,11 +217,50 @@ GRAMMAR EXTEND Gram
           { VernacRegister(g, RegisterCoqlib quid) }
       | IDENT "Register"; IDENT "Inline"; g = global ->
           { VernacRegister(g, RegisterInline) }
+      | IDENT "Primitive"; id = identref; typopt = OPT [ ":"; typ = lconstr -> { typ } ]; ":="; r = register_token ->
+          { VernacPrimitive(id, r, typopt) }
       | IDENT "Universe"; l = LIST1 identref -> { VernacUniverse l }
       | IDENT "Universes"; l = LIST1 identref -> { VernacUniverse l }
       | IDENT "Constraint"; l = LIST1 univ_constraint SEP "," -> { VernacConstraint l }
   ] ]
   ;
+
+   register_token:
+     [ [ r = register_prim_token -> { CPrimitives.OT_op r }
+       | r = register_type_token -> { CPrimitives.OT_type r } ] ]
+   ;
+
+   register_type_token:
+     [ [ "#int63_type" -> { CPrimitives.PT_int63 } ] ]
+   ;
+
+   register_prim_token:
+     [ [ "#int63_head0" -> { CPrimitives.Int63head0 }
+       | "#int63_tail0" -> { CPrimitives.Int63tail0 }
+       | "#int63_add" -> { CPrimitives.Int63add }
+       | "#int63_sub" -> { CPrimitives.Int63sub }
+       | "#int63_mul" -> { CPrimitives.Int63mul }
+       | "#int63_div" -> { CPrimitives.Int63div }
+       | "#int63_mod" -> { CPrimitives.Int63mod }
+       | "#int63_lsr" -> { CPrimitives.Int63lsr }
+       | "#int63_lsl" -> { CPrimitives.Int63lsl }
+       | "#int63_land" -> { CPrimitives.Int63land }
+       | "#int63_lor" -> { CPrimitives.Int63lor }
+       | "#int63_lxor" -> { CPrimitives.Int63lxor }
+       | "#int63_addc" -> { CPrimitives.Int63addc }
+       | "#int63_subc" -> { CPrimitives.Int63subc }
+       | "#int63_addcarryc" -> { CPrimitives.Int63addCarryC }
+       | "#int63_subcarryc" -> { CPrimitives.Int63subCarryC }
+       | "#int63_mulc" -> { CPrimitives.Int63mulc }
+       | "#int63_diveucl" -> { CPrimitives.Int63diveucl }
+       | "#int63_div21" -> { CPrimitives.Int63div21 }
+       | "#int63_addmuldiv" -> { CPrimitives.Int63addMulDiv }
+       | "#int63_eq" -> { CPrimitives.Int63eq }
+       | "#int63_lt" -> { CPrimitives.Int63lt }
+       | "#int63_le" -> { CPrimitives.Int63le }
+       | "#int63_compare" -> { CPrimitives.Int63compare }
+       ] ]
+    ;
 
   thm_token:
     [ [ "Theorem" -> { Theorem }
@@ -250,7 +291,7 @@ GRAMMAR EXTEND Gram
       | IDENT "Conjectures" -> { ("Conjectures", (NoDischarge, Conjectural)) } ] ]
   ;
   inline:
-    [ [ IDENT "Inline"; "("; i = INT; ")" -> { InlineAt (int_of_string i) }
+    [ [ IDENT "Inline"; "("; i = natural; ")" -> { InlineAt i }
       | IDENT "Inline" -> { DefaultInline }
       | -> { NoInline } ] ]
   ;
@@ -407,8 +448,12 @@ GRAMMAR EXTEND Gram
 *)
   (* ... with coercions *)
   record_field:
-  [ [ bd = record_binder; pri = OPT [ "|"; n = natural -> { n } ];
-      ntn = decl_notation -> { (bd,pri),ntn } ] ]
+  [ [ attr = LIST0 quoted_attributes ;
+      bd = record_binder; rf_priority = OPT [ "|"; n = natural -> { n } ];
+      rf_notation = decl_notation -> {
+      let rf_canonical = attr |> List.flatten |> parse canonical in
+      let rf_subclass, rf_decl = bd in
+      rf_decl, { rf_subclass ; rf_priority ; rf_notation ; rf_canonical } } ] ]
   ;
   record_fields:
     [ [ f = record_field; ";"; fs = record_fields -> { f :: fs }
@@ -471,7 +516,7 @@ END
 {
 
 let only_starredidentrefs =
-  Gram.Entry.of_parser "test_only_starredidentrefs"
+  Pcoq.Entry.of_parser "test_only_starredidentrefs"
     (fun strm ->
       let rec aux n =
       match Util.stream_nth n strm with
@@ -563,8 +608,8 @@ GRAMMAR EXTEND Gram
       | -> { [] } ] ]
   ;
   functor_app_annot:
-    [ [ "["; IDENT "inline"; "at"; IDENT "level"; i = INT; "]" ->
-        { InlineAt (int_of_string i) }
+    [ [ "["; IDENT "inline"; "at"; IDENT "level"; i = natural; "]" ->
+        { InlineAt i }
       | "["; IDENT "no"; IDENT "inline"; "]" -> { NoInline }
       | -> { DefaultInline }
       ] ]
@@ -650,18 +695,20 @@ GRAMMAR EXTEND Gram
           LIST1 [ v=strategy_level; "["; q=LIST1 smart_global; "]" -> { (v,q) } ] ->
             { VernacSetStrategy l }
       (* Canonical structure *)
-      | IDENT "Canonical"; IDENT "Structure"; qid = global ->
-          { VernacCanonical CAst.(make ~loc @@ AN qid) }
-      | IDENT "Canonical"; IDENT "Structure"; ntn = by_notation ->
+      | IDENT "Canonical"; OPT [ IDENT "Structure" -> {()} ]; qid = global; ud = OPT [ u = OPT univ_decl; d = def_body -> { (u,d) } ] ->
+          { match ud with
+           | None ->
+             VernacCanonical CAst.(make ~loc @@ AN qid)
+           | Some (u,d) ->
+             let s = coerce_reference_to_id qid in
+             VernacDefinition ((NoDischarge,CanonicalStructure),((CAst.make (Name s)),u),d) }
+      | IDENT "Canonical"; OPT [ IDENT "Structure" -> {()} ]; ntn = by_notation ->
           { VernacCanonical CAst.(make ~loc @@ ByNotation ntn) }
-      | IDENT "Canonical"; IDENT "Structure"; qid = global; d = def_body ->
-          { let s = coerce_reference_to_id qid in
-          VernacDefinition ((NoDischarge,CanonicalStructure),((CAst.make (Name s)),None),d) }
 
       (* Coercions *)
-      | IDENT "Coercion"; qid = global; d = def_body ->
+      | IDENT "Coercion"; qid = global; u = OPT univ_decl; d = def_body ->
           { let s = coerce_reference_to_id qid in
-          VernacDefinition ((NoDischarge,Coercion),((CAst.make (Name s)),None),d) }
+          VernacDefinition ((NoDischarge,Coercion),((CAst.make (Name s)),u),d) }
       | IDENT "Identity"; IDENT "Coercion"; f = identref; ":";
          s = class_rawexpr; ">->"; t = class_rawexpr ->
            { VernacIdentityCoercion (f, s, t) }
@@ -680,19 +727,19 @@ GRAMMAR EXTEND Gram
 	 info = hint_info ;
 	 props = [ ":="; "{"; r = record_declaration; "}" -> { Some (true,r) } |
 	     ":="; c = lconstr -> { Some (false,c) } | -> { None } ] ->
-	   { VernacInstance (false,snd namesup,(fst namesup,expl,t),props,info) }
+	   { VernacInstance (snd namesup,(fst namesup,expl,t),props,info) }
 
       | IDENT "Existing"; IDENT "Instance"; id = global;
           info = hint_info ->
-	  { VernacDeclareInstances [id, info] }
+	  { VernacExistingInstance [id, info] }
 
       | IDENT "Existing"; IDENT "Instances"; ids = LIST1 global;
         pri = OPT [ "|"; i = natural -> { i } ] ->
          { let info = { Typeclasses.hint_priority = pri; hint_pattern = None } in
          let insts = List.map (fun i -> (i, info)) ids in
-	  VernacDeclareInstances insts }
+	  VernacExistingInstance insts }
 
-      | IDENT "Existing"; IDENT "Class"; is = global -> { VernacDeclareClass is }
+      | IDENT "Existing"; IDENT "Class"; is = global -> { VernacExistingClass is }
 
       (* Arguments *)
       | IDENT "Arguments"; qid = smart_global; 
@@ -791,24 +838,22 @@ GRAMMAR EXTEND Gram
   ];
   (* Same as [argument_spec_block], but with only implicit status and names *)
   more_implicits_block: [
-    [ name = name -> { [(name.CAst.v, Vernacexpr.NotImplicit)] }
+    [ name = name -> { [(name.CAst.v, NotImplicit)] }
     | "["; items = LIST1 name; "]" ->
-       { List.map (fun name -> (name.CAst.v, Vernacexpr.Implicit)) items }
+       { List.map (fun name -> (name.CAst.v, Impargs.Implicit)) items }
     | "{"; items = LIST1 name; "}" ->
-       { List.map (fun name -> (name.CAst.v, Vernacexpr.MaximallyImplicit)) items }
+       { List.map (fun name -> (name.CAst.v, MaximallyImplicit)) items }
     ]
   ];
   strategy_level:
     [ [ IDENT "expand" -> { Conv_oracle.Expand }
       | IDENT "opaque" -> { Conv_oracle.Opaque }
-      | n=INT -> { Conv_oracle.Level (int_of_string n) }
-      | "-"; n=INT -> { Conv_oracle.Level (- int_of_string n) }
+      | n=integer -> { Conv_oracle.Level n }
       | IDENT "transparent" -> { Conv_oracle.transparent } ] ]
   ;
   instance_name:
-    [ [ name = ident_decl; sup = OPT binders ->
-          { (CAst.map (fun id -> Name id) (fst name), snd name),
-          (Option.default [] sup) }
+    [ [ name = ident_decl; bl = binders ->
+          { (CAst.map (fun id -> Name id) (fst name), snd name), bl }
       | -> { ((CAst.make ~loc Anonymous), None), []  } ] ]
   ;
   hint_info:
@@ -832,20 +877,20 @@ GRAMMAR EXTEND Gram
   GLOBAL: command query_command class_rawexpr gallina_ext;
 
   gallina_ext:
-    [ [ IDENT "Export"; "Set"; table = option_table; v = option_value ->
+    [ [ IDENT "Export"; "Set"; table = option_table; v = option_setting ->
         { VernacSetOption (true, table, v) }
       | IDENT "Export"; IDENT "Unset"; table = option_table ->
-          { VernacUnsetOption (true, table) }
+          { VernacSetOption (true, table, OptionUnset) }
     ] ];
 
   command:
     [ [ IDENT "Comments"; l = LIST0 comment -> { VernacComments l }
 
       (* Hack! Should be in grammar_ext, but camlp5 factorizes badly *)
-      | IDENT "Declare"; IDENT "Instance"; namesup = instance_name; ":";
+      | IDENT "Declare"; IDENT "Instance"; id = ident_decl; bl = binders; ":";
 	 expl = [ "!" -> { Decl_kinds.Implicit } | -> { Decl_kinds.Explicit } ] ; t = operconstr LEVEL "200";
 	 info = hint_info ->
-	   { VernacInstance (true, snd namesup, (fst namesup, expl, t), None, info) }
+	   { VernacDeclareInstance (bl, (id, expl, t), info) }
 
       (* Should be in syntax, but camlp5 would not factorize *)
       | IDENT "Declare"; IDENT "Scope"; sc = IDENT ->
@@ -900,10 +945,10 @@ GRAMMAR EXTEND Gram
 	  { VernacAddMLPath (true, dir) }
 
       (* For acting on parameter tables *)
-      | "Set"; table = option_table; v = option_value ->
+      | "Set"; table = option_table; v = option_setting ->
           { VernacSetOption (false, table, v) }
       | IDENT "Unset"; table = option_table ->
-          { VernacUnsetOption (false, table) }
+          { VernacSetOption (false, table, OptionUnset) }
 
       | IDENT "Print"; IDENT "Table"; table = option_table ->
 	  { VernacPrintOption table }
@@ -961,6 +1006,9 @@ GRAMMAR EXTEND Gram
       | IDENT "Grammar"; ent = IDENT ->
           (* This should be in "syntax" section but is here for factorization*)
 	  { PrintGrammar ent }
+      | IDENT "Custom"; IDENT "Grammar"; ent = IDENT ->
+          (* Should also be in "syntax" section *)
+          { PrintCustomGrammar ent }
       | IDENT "LoadPath"; dir = OPT dirpath -> { PrintLoadPath dir }
       | IDENT "Modules" ->
           { user_err Pp.(str "Print Modules is obsolete; use Print Libraries instead") }
@@ -987,8 +1035,9 @@ GRAMMAR EXTEND Gram
       | IDENT "Scope"; s = IDENT -> { PrintScope s }
       | IDENT "Visibility"; s = OPT IDENT -> { PrintVisibility s }
       | IDENT "Implicit"; qid = smart_global -> { PrintImplicit qid }
-      | IDENT "Universes"; fopt = OPT ne_string -> { PrintUniverses (false, fopt) }
-      | IDENT "Sorted"; IDENT "Universes"; fopt = OPT ne_string -> { PrintUniverses (true, fopt) }
+      | b = [ IDENT "Sorted" -> { true } | -> { false } ]; IDENT "Universes";
+        g = OPT printunivs_subgraph; fopt = OPT ne_string ->
+        { PrintUniverses (b, g, fopt) }
       | IDENT "Assumptions"; qid = smart_global -> { PrintAssumptions (false, false, qid) }
       | IDENT "Opaque"; IDENT "Dependencies"; qid = smart_global -> { PrintAssumptions (true, false, qid) }
       | IDENT "Transparent"; IDENT "Dependencies"; qid = smart_global -> { PrintAssumptions (false, true, qid) }
@@ -997,6 +1046,9 @@ GRAMMAR EXTEND Gram
       | IDENT "Strategies" -> { PrintStrategy None }
       | IDENT "Registered" -> { PrintRegistered }
     ] ]
+  ;
+  printunivs_subgraph:
+    [ [ IDENT "Subgraph"; "("; l = LIST0 reference; ")" -> { l } ] ]
   ;
   class_rawexpr:
     [ [ IDENT "Funclass" -> { FunClass }
@@ -1010,10 +1062,10 @@ GRAMMAR EXTEND Gram
       | IDENT "Library"; qid = global -> { LocateLibrary qid }
       | IDENT "Module"; qid = global -> { LocateModule qid } ] ]
   ;
-  option_value:
-    [ [ -> { BoolValue true }
-      | n  = integer   -> { IntValue (Some n) }
-      | s  = STRING    -> { StringValue s } ] ]
+  option_setting:
+    [ [ -> { OptionSetTrue }
+      | n  = integer   -> { OptionSetInt n }
+      | s  = STRING    -> { OptionSetString s } ] ]
   ;
   option_ref_value:
     [ [ id = global   -> { QualidRefValue id }
@@ -1083,10 +1135,10 @@ GRAMMAR EXTEND Gram
 
 (* Tactic Debugger *)
       |	IDENT "Debug"; IDENT "On" ->
-          { VernacSetOption (false, ["Ltac";"Debug"], BoolValue true) }
+          { VernacSetOption (false, ["Ltac";"Debug"], OptionSetTrue) }
 
       |	IDENT "Debug"; IDENT "Off" ->
-          { VernacSetOption (false, ["Ltac";"Debug"], BoolValue false) }
+          { VernacSetOption (false, ["Ltac";"Debug"], OptionUnset) }
 
 (* registration of a custom reduction *)
 
@@ -1168,9 +1220,9 @@ GRAMMAR EXTEND Gram
       | "in"; IDENT "custom"; x = IDENT -> { SetCustomEntry (x,None) }
       | "in"; IDENT "custom"; x = IDENT; "at"; IDENT "level"; n = natural ->
          { SetCustomEntry (x,Some n) }
-      | IDENT "left"; IDENT "associativity" -> { SetAssoc LeftA }
-      | IDENT "right"; IDENT "associativity" -> { SetAssoc RightA }
-      | IDENT "no"; IDENT "associativity" -> { SetAssoc NonA }
+      | IDENT "left"; IDENT "associativity" -> { SetAssoc Gramlib.Gramext.LeftA }
+      | IDENT "right"; IDENT "associativity" -> { SetAssoc Gramlib.Gramext.RightA }
+      | IDENT "no"; IDENT "associativity" -> { SetAssoc Gramlib.Gramext.NonA }
       | IDENT "only"; IDENT "printing" -> { SetOnlyPrinting }
       | IDENT "only"; IDENT "parsing" -> { SetOnlyParsing }
       | IDENT "compat"; s = STRING ->

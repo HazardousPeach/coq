@@ -36,6 +36,7 @@ Section Partial_orders.
 
   Definition Rel := Relation U.
 
+  #[universes(template)]
   Record PO : Type := Definition_of_PO
     { Carrier_of : Ensemble U;
       Rel_of : Relation U;
@@ -70,11 +71,11 @@ Section Partial_order_facts.
     elim D; simpl.
     intros C R H' H'0; elim H'0.
     intros H'1 H'2 H'3 x y z H'4 H'5; split.
-    apply H'2 with (y := y); tauto.
-    red; intro H'6.
-    elim H'4; intros H'7 H'8; apply H'8; clear H'4.
-    apply H'3; auto.
-    rewrite H'6; tauto.
+    - apply H'2 with (y := y); tauto.
+    - red; intro H'6.
+      elim H'4; intros H'7 H'8; apply H'8; clear H'4.
+      apply H'3; auto.
+      rewrite H'6; tauto.
   Qed.
 
   Lemma Strict_Rel_Transitive_with_Rel_left :
@@ -86,11 +87,11 @@ Section Partial_order_facts.
     elim D; simpl.
     intros C R H' H'0; elim H'0.
     intros H'1 H'2 H'3 x y z H'4 H'5; split.
-    apply H'2 with (y := y); tauto.
-    red; intro H'6.
-    elim H'5; intros H'7 H'8; apply H'8; clear H'5.
-    apply H'3; auto.
-    rewrite <- H'6; auto.
+    - apply H'2 with (y := y); tauto.
+    - red; intro H'6.
+      elim H'5; intros H'7 H'8; apply H'8; clear H'5.
+      apply H'3; auto.
+      rewrite <- H'6; auto.
   Qed.
 
   Lemma Strict_Rel_Transitive : Transitive U (Strict_Rel_of U D).

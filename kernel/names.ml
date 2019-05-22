@@ -376,9 +376,6 @@ module KerName = struct
     { modpath; knlabel; refhash = -1; }
   let repr kn = (kn.modpath, kn.knlabel)
 
-  let make2 = make
-  [@@ocaml.deprecated "Please use [KerName.make]"]
-
   let modpath kn = kn.modpath
   let label kn = kn.knlabel
 
@@ -390,6 +387,8 @@ module KerName = struct
   let debug_to_string kn = to_string_gen ModPath.debug_to_string kn
 
   let print kn = str (to_string kn)
+
+  let debug_print kn = str (debug_to_string kn)
 
   let compare (kn1 : kernel_name) (kn2 : kernel_name) =
     if kn1 == kn2 then 0
@@ -715,13 +714,6 @@ let hcons_construct = Hashcons.simple_hcons Hconstruct.generate Hconstruct.hcons
 
 (*****************)
 
-type transparent_state = Id.Pred.t * Cpred.t
-
-let empty_transparent_state = (Id.Pred.empty, Cpred.empty)
-let full_transparent_state = (Id.Pred.full, Cpred.full)
-let var_full_transparent_state = (Id.Pred.full, Cpred.empty)
-let cst_full_transparent_state = (Id.Pred.empty, Cpred.full)
-
 type 'a tableKey =
   | ConstKey of 'a
   | VarKey of Id.t
@@ -871,6 +863,8 @@ struct
   let unfold (c, b as p) = if b then p else (c, true)
 
   let equal (c, b) (c', b') = Repr.equal c c' && b == b'
+
+  let repr_equal p p' = Repr.equal (repr p) (repr p')
 
   let hash (c, b) = (if b then 0 else 1) + Repr.hash c
 

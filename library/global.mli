@@ -29,8 +29,12 @@ val named_context : unit -> Constr.named_context
 
 (** Changing the (im)predicativity of the system *)
 val set_engagement : Declarations.engagement -> unit
+val set_indices_matter : bool -> unit
 val set_typing_flags : Declarations.typing_flags -> unit
 val typing_flags : unit -> Declarations.typing_flags
+val make_sprop_cumulative : unit -> unit
+val set_allow_sprop : bool -> unit
+val sprop_allowed : unit -> bool
 
 (** Variables, Local definitions, constants, inductive types *)
 
@@ -42,7 +46,8 @@ val export_private_constants : in_section:bool ->
   unit Entries.definition_entry * Safe_typing.exported_private_constant list
 
 val add_constant :
-  in_section:bool -> Id.t -> Safe_typing.global_declaration -> Constant.t
+  ?role:Entries.side_effect_role -> in_section:bool -> Id.t -> Safe_typing.global_declaration -> Constant.t * Safe_typing.private_constants
+val add_recipe : in_section:bool -> Id.t -> Cooking.recipe -> Constant.t
 val add_mind :
   Id.t -> Entries.mutual_inductive_entry -> MutInd.t
 
@@ -80,7 +85,7 @@ val add_module_parameter :
 (** {6 Queries in the global environment } *)
 
 val lookup_named     : variable -> Constr.named_declaration
-val lookup_constant  : Constant.t -> Declarations.constant_body
+val lookup_constant  : Constant.t -> Opaqueproof.opaque Declarations.constant_body
 val lookup_inductive : inductive ->
   Declarations.mutual_inductive_body * Declarations.one_inductive_body
 val lookup_pinductive : Constr.pinductive -> 
@@ -101,13 +106,13 @@ val body_of_constant : Constant.t -> (Constr.constr * Univ.AUContext.t) option
     polymorphic constants, the term contains De Bruijn universe variables that
     need to be instantiated. *)
 
-val body_of_constant_body : Declarations.constant_body -> (Constr.constr * Univ.AUContext.t) option
+val body_of_constant_body : Opaqueproof.opaque Declarations.constant_body -> (Constr.constr * Univ.AUContext.t) option
 (** Same as {!body_of_constant} but on {!Declarations.constant_body}. *)
 
 (** {6 Compiled libraries } *)
 
 val start_library : DirPath.t -> ModPath.t
-val export : ?except:Future.UUIDSet.t -> DirPath.t ->
+val export : ?except:Future.UUIDSet.t -> output_native_objects:bool -> DirPath.t ->
   ModPath.t * Safe_typing.compiled_library * Safe_typing.native_library
 val import :
   Safe_typing.compiled_library -> Univ.ContextSet.t -> Safe_typing.vodigest ->
@@ -127,36 +132,21 @@ val is_polymorphic : GlobRef.t -> bool
 val is_template_polymorphic : GlobRef.t -> bool
 val is_type_in_type : GlobRef.t -> bool
 
-val constr_of_global_in_context : Environ.env ->
-  GlobRef.t -> Constr.types * Univ.AUContext.t
-(** Returns the type of the constant in its local universe
-    context. The type should not be used without pushing it's universe
-    context in the environmnent of usage. For non-universe-polymorphic
-    constants, it does not matter. *)
-
-val type_of_global_in_context : Environ.env -> 
-  GlobRef.t -> Constr.types * Univ.AUContext.t
-(** Returns the type of the constant in its local universe
-    context. The type should not be used without pushing it's universe
-    context in the environmnent of usage. For non-universe-polymorphic
-    constants, it does not matter. *)
-
-(** Returns the universe context of the global reference (whatever its polymorphic status is). *)
-val universes_of_global : GlobRef.t -> Univ.AUContext.t
-[@@ocaml.deprecated "Use [Environ.universes_of_global]"]
-
 (** {6 Retroknowledge } *)
 
-val register :
-  Retroknowledge.field -> GlobRef.t -> unit
-
 val register_inline : Constant.t -> unit
+val register_inductive : inductive -> CPrimitives.prim_ind -> unit
 
 (** {6 Oracle } *)
 
 val set_strategy : Constant.t Names.tableKey -> Conv_oracle.level -> unit
 
-val set_reduction_sharing : bool -> unit
+(** {6 Conversion settings } *)
+
+val set_share_reduction : bool -> unit
+
+val set_VM : bool -> unit
+val set_native_compiler : bool -> unit
 
 (* Modifies the global state, registering new universes *)
 

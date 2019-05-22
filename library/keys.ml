@@ -25,13 +25,14 @@ type key =
   | KFix
   | KCoFix
   | KRel
+  | KInt
 
 module KeyOrdered = struct
   type t = key
 
   let hash gr =
     match gr with
-    | KGlob gr -> 8 + GlobRef.Ordered.hash gr
+    | KGlob gr -> 9 + GlobRef.Ordered.hash gr
     | KLam -> 0
     | KLet -> 1
     | KProd -> 2
@@ -40,6 +41,7 @@ module KeyOrdered = struct
     | KFix -> 5
     | KCoFix -> 6
     | KRel -> 7
+    | KInt -> 8
 
   let compare gr1 gr2 =
     match gr1, gr2 with
@@ -100,18 +102,13 @@ let discharge_keys (_,(k,k')) =
   | Some x, Some y -> Some (x, y)
   | _ -> None
 
-let rebuild_keys (ref,ref') = (ref, ref')
-
 type key_obj = key * key
 
 let inKeys : key_obj -> obj =
-  declare_object {(default_object "KEYS") with
-    cache_function = cache_keys;
-    load_function = load_keys;
-    subst_function = subst_keys;
-    classify_function = (fun x -> Substitute x);
-    discharge_function = discharge_keys;
-    rebuild_function = rebuild_keys }
+  declare_object @@ superglobal_object "KEYS"
+    ~cache:cache_keys
+    ~subst:(Some subst_keys)
+    ~discharge:discharge_keys
 
 let declare_equiv_keys ref ref' =
   Lib.add_anonymous_leaf (inKeys (ref,ref'))
@@ -138,6 +135,7 @@ let constr_key kind c =
       | Evar _ -> raise Not_found
       | Sort _ -> KSort 
       | LetIn _ -> KLet
+      | Int _ -> KInt
     in Some (aux c)
   with Not_found -> None
 
@@ -153,6 +151,7 @@ let pr_key pr_global = function
   | KFix -> str"Fix"
   | KCoFix -> str"CoFix"
   | KRel -> str"Rel"
+  | KInt -> str"Int"
 
 let pr_keyset pr_global v = 
   prlist_with_sep spc (pr_key pr_global) (Keyset.elements v)

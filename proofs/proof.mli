@@ -34,43 +34,39 @@
 (* Type of a proof. *)
 type t
 
-(* Returns a stylised view of a proof for use by, for instance,
-   ide-s. *)
-(* spiwack: the type of [proof] will change as we push more refined
-   functions to ide-s. This would be better than spawning a new nearly
-   identical function everytime. Hence the generic name. *)
-(* In this version: returns the focused goals, a representation of the
-   focus stack (the goals at each level), a representation of the
-   shelf (the list of goals on the shelf), a representation of the
-   given up goals (the list of the given up goals) and the underlying
-   evar_map *)
-val proof : t ->
-  Goal.goal list
-  * (Goal.goal list * Goal.goal list) list
-  * Goal.goal list
-  * Goal.goal list
-  * Evd.evar_map
+type data =
+  { sigma : Evd.evar_map
+  (** A representation of the evar_map [EJGA wouldn't it better to just return the proofview?] *)
+  ; goals : Evar.t list
+  (** Focused goals *)
+  ; entry : Proofview.entry
+  (** Entry for the proofview *)
+  ; stack : (Evar.t list * Evar.t list) list
+  (** A representation of the focus stack *)
+  ; shelf : Evar.t list
+  (** A representation of the shelf  *)
+  ; given_up : Evar.t list
+  (** A representation of the given up goals  *)
+  ; initial_euctx : UState.t
+  (** The initial universe context (for the statement) *)
+  ; name : Names.Id.t
+  (** The name of the theorem whose proof is being constructed *)
+  ; poly : bool;
+  (** polymorphism *)
+  }
 
-(* Generic records structured like the return type of proof *)
-type 'a pre_goals = {
-  fg_goals : 'a list;
-  (** List of the focussed goals *)
-  bg_goals : ('a list * 'a list) list;
-  (** Zipper representing the unfocussed background goals *)
-  shelved_goals : 'a list;
-  (** List of the goals on the shelf. *)
-  given_up_goals : 'a list;
-  (** List of the goals that have been given up *)
-}
-
-val map_structured_proof : t -> (Evd.evar_map -> Goal.goal -> 'a) -> ('a pre_goals)
-
+val data : t -> data
 
 (*** General proof functions ***)
-val start : Evd.evar_map -> (Environ.env * EConstr.types) list -> t
-val dependent_start : Proofview.telescope -> t
-val initial_goals : t -> (EConstr.constr * EConstr.types) list
-val initial_euctx : t -> UState.t
+val start
+  :  name:Names.Id.t
+  -> poly:bool
+  -> Evd.evar_map -> (Environ.env * EConstr.types) list -> t
+
+val dependent_start
+  :  name:Names.Id.t
+  -> poly:bool
+  -> Proofview.telescope -> t
 
 (* Returns [true] if the considered proof is completed, that is if no goal remain
     to be considered (this does not require that all evars have been solved). *)
@@ -87,13 +83,14 @@ val compact : t -> t
 (* Returns the proofs (with their type) of the initial goals.
     Raises [UnfinishedProof] is some goals remain to be considered.
     Raises [HasShelvedGoals] if some goals are left on the shelf.
-    Raises [HasGivenUpGoals] if some goals have been given up.
-    Raises [HasUnresolvedEvar] if some evars have been left undefined. *)
-exception UnfinishedProof
-exception HasShelvedGoals
-exception HasGivenUpGoals
-exception HasUnresolvedEvar
-val return : t -> Evd.evar_map
+    Raises [HasGivenUpGoals] if some goals have been given up. *)
+type open_error_reason =
+  | UnfinishedProof
+  | HasGivenUpGoals
+
+exception OpenProof of Names.Id.t option * open_error_reason
+
+val return : ?pid:Names.Id.t -> t -> Evd.evar_map
 
 (*** Focusing actions ***)
 
@@ -173,8 +170,9 @@ val no_focused_goal : t -> bool
 
 (* the returned boolean signal whether an unsafe tactic has been
    used. In which case it is [false]. *)
-val run_tactic : Environ.env ->
-  unit Proofview.tactic -> t -> t * (bool*Proofview_monad.Info.tree)
+val run_tactic
+  :  Environ.env
+  -> 'a Proofview.tactic -> t -> t * (bool*Proofview_monad.Info.tree) * 'a
 
 val maximal_unfocus : 'a focus_kind -> t -> t
 
@@ -204,7 +202,11 @@ module V82 : sig
   val grab_evars : t -> t
 
   (* Implements the Existential command *)
-  val instantiate_evar : int -> Constrexpr.constr_expr -> t -> t
+  val instantiate_evar
+    :  Environ.env
+    -> int
+    -> (Environ.env -> Evd.evar_map -> Glob_term.glob_constr)
+    -> t -> t
 end
 
 (* returns the set of all goals in the proof *)

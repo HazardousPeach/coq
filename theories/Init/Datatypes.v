@@ -136,7 +136,7 @@ Defined.
 Inductive BoolSpec (P Q : Prop) : bool -> Prop :=
   | BoolSpecT : P -> BoolSpec P Q true
   | BoolSpecF : Q -> BoolSpec P Q false.
-Hint Constructors BoolSpec.
+Hint Constructors BoolSpec : core.
 
 
 (********************************************************************)
@@ -167,6 +167,7 @@ Register S as num.nat.S.
 
 (** [option A] is the extension of [A] with an extra element [None] *)
 
+#[universes(template)]
 Inductive option (A:Type) : Type :=
   | Some : A -> option A
   | None : option A.
@@ -186,6 +187,7 @@ Definition option_map (A B:Type) (f:A->B) (o : option A) : option B :=
 
 (** [sum A B], written [A + B], is the disjoint sum of [A] and [B] *)
 
+#[universes(template)]
 Inductive sum (A B:Type) : Type :=
   | inl : A -> sum A B
   | inr : B -> sum A B.
@@ -198,6 +200,7 @@ Arguments inr {A B} _ , A [B] _.
 (** [prod A B], written [A * B], is the product of [A] and [B];
     the pair [pair A B a b] of [a] and [b] is abbreviated [(a,b)] *)
 
+#[universes(template)]
 Inductive prod (A B:Type) : Type :=
   pair : A -> B -> A * B
 
@@ -256,6 +259,7 @@ Defined.
 
 (** Polymorphic lists and some operations *)
 
+#[universes(template)]
 Inductive list (A : Type) : Type :=
  | nil : list A
  | cons : A -> list A -> list A.
@@ -344,7 +348,7 @@ Inductive CompareSpec (Peq Plt Pgt : Prop) : comparison -> Prop :=
  | CompEq : Peq -> CompareSpec Peq Plt Pgt Eq
  | CompLt : Plt -> CompareSpec Peq Plt Pgt Lt
  | CompGt : Pgt -> CompareSpec Peq Plt Pgt Gt.
-Hint Constructors CompareSpec.
+Hint Constructors CompareSpec : core.
 
 (** For having clean interfaces after extraction, [CompareSpec] is declared
     in Prop. For some situations, it is nonetheless useful to have a
@@ -354,7 +358,7 @@ Inductive CompareSpecT (Peq Plt Pgt : Prop) : comparison -> Type :=
  | CompEqT : Peq -> CompareSpecT Peq Plt Pgt Eq
  | CompLtT : Plt -> CompareSpecT Peq Plt Pgt Lt
  | CompGtT : Pgt -> CompareSpecT Peq Plt Pgt Gt.
-Hint Constructors CompareSpecT.
+Hint Constructors CompareSpecT : core.
 
 Lemma CompareSpec2Type : forall Peq Plt Pgt c,
  CompareSpec Peq Plt Pgt c -> CompareSpecT Peq Plt Pgt c.
@@ -371,7 +375,7 @@ Definition CompSpec {A} (eq lt : A->A->Prop)(x y:A) : comparison -> Prop :=
 
 Definition CompSpecT {A} (eq lt : A->A->Prop)(x y:A) : comparison -> Type :=
  CompareSpecT (eq x y) (lt x y) (lt y x).
-Hint Unfold CompSpec CompSpecT.
+Hint Unfold CompSpec CompSpecT : core.
 
 Lemma CompSpec2Type : forall A (eq lt:A->A->Prop) x y c,
  CompSpec eq lt x y c -> CompSpecT eq lt x y c.
@@ -384,6 +388,7 @@ Proof. intros. apply CompareSpec2Type; assumption. Defined.
     member is the singleton datatype [identity A a a] whose
     sole inhabitant is denoted [identity_refl A a] *)
 
+#[universes(template)]
 Inductive identity (A:Type) (a:A) : A -> Type :=
   identity_refl : identity a a.
 Hint Resolve identity_refl: core.

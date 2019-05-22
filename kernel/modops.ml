@@ -47,10 +47,10 @@ type signature_mismatch_error =
   | RecordFieldExpected of bool
   | RecordProjectionsExpected of Name.t list
   | NotEqualInductiveAliases
-  | IncompatibleInstances
   | IncompatibleUniverses of Univ.univ_inconsistency
   | IncompatiblePolymorphism of env * types * types
-  | IncompatibleConstraints of Univ.AUContext.t
+  | IncompatibleConstraints of { got : Univ.AUContext.t; expect : Univ.AUContext.t }
+  | IncompatibleVariance
 
 type module_typing_error =
   | SignatureMismatch of
@@ -198,9 +198,18 @@ let rec subst_structure sub do_delta sign =
   in
   List.Smart.map subst_body sign
 
+and subst_retro : type a. Mod_subst.substitution -> a module_retroknowledge -> a module_retroknowledge =
+  fun subst retro ->
+    match retro with
+    | ModTypeRK as r -> r
+    | ModBodyRK l as r ->
+      let l' = List.Smart.map (subst_retro_action subst) l in
+      if l == l' then r else ModBodyRK l
+
 and subst_body : 'a. _ -> _ -> (_ -> 'a -> 'a) -> _ -> 'a generic_module_body -> 'a generic_module_body =
   fun is_mod sub subst_impl do_delta mb ->
-  let { mod_mp=mp; mod_expr=me; mod_type=ty; mod_type_alg=aty; _ } = mb in
+    let { mod_mp=mp; mod_expr=me; mod_type=ty; mod_type_alg=aty;
+          mod_retroknowledge=retro; _ } = mb in
   let mp' = subst_mp sub mp in
   let sub =
     if ModPath.equal mp mp' then sub
@@ -210,8 +219,10 @@ and subst_body : 'a. _ -> _ -> (_ -> 'a -> 'a) -> _ -> 'a generic_module_body ->
   let ty' = subst_signature sub do_delta ty in
   let me' = subst_impl sub me in
   let aty' = Option.Smart.map (subst_expression sub id_delta) aty in
+  let retro' = subst_retro sub retro in
   let delta' = do_delta mb.mod_delta sub in
-  if mp==mp' && me==me' && ty==ty' && aty==aty' && delta'==mb.mod_delta
+  if mp==mp' && me==me' && ty==ty' && aty==aty'
+     && retro==retro' && delta'==mb.mod_delta
   then mb
   else
     { mb with
@@ -219,7 +230,9 @@ and subst_body : 'a. _ -> _ -> (_ -> 'a -> 'a) -> _ -> 'a generic_module_body ->
       mod_expr = me';
       mod_type = ty';
       mod_type_alg = aty';
-      mod_delta = delta' }
+      mod_retroknowledge = retro';
+      mod_delta = delta';
+    }
 
 and subst_module sub do_delta mb =
   subst_body true sub subst_impl do_delta mb
@@ -260,31 +273,11 @@ let do_delta_dom_codom reso sub = subst_dom_codom_delta_resolver sub reso
 let subst_signature subst = subst_signature subst do_delta_codom
 let subst_structure subst = subst_structure subst do_delta_codom
 
-(** {6 Retroknowledge } *)
-
-(* spiwack: here comes the function which takes care of importing
-   the retroknowledge declared in the library *)
-(* lclrk : retroknowledge_action list, rkaction : retroknowledge action *)
-let add_retroknowledge =
-  let perform rkaction env = match rkaction with
-    | Retroknowledge.RKRegister (f, ((GlobRef.ConstRef _ | GlobRef.IndRef _) as e)) ->
-      Environ.register env f e
-    | _ ->
-      CErrors.anomaly ~label:"Modops.add_retroknowledge"
-        (Pp.str "had to import an unsupported kind of term.")
-  in
-  fun (ModBodyRK lclrk) env ->
-  (* The order of the declaration matters, for instance (and it's at the
-     time this comment is being written, the only relevent instance) the
-     int31 type registration absolutely needs int31 bits to be registered.
-     Since the local_retroknowledge is stored in reverse order (each new
-     registration is added at the top of the list) we need a fold_right
-     for things to go right (the pun is not intented). So we lose
-     tail recursivity, but the world will have exploded before any module
-     imports 10 000 retroknowledge registration.*)
-  List.fold_right perform lclrk env
-
 (** {6 Adding a module in the environment } *)
+
+let add_retroknowledge r env =
+  match r with
+  | ModBodyRK l -> List.fold_left Primred.add_retroknowledge env l
 
 let rec add_structure mp sign resolver linkinfo env =
   let add_one env (l,elem) = match elem with
@@ -333,13 +326,10 @@ let strengthen_const mp_from l cb resolver =
   |_ ->
     let kn = KerName.make mp_from l in
     let con = constant_of_delta_kn resolver kn in
-    let u =
-      match cb.const_universes with
-      | Monomorphic_const _ -> Univ.Instance.empty
-      | Polymorphic_const ctx -> Univ.make_abstract_instance ctx
-    in
+    let u = Univ.make_abstract_instance (Declareops.constant_polymorphic_context cb) in
       { cb with
-	const_body = Def (Mod_subst.from_val (mkConstU (con,u)));
+        const_body = Def (Mod_subst.from_val (mkConstU (con,u)));
+        const_private_poly_univs = None;
 	const_body_code = Some (Cemitcodes.from_val (Cbytegen.compile_alias con)) }
 
 let rec strengthen_mod mp_from mp_to mb =
@@ -399,11 +389,12 @@ let inline_delta_resolver env inl mp mbid mtb delta =
 	  let constant = lookup_constant con env in
 	  let l = make_inline delta r in
 	  match constant.const_body with
-	    | Undef _ | OpaqueDef _ -> l
+            | Undef _ | OpaqueDef _ | Primitive _ -> l
 	    | Def body ->
 	      let constr = Mod_subst.force_constr body in
               let ctx = Declareops.constant_polymorphic_context constant in
-              add_inline_delta_resolver kn (lev, Some (ctx, constr)) l
+              let constr = Univ.{univ_abstracted_value=constr; univ_abstracted_binder=ctx} in
+              add_inline_delta_resolver kn (lev, Some constr) l
 	with Not_found ->
 	  error_no_such_label_sub (Constant.label con)
 	    (ModPath.to_string (Constant.modpath con))
@@ -617,11 +608,7 @@ let clean_bounded_mod_expr sign =
 (** {6 Stm machinery } *)
 let join_constant_body except otab cb =
   match cb.const_body with
-  | OpaqueDef o ->
-      (match Opaqueproof.uuid_opaque otab o with
-      | Some uuid when not(Future.UUIDSet.mem uuid except) ->
-          Opaqueproof.join_opaque otab o
-      | _ -> ())
+  | OpaqueDef o -> Opaqueproof.join_opaque ~except otab o
   | _ -> ()
 
 let join_structure except otab s =

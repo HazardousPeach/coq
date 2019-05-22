@@ -39,30 +39,23 @@ module V82 : sig
   (* Access to ".evar_concl" *)
   val concl : Evd.evar_map -> goal -> EConstr.constr
 
-  (* Access to ".evar_extra" *)
-  val extra : Evd.evar_map -> goal -> Evd.Store.t
-
-  (* Old style mk_goal primitive, returns a new goal with corresponding 
+  (* Old style mk_goal primitive, returns a new goal with corresponding
        hypotheses and conclusion, together with a term which is precisely
        the evar corresponding to the goal, and an updated evar_map. *)
   val mk_goal : Evd.evar_map -> 
                          Environ.named_context_val ->
                          EConstr.constr ->
-                         Evd.Store.t ->
                          goal * EConstr.constr * Evd.evar_map
 
   (* Instantiates a goal with an open term *)
-  val partial_solution : Evd.evar_map -> goal -> EConstr.constr -> Evd.evar_map
+  val partial_solution : Environ.env -> Evd.evar_map -> goal -> EConstr.constr -> Evd.evar_map
 
   (* Instantiates a goal with an open term, reusing name of goal for
      second goal *)
-  val partial_solution_to : Evd.evar_map -> goal -> goal -> EConstr.constr -> Evd.evar_map
+  val partial_solution_to : Environ.env -> Evd.evar_map -> goal -> goal -> EConstr.constr -> Evd.evar_map
 
   (* Principal part of the progress tactical *)
   val progress : goal list Evd.sigma -> goal Evd.sigma -> bool
-
- (* Principal part of tclNOTSAMEGOAL *)
-  val same_goal : Evd.evar_map -> goal -> Evd.evar_map -> goal -> bool
 
   (* Used by the compatibility layer and typeclasses *)
   val nf_evar : Evd.evar_map -> goal -> goal * Evd.evar_map

@@ -38,6 +38,8 @@ val lift_inductive_family  : int -> inductive_family -> inductive_family
 val substnl_ind_family :
   constr list -> int -> inductive_family -> inductive_family
 
+val relevance_of_inductive_family : env -> inductive_family -> Sorts.relevance
+
 (** An inductive type with its parameters and real arguments *)
 type inductive_type = IndType of inductive_family * EConstr.constr list
 val make_ind_type : inductive_family * EConstr.constr list -> inductive_type
@@ -46,6 +48,8 @@ val map_inductive_type : (EConstr.constr -> EConstr.constr) -> inductive_type ->
 val liftn_inductive_type : int -> int -> inductive_type -> inductive_type
 val lift_inductive_type  : int -> inductive_type -> inductive_type
 val substnl_ind_type : EConstr.constr list -> int -> inductive_type -> inductive_type
+
+val relevance_of_inductive_type : env -> inductive_type -> Sorts.relevance
 
 val mkAppliedInd : inductive_type -> EConstr.constr
 val mis_is_recursive_subset : int list -> wf_paths -> bool
@@ -57,70 +61,85 @@ val mis_nf_constructor_type :
 (** {6 Extract information from an inductive name} *)
 
 (** @return number of constructors *)
-val nconstructors : inductive -> int
+val nconstructors : env -> inductive -> int
 val nconstructors_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.nconstructors"]
 
 (** @return arity of constructors excluding parameters, excluding local defs *)
-val constructors_nrealargs : inductive -> int array
+val constructors_nrealargs : env -> inductive -> int array
 val constructors_nrealargs_env : env -> inductive -> int array
+[@@ocaml.deprecated "Alias for Inductiveops.constructors_nrealargs"]
 
 (** @return arity of constructors excluding parameters, including local defs *)
-val constructors_nrealdecls : inductive -> int array
+val constructors_nrealdecls : env -> inductive -> int array
 val constructors_nrealdecls_env : env -> inductive -> int array
+[@@ocaml.deprecated "Alias for Inductiveops.constructors_nrealdecls"]
 
 (** @return the arity, excluding params, excluding local defs *)
-val inductive_nrealargs : inductive -> int
+val inductive_nrealargs : env -> inductive -> int
 val inductive_nrealargs_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nrealargs"]
 
 (** @return the arity, excluding params, including local defs *)
-val inductive_nrealdecls : inductive -> int
+val inductive_nrealdecls : env -> inductive -> int
 val inductive_nrealdecls_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nrealdecls"]
 
 (** @return the arity, including params, excluding local defs *)
-val inductive_nallargs : inductive -> int
+val inductive_nallargs : env -> inductive -> int
 val inductive_nallargs_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nallargs"]
 
 (** @return the arity, including params, including local defs *)
-val inductive_nalldecls : inductive -> int
+val inductive_nalldecls : env -> inductive -> int
 val inductive_nalldecls_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nalldecls"]
 
 (** @return nb of params without local defs *)
-val inductive_nparams : inductive -> int
+val inductive_nparams : env -> inductive -> int
 val inductive_nparams_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nparams"]
 
 (** @return nb of params with local defs *)
-val inductive_nparamdecls : inductive -> int
+val inductive_nparamdecls : env -> inductive -> int
 val inductive_nparamdecls_env : env -> inductive -> int
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_nparamsdecls"]
 
 (** @return params context *)
-val inductive_paramdecls : pinductive -> Constr.rel_context
+val inductive_paramdecls : env -> pinductive -> Constr.rel_context
 val inductive_paramdecls_env : env -> pinductive -> Constr.rel_context
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_paramsdecl"]
 
 (** @return full arity context, hence with letin *)
-val inductive_alldecls : pinductive -> Constr.rel_context
+val inductive_alldecls : env -> pinductive -> Constr.rel_context
 val inductive_alldecls_env : env -> pinductive -> Constr.rel_context
+[@@ocaml.deprecated "Alias for Inductiveops.inductive_alldecls"]
 
 (** {7 Extract information from a constructor name} *)
 
 (** @return param + args without letin *)
-val constructor_nallargs : constructor -> int
+val constructor_nallargs : env -> constructor -> int
 val constructor_nallargs_env : env -> constructor -> int
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nallargs"]
 
 (** @return param + args with letin *)
-val constructor_nalldecls : constructor -> int
+val constructor_nalldecls : env -> constructor -> int
 val constructor_nalldecls_env : env -> constructor -> int
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nalldecls"]
 
 (** @return args without letin *)
-val constructor_nrealargs : constructor -> int
+val constructor_nrealargs : env -> constructor -> int
 val constructor_nrealargs_env : env -> constructor -> int
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nrealargs"]
 
 (** @return args with letin *)
-val constructor_nrealdecls : constructor -> int
+val constructor_nrealdecls : env -> constructor -> int
 val constructor_nrealdecls_env : env -> constructor -> int
+[@@ocaml.deprecated "Alias for Inductiveops.constructor_nrealdecls"]
 
 (** Is there local defs in params or args ? *)
-val constructor_has_local_defs : constructor -> bool
-val inductive_has_local_defs : inductive -> bool
+val constructor_has_local_defs : env -> constructor -> bool
+val inductive_has_local_defs : env -> inductive -> bool
 
 val allowed_sorts : env -> inductive -> Sorts.family list
 
@@ -176,7 +195,7 @@ val type_case_branches_with_names :
   env -> evar_map -> pinductive * EConstr.constr list -> constr -> constr -> types array * types
 
 (** Annotation for cases *)
-val make_case_info : env -> inductive -> case_style -> case_info
+val make_case_info : env -> inductive -> Sorts.relevance -> case_style -> case_info
 
 (** Make a case or substitute projections if the inductive type is a record
     with primitive projections.
@@ -193,14 +212,6 @@ i*)
 val compute_projections : Environ.env -> inductive -> (constr * types) array
 (** Given a primitive record type, for every field computes the eta-expanded
     projection and its type. *)
-
-val legacy_match_projection : Environ.env -> inductive -> constr array
-(** Given a record type, computes the legacy match-based projection of the
-    projections.
-
-    BEWARE: such terms are ill-typed, and should thus only be used in upper
-    layers. The kernel will probably badly fail if presented with one of
-    those. *)
 
 (********************)
 

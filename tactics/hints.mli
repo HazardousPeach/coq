@@ -122,7 +122,7 @@ val glob_hints_path :
 module Hint_db :
   sig
     type t
-    val empty : ?name:hint_db_name -> transparent_state -> bool -> t
+    val empty : ?name:hint_db_name -> TransparentState.t -> bool -> t
     val find : GlobRef.t -> t -> search_entry
 
     (** All hints which have no pattern.
@@ -155,13 +155,16 @@ module Hint_db :
                 hint_mode array list -> full_hint list -> unit) -> t -> unit
 
     val use_dn : t -> bool
-    val transparent_state : t -> transparent_state
-    val set_transparent_state : t -> transparent_state -> t
+    val transparent_state : t -> TransparentState.t
+    val set_transparent_state : t -> TransparentState.t -> t
 
     val add_cut : hints_path -> t -> t
     val cut : t -> hints_path
 
     val unfolds : t -> Id.Set.t * Cset.t
+
+    val add_modes : hint_mode array list GlobRef.Map.t -> t -> t
+    val modes : t -> hint_mode array list GlobRef.Map.t
   end
 
 type hint_db = Hint_db.t
@@ -191,7 +194,7 @@ val searchtable_add : (hint_db_name * hint_db) -> unit
    [use_dn] switches the use of the discrimination net for all hints
    and patterns. *)
 
-val create_hint_db : bool -> hint_db_name -> transparent_state -> bool -> unit
+val create_hint_db : bool -> hint_db_name -> TransparentState.t -> bool -> unit
 
 val remove_hints : bool -> hint_db_name list -> GlobRef.t list -> unit
 
@@ -273,14 +276,9 @@ val repr_hint : hint -> (raw_hint * clausenv) hint_ast
    Useful to take the current goal hypotheses as hints;
    Boolean tells if lemmas with evars are allowed *)
 
-val make_local_hint_db : env -> evar_map -> ?ts:transparent_state -> bool -> delayed_open_constr list -> hint_db
+val make_local_hint_db : env -> evar_map -> ?ts:TransparentState.t -> bool -> delayed_open_constr list -> hint_db
 
 val make_db_list : hint_db_name list -> hint_db list
-
-(** Initially created hint databases, for typeclasses and rewrite *)
-
-val typeclasses_db : hint_db_name
-val rewrite_db : hint_db_name
 
 val wrap_hint_warning : 'a Proofview.tactic -> 'a Proofview.tactic
 (** Use around toplevel calls to hint-using tactics, to enable the tracking of
@@ -294,7 +292,7 @@ val wrap_hint_warning_fun : env -> evar_map ->
 (** Printing  hints *)
 
 val pr_searchtable : env -> evar_map -> Pp.t
-val pr_applicable_hint : unit -> Pp.t
+val pr_applicable_hint : Proof_global.t -> Pp.t
 val pr_hint_ref : env -> evar_map -> GlobRef.t -> Pp.t
 val pr_hint_db_by_name : env -> evar_map -> hint_db_name -> Pp.t
 val pr_hint_db_env : env -> evar_map -> Hint_db.t -> Pp.t

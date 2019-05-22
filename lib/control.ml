@@ -57,13 +57,13 @@ let windows_timeout n f x e =
     done
   in
   let init = Unix.gettimeofday () in
-  let _id = Thread.create thread init in
+  let _id = CThread.create thread init in
   try
     let res = f x in
     let () = killed := true in
     let cur = Unix.gettimeofday () in
-    (** The thread did not interrupt, but the computation took longer than
-        expected. *)
+    (* The thread did not interrupt, but the computation took longer than
+       expected. *)
     let () = if float_of_int n <= cur -. init then begin
       exited := true;
       raise Sys.Break
@@ -71,7 +71,7 @@ let windows_timeout n f x e =
     res
   with
   | Sys.Break ->
-    (** Just in case, it could be a regular Ctrl+C *)
+    (* Just in case, it could be a regular Ctrl+C *)
     if not !exited then begin killed := true; raise Sys.Break end
     else raise e
   | e ->
@@ -89,3 +89,21 @@ let timeout_fun_ref = ref timeout_fun
 let set_timeout f = timeout_fun_ref := f
 
 let timeout n f e = !timeout_fun_ref.timeout n f e
+
+let protect_sigalrm f x =
+  let timed_out = ref false in
+  let timeout_handler _ = timed_out := true in
+  try
+    let old_handler = Sys.signal Sys.sigalrm (Sys.Signal_handle timeout_handler) in
+    try
+      let res = f x in
+      Sys.set_signal Sys.sigalrm old_handler;
+      match !timed_out, old_handler with
+      | true, Sys.Signal_handle f -> f Sys.sigalrm; res
+      | _, _ -> res
+    with e ->
+      let e = Backtrace.add_backtrace e in
+      Sys.set_signal Sys.sigalrm old_handler;
+      Exninfo.iraise e
+  with Invalid_argument _ -> (* This happens on Windows, as handling SIGALRM does not seem supported *)
+    f x

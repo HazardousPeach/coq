@@ -18,8 +18,6 @@ val get_name : Id.t list -> ?default:string -> Name.t -> Name.t
 
 val array_get_start : 'a array -> 'a array
 
-val id_of_name : Name.t -> Id.t
-
 val locate_ind : Libnames.qualid -> inductive
 val locate_constant : Libnames.qualid -> Constant.t
 val locate_with_msg :
@@ -38,24 +36,19 @@ val chop_rlambda_n : int -> Glob_term.glob_constr ->
 val chop_rprod_n : int -> Glob_term.glob_constr ->
   (Name.t*Glob_term.glob_constr) list * Glob_term.glob_constr
 
-val def_of_const : Constr.t -> Constr.t
 val eq : EConstr.constr Lazy.t
 val refl_equal : EConstr.constr Lazy.t
 val const_of_id: Id.t ->  GlobRef.t(* constantyes *)
 val jmeq : unit -> EConstr.constr
 val jmeq_refl : unit -> EConstr.constr
 
-val save : bool -> Id.t -> Safe_typing.private_constants Entries.definition_entry  -> Decl_kinds.goal_kind ->
-  Lemmas.declaration_hook CEphemeron.key -> unit
-
-(* [get_proof_clean do_reduce] : returns the proof name, definition, kind and hook and
-   abort the proof
-*)
-val get_proof_clean : bool ->
-  Names.Id.t *
-    (Safe_typing.private_constants Entries.definition_entry * Decl_kinds.goal_kind)
-
-
+val save
+  :  Id.t
+  -> Safe_typing.private_constants Entries.definition_entry
+  -> ?hook:Lemmas.declaration_hook
+  -> UState.t
+  -> Decl_kinds.goal_kind
+  -> unit
 
 (* [with_full_print f a] applies [f] to [a] in full printing environment.
 
@@ -76,6 +69,7 @@ type function_info =
       rect_lemma : Constant.t option;
       rec_lemma : Constant.t option;
       prop_lemma : Constant.t option;
+      sprop_lemma : Constant.t option;
       is_general : bool;
     }
 
@@ -83,14 +77,11 @@ val find_Function_infos : Constant.t -> function_info
 val find_Function_of_graph : inductive -> function_info
 (* WARNING: To be used just after the graph definition !!! *)
 val add_Function : bool -> Constant.t -> unit
-
 val update_Function : function_info -> unit
 
-
 (** debugging *)
-val pr_info : function_info -> Pp.t
-val pr_table : unit -> Pp.t
-
+val pr_info : Environ.env -> Evd.evar_map -> function_info -> Pp.t
+val pr_table : Environ.env -> Evd.evar_map -> Pp.t
 
 (* val function_debug : bool ref  *)
 val do_observe : unit -> bool
@@ -115,9 +106,9 @@ val evaluable_of_global_reference : GlobRef.t -> Names.evaluable_global_referenc
 val list_rewrite : bool -> (EConstr.constr*bool) list -> Tacmach.tactic
 
 val decompose_lam_n : Evd.evar_map -> int -> EConstr.t ->
-  (Names.Name.t * EConstr.t) list * EConstr.t
-val compose_lam : (Names.Name.t * EConstr.t) list -> EConstr.t -> EConstr.t
-val compose_prod : (Names.Name.t * EConstr.t) list -> EConstr.t -> EConstr.t
+  (Names.Name.t Context.binder_annot * EConstr.t) list * EConstr.t
+val compose_lam : (Names.Name.t Context.binder_annot * EConstr.t) list -> EConstr.t -> EConstr.t
+val compose_prod : (Names.Name.t Context.binder_annot * EConstr.t) list -> EConstr.t -> EConstr.t
 
 type tcc_lemma_value =
   | Undefined

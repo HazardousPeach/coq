@@ -19,11 +19,9 @@ let prtac x =
   Pptactic.pr_glob_tactic (Global.env()) x
 let prmatchpatt env sigma hyp =
   Pptactic.pr_match_pattern (Printer.pr_constr_pattern_env env sigma) hyp
-let prmatchrl rl =
+let prmatchrl env sigma rl =
   Pptactic.pr_match_rule false (Pptactic.pr_glob_tactic (Global.env()))
-    (fun (_,p) ->
-       let sigma, env = Pfedit.get_current_context () in
-       Printer.pr_constr_pattern_env env sigma p) rl
+    (fun (_,p) -> Printer.pr_constr_pattern_env env sigma p) rl
 
 (* This module intends to be a beginning of debugger for tactic expressions.
    Currently, it is quite simple and we can hope to have, in the future, a more
@@ -89,7 +87,7 @@ let batch = ref false
 
 open Goptions
 
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "Ltac batch debug";
@@ -246,13 +244,13 @@ let db_constr debug env sigma c =
   else return ()
 
 (* Prints the pattern rule *)
-let db_pattern_rule debug num r =
+let db_pattern_rule debug env sigma num r =
   let open Proofview.NonLogical in
   is_debug debug >>= fun db ->
   if db then
   begin
     msg_tac_debug (str "Pattern rule " ++ int num ++ str ":" ++ fnl () ++
-      str "|" ++ spc () ++ prmatchrl r)
+      str "|" ++ spc () ++ prmatchrl env sigma r)
   end
   else return ()
 
@@ -365,14 +363,17 @@ let explain_ltac_call_trace last trace loc =
         Pptactic.pr_glob_tactic (Global.env()) t ++ str ")"
   | Tacexpr.LtacAtomCall te ->
       quote (Pptactic.pr_glob_tactic (Global.env())
-              (Tacexpr.TacAtom (Loc.tag te)))
+              (Tacexpr.TacAtom (CAst.make te)))
   | Tacexpr.LtacConstrInterp (c, { Ltac_pretype.ltac_constrs = vars }) ->
       quote (Printer.pr_glob_constr_env (Global.env()) c) ++
         (if not (Id.Map.is_empty vars) then
           strbrk " (with " ++
             prlist_with_sep pr_comma
             (fun (id,c) ->
-              let sigma, env = Pfedit.get_current_context () in
+              (* XXX: This hooks into the ExplainErr extension API
+                 so it is tricky to provide the right env for now. *)
+              let env = Global.env () in
+              let sigma = Evd.from_env env in
               Id.print id ++ str ":=" ++ Printer.pr_lconstr_under_binders_env env sigma c)
             (List.rev (Id.Map.bindings vars)) ++ str ")"
         else mt())

@@ -41,20 +41,21 @@ let simple_goal sigma g gs =
   let open Evd in
   let open Evarutil in
   let evi = Evd.find sigma g in
-  Set.is_empty (evars_of_term (EConstr.Unsafe.to_constr evi.evar_concl)) &&
-  Set.is_empty (evars_of_filtered_evar_info (nf_evar_info sigma evi)) &&
+  Set.is_empty (evars_of_term sigma evi.evar_concl) &&
+  Set.is_empty (evars_of_filtered_evar_info sigma (nf_evar_info sigma evi)) &&
   not (List.exists (Proofview.depends_on sigma g) gs)
 
 let is_focused_goal_simple ~doc id =
   match state_of_id ~doc id with
   | `Expired | `Error _ | `Valid None -> `Not
   | `Valid (Some { Vernacstate.proof }) ->
-       let proof = Proof_global.proof_of_state proof in
-       let focused, r1, r2, r3, sigma = Proof.proof proof in
-       let rest = List.(flatten (map (fun (x,y) -> x @ y) r1)) @ r2 @ r3 in
-       if List.for_all (fun x -> simple_goal sigma x rest) focused
-       then `Simple focused
-       else `Not
+    Option.cata (fun proof ->
+        let proof = Proof_global.give_me_the_proof proof in
+        let Proof.{ goals=focused; stack=r1; shelf=r2; given_up=r3; sigma } = Proof.data proof in
+        let rest = List.(flatten (map (fun (x,y) -> x @ y) r1)) @ r2 @ r3 in
+        if List.for_all (fun x -> simple_goal sigma x rest) focused
+        then `Simple focused
+        else `Not) `Not proof
 
 type 'a until = [ `Stop | `Found of static_block_declaration | `Cont of 'a ]
 
@@ -98,7 +99,7 @@ let dynamic_bullet doc { dynamic_switch = id; carry_on_data = b } =
       `ValidBlock {
          base_state = id;
          goals_to_admit = focused;
-         recovery_command = Some (Vernacexpr.VernacExpr([], Vernacexpr.VernacBullet (to_bullet_val b)))
+         recovery_command = Some (CAst.make @@ Vernacexpr.VernacExpr([], Vernacexpr.VernacBullet (to_bullet_val b)))
       }
   | `Not -> `Leaks
 
@@ -127,7 +128,7 @@ let dynamic_curly_brace doc { dynamic_switch = id } =
       `ValidBlock {
          base_state = id;
          goals_to_admit = focused;
-         recovery_command = Some (Vernacexpr.VernacExpr ([], Vernacexpr.VernacEndSubproof))
+         recovery_command = Some (CAst.make @@ Vernacexpr.VernacExpr ([], Vernacexpr.VernacEndSubproof))
       }
   | `Not -> `Leaks
 

@@ -99,7 +99,7 @@ val get_library_native_symbols : library_name -> Nativecode.symbols
 val start_library : library_name -> unit
 
 val end_library :
-  ?except:Future.UUIDSet.t -> library_name ->
+  ?except:Future.UUIDSet.t -> output_native_objects:bool -> library_name ->
     Safe_typing.compiled_library * library_objects * Safe_typing.native_library
 
 (** append a function to be executed at end_library *)
@@ -130,7 +130,7 @@ val declare_include :
     (together with their section path). *)
 
 val iter_all_segments :
-  (Libnames.object_name -> Libobject.obj -> unit) -> unit
+  (Libobject.object_name -> Libobject.obj -> unit) -> unit
 
 
 val debug_print_modtab : unit -> Pp.t

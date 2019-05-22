@@ -65,6 +65,7 @@ type implicit_explanation =
      operational only if [conclusion_matters] is true. *)
 
 type maximal_insertion = bool (** true = maximal contextual insertion *)
+
 type force_inference = bool (** true = always infer, never turn into evar/subgoal *)
 
 type implicit_status = (Id.t * implicit_explanation * 
@@ -111,12 +112,19 @@ val declare_implicits : bool -> GlobRef.t -> unit
    Unsets implicits if [l] is empty. *)
 
 val declare_manual_implicits : bool -> GlobRef.t -> ?enriching:bool ->
-  manual_implicits list -> unit
+  manual_implicits -> unit
 
 (** If the list is empty, do nothing, otherwise declare the implicits. *)
 
 val maybe_declare_manual_implicits : bool -> GlobRef.t -> ?enriching:bool ->
   manual_implicits -> unit
+
+type implicit_kind = Implicit | MaximallyImplicit | NotImplicit
+
+(** [set_implicits local ref l]
+   Manual declaration of implicit arguments.
+  `l` is a list of possible sequences of implicit statuses. *)
+val set_implicits : bool -> GlobRef.t -> implicit_kind list list -> unit
 
 val implicits_of_global : GlobRef.t -> implicits_list list
 
@@ -135,6 +143,3 @@ val projection_implicits : env -> Projection.t -> implicit_status list ->
 val select_impargs_size : int -> implicits_list list -> implicit_status list
 
 val select_stronger_impargs : implicits_list list -> implicit_status list
-
-val explicitation_eq : Constrexpr.explicitation -> Constrexpr.explicitation -> bool
-(** Equality on [explicitation]. *)

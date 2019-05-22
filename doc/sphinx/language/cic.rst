@@ -20,9 +20,9 @@ There are types for functions (or programs), there are atomic types
 (especially datatypes)... but also types for proofs and types for the
 types themselves. Especially, any object handled in the formalism must
 belong to a type. For instance, universal quantification is relative
-to a type and takes the form "*for all x of type T, P* ". The expression
-“x of type T” is written :g:`x:T`. Informally, :g:`x:T` can be thought as
-“x belongs to T”.
+to a type and takes the form “*for all x of type* :math:`T`, :math:`P`”. The expression
+“:math:`x` *of type* :math:`T`” is written “:math:`x:T`”. Informally, “:math:`x:T`” can be thought as
+“:math:`x` *belongs to* :math:`T`”.
 
 The types of types are *sorts*. Types and sorts are themselves terms
 so that terms, types and sorts are all components of a common
@@ -36,22 +36,30 @@ Sorts
 ~~~~~~~~~~~
 
 All sorts have a type and there is an infinite well-founded typing
-hierarchy of sorts whose base sorts are :math:`\Prop` and :math:`\Set`.
+hierarchy of sorts whose base sorts are :math:`\SProp`, :math:`\Prop`
+and :math:`\Set`.
 
 The sort :math:`\Prop` intends to be the type of logical propositions. If :math:`M` is a
 logical proposition then it denotes the class of terms representing
 proofs of :math:`M`. An object :math:`m` belonging to :math:`M` witnesses the fact that :math:`M` is
 provable. An object of type :math:`\Prop` is called a proposition.
 
+The sort :math:`\SProp` is like :math:`\Prop` but the propositions in
+:math:`\SProp` are known to have irrelevant proofs (all proofs are
+equal). Objects of type :math:`\SProp` are called strict propositions.
+:math:`\SProp` is rejected except when using the compiler option
+``-allow-sprop``. See :ref:`sprop` for information about using
+:math:`\SProp`.
+
 The sort :math:`\Set` intends to be the type of small sets. This includes data
 types such as booleans and naturals, but also products, subsets, and
 function types over these data types.
 
-:math:`\Prop` and :math:`\Set` themselves can be manipulated as ordinary terms.
+:math:`\SProp`, :math:`\Prop` and :math:`\Set` themselves can be manipulated as ordinary terms.
 Consequently they also have a type. Because assuming simply that :math:`\Set`
 has type :math:`\Set` leads to an inconsistent theory :cite:`Coq86`, the language of
-|Cic| has infinitely many sorts. There are, in addition to :math:`\Set` and :math:`\Prop`
-a hierarchy of universes :math:`\Type(i)` for any integer :math:`i`.
+|Cic| has infinitely many sorts. There are, in addition to the base sorts,
+a hierarchy of universes :math:`\Type(i)` for any integer :math:`i ≥ 1`.
 
 Like :math:`\Set`, all of the sorts :math:`\Type(i)` contain small sets such as
 booleans, natural numbers, as well as products, subsets and function
@@ -63,7 +71,7 @@ Formally, we call :math:`\Sort` the set of sorts which is defined by:
 
 .. math::
    
-   \Sort \equiv \{\Prop,\Set,\Type(i)\;|\; i~∈ ℕ\}
+   \Sort \equiv \{\SProp,\Prop,\Set,\Type(i)\;|\; i~∈ ℕ\}
 
 Their properties, such as: :math:`\Prop:\Type(1)`, :math:`\Set:\Type(1)`, and
 :math:`\Type(i):\Type(i+1)`, are defined in Section :ref:`subtyping-rules`.
@@ -84,7 +92,7 @@ implemented using *algebraic
 universes*. An algebraic universe :math:`u` is either a variable (a qualified
 identifier with a number) or a successor of an algebraic universe (an
 expression :math:`u+1`), or an upper bound of algebraic universes (an
-expression :math:`\max(u 1 ,...,u n )`), or the base universe (the expression
+expression :math:`\max(u_1 ,...,u_n )`), or the base universe (the expression
 :math:`0`) which corresponds, in the arity of template polymorphic inductive
 types (see Section
 :ref:`well-formed-inductive-definitions`),
@@ -113,28 +121,28 @@ language of the *Calculus of Inductive Constructions* is built from
 the following rules.
 
 
-#. the sorts :math:`\Set`, :math:`\Prop`, :math:`\Type(i)` are terms.
+#. the sorts :math:`\SProp`, :math:`\Prop`, :math:`\Set`, :math:`\Type(i)` are terms.
 #. variables, hereafter ranged over by letters :math:`x`, :math:`y`, etc., are terms
 #. constants, hereafter ranged over by letters :math:`c`, :math:`d`, etc., are terms.
 #. if :math:`x` is a variable and :math:`T`, :math:`U` are terms then
-   :math:`∀ x:T,U` (:g:`forall x:T, U`   in |Coq| concrete syntax) is a term.
-   If :math:`x` occurs in :math:`U`, :math:`∀ x:T,U` reads as
+   :math:`∀ x:T,~U` (:g:`forall x:T, U`   in |Coq| concrete syntax) is a term.
+   If :math:`x` occurs in :math:`U`, :math:`∀ x:T,~U` reads as
    “for all :math:`x` of type :math:`T`, :math:`U`”.
-   As :math:`U` depends on :math:`x`, one says that :math:`∀ x:T,U` is
+   As :math:`U` depends on :math:`x`, one says that :math:`∀ x:T,~U` is
    a *dependent product*. If :math:`x` does not occur in :math:`U` then
-   :math:`∀ x:T,U` reads as
+   :math:`∀ x:T,~U` reads as
    “if :math:`T` then :math:`U`”. A *non dependent product* can be
    written: :math:`T \rightarrow U`.
 #. if :math:`x` is a variable and :math:`T`, :math:`u` are terms then
-   :math:`λ x:T . u` (:g:`fun x:T => u`
+   :math:`λ x:T .~u` (:g:`fun x:T => u`
    in |Coq| concrete syntax) is a term. This is a notation for the
-   λ-abstraction of λ-calculus :cite:`Bar81`. The term :math:`λ x:T . u` is a function
+   λ-abstraction of λ-calculus :cite:`Bar81`. The term :math:`λ x:T .~u` is a function
    which maps elements of :math:`T` to the expression :math:`u`.
 #. if :math:`t` and :math:`u` are terms then :math:`(t~u)` is a term
    (:g:`t u` in |Coq| concrete
-   syntax). The term :math:`(t~u)` reads as “t applied to u”.
-#. if :g:`x` is a variable, and :math:`t`, :math:`T` and :math:`u` are
-   terms then :g:`let x:=t:T in u` is
+   syntax). The term :math:`(t~u)` reads as “:math:`t` applied to :math:`u`”.
+#. if :math:`x` is a variable, and :math:`t`, :math:`T` and :math:`u` are
+   terms then :math:`\letin{x}{t:T}{u}` is
    a term which denotes the term :math:`u` where the variable :math:`x` is locally bound
    to :math:`t` of type :math:`T`. This stands for the common “let-in” construction of
    functional programs such as ML or Scheme.
@@ -145,7 +153,7 @@ the following rules.
 
 **Free variables.**
 The notion of free variables is defined as usual. In the expressions
-:g:`λx:T. U` and :g:`∀ x:T, U` the occurrences of :math:`x` in :math:`U` are bound.
+:math:`λx:T.~U` and :math:`∀ x:T,~U` the occurrences of :math:`x` in :math:`U` are bound.
 
 
 .. _Substitution:
@@ -172,11 +180,11 @@ implicative proposition, to denote :math:`\nat →\Prop` which is the type of
 unary predicates over the natural numbers, etc.
 
 Let us assume that ``mult`` is a function of type :math:`\nat→\nat→\nat` and ``eqnat`` a
-predicate of type \nat→\nat→ \Prop. The λ-abstraction can serve to build
-“ordinary” functions as in :math:`λ x:\nat.(\kw{mult}~x~x)` (i.e.
+predicate of type :math:`\nat→\nat→ \Prop`. The λ-abstraction can serve to build
+“ordinary” functions as in :math:`λ x:\nat.~(\kw{mult}~x~x)` (i.e.
 :g:`fun x:nat => mult x x`
 in |Coq| notation) but may build also predicates over the natural
-numbers. For instance :math:`λ x:\nat.(\kw{eqnat}~x~0)`
+numbers. For instance :math:`λ x:\nat.~(\kw{eqnat}~x~0)`
 (i.e. :g:`fun x:nat => eqnat x 0`
 in |Coq| notation) will represent the predicate of one variable :math:`x` which
 asserts the equality of :math:`x` with :math:`0`. This predicate has type
@@ -186,7 +194,7 @@ object :math:`P~t` of type :math:`\Prop`, namely a proposition.
 
 Furthermore :g:`forall x:nat, P x` will represent the type of functions
 which associate to each natural number :math:`n` an object of type :math:`(P~n)` and
-consequently represent the type of proofs of the formula “:math:`∀ x. P(x`)”.
+consequently represent the type of proofs of the formula “:math:`∀ x.~P(x)`”.
 
 
 .. _Typing-rules:
@@ -206,7 +214,7 @@ A *local context* is an ordered list of *local declarations* of names
 which we call *variables*. The declaration of some variable :math:`x` is
 either a *local assumption*, written :math:`x:T` (:math:`T` is a type) or a *local
 definition*, written :math:`x:=t:T`. We use brackets to write local contexts.
-A typical example is :math:`[x:T;y:=u:U;z:V]`. Notice that the variables
+A typical example is :math:`[x:T;~y:=u:U;~z:V]`. Notice that the variables
 declared in a local context must be distinct. If :math:`Γ` is a local context
 that declares some :math:`x`, we
 write :math:`x ∈ Γ`. By writing :math:`(x:T) ∈ Γ` we mean that either :math:`x:T` is an
@@ -216,7 +224,7 @@ For the rest of the chapter, :math:`Γ::(y:T)` denotes the local context :math:`
 enriched with the local assumption :math:`y:T`. Similarly, :math:`Γ::(y:=t:T)` denotes
 the local context :math:`Γ` enriched with the local definition :math:`(y:=t:T)`. The
 notation :math:`[]` denotes the empty local context. By :math:`Γ_1 ; Γ_2` we mean
-concatenation of the local context :math:`Γ_1` and the local context :math:`Γ_2` .
+concatenation of the local context :math:`Γ_1` and the local context :math:`Γ_2`.
 
 
 .. _Global-environment:
@@ -232,9 +240,9 @@ A *global assumption* will be represented in the global environment as
 :math:`(c:T)` which assumes the name :math:`c` to be of some type :math:`T`. A *global
 definition* will be represented in the global environment as :math:`c:=t:T`
 which defines the name :math:`c` to have value :math:`t` and type :math:`T`. We shall call
-such names *constants*. For the rest of the chapter, the :math:`E;c:T` denotes
+such names *constants*. For the rest of the chapter, the :math:`E;~c:T` denotes
 the global environment :math:`E` enriched with the global assumption :math:`c:T`.
-Similarly, :math:`E;c:=t:T` denotes the global environment :math:`E` enriched with the
+Similarly, :math:`E;~c:=t:T` denotes the global environment :math:`E` enriched with the
 global definition :math:`(c:=t:T)`.
 
 The rules for inductive definitions (see Section
@@ -284,14 +292,20 @@ following rules.
    s \in \Sort
    c \notin E
    ------------
-   \WF{E;c:T}{}
+   \WF{E;~c:T}{}
 
 .. inference:: W-Global-Def
 
    \WTE{}{t}{T}
    c \notin E
    ---------------
-   \WF{E;c:=t:T}{}
+   \WF{E;~c:=t:T}{}
+
+.. inference:: Ax-SProp
+
+   \WFE{\Gamma}
+   ----------------------
+   \WTEG{\SProp}{\Type(1)}
 
 .. inference:: Ax-Prop
 
@@ -325,39 +339,48 @@ following rules.
    ----------------------------------------------------------
    \WTEG{c}{T}
 
-.. inference:: Prod-Prop
+.. inference:: Prod-SProp
 
    \WTEG{T}{s}
    s \in {\Sort}
+   \WTE{\Gamma::(x:T)}{U}{\SProp}
+   -----------------------------
+   \WTEG{\forall~x:T,U}{\SProp}
+
+.. inference:: Prod-Prop
+
+   \WTEG{T}{s}
+   s \in \Sort
    \WTE{\Gamma::(x:T)}{U}{\Prop}
    -----------------------------
-   \WTEG{\forall~x:T,U}{\Prop}
+   \WTEG{∀ x:T,~U}{\Prop}
 
 .. inference:: Prod-Set
 
    \WTEG{T}{s}
-   s \in \{\Prop, \Set\}
+   s \in \{\SProp, \Prop, \Set\}
    \WTE{\Gamma::(x:T)}{U}{\Set}
    ----------------------------
-   \WTEG{\forall~x:T,U}{\Set}
+   \WTEG{∀ x:T,~U}{\Set}
 
 .. inference:: Prod-Type
 
-   \WTEG{T}{\Type(i)}
+   \WTEG{T}{s}
+   s \in \{\SProp, \Type{i}\}
    \WTE{\Gamma::(x:T)}{U}{\Type(i)}
    --------------------------------
-   \WTEG{\forall~x:T,U}{\Type(i)}
+   \WTEG{∀ x:T,~U}{\Type(i)}
 
 .. inference:: Lam
 
-   \WTEG{\forall~x:T,U}{s}
+   \WTEG{∀ x:T,~U}{s}
    \WTE{\Gamma::(x:T)}{t}{U}
    ------------------------------------
-   \WTEG{\lb x:T\mto t}{\forall x:T, U}
+   \WTEG{λ x:T\mto t}{∀ x:T,~U}
 
 .. inference:: App
 
-   \WTEG{t}{\forall~x:U,T}
+   \WTEG{t}{∀ x:U,~T}
    \WTEG{u}{U}
    ------------------------------
    \WTEG{(t\ u)}{\subst{T}{x}{u}}
@@ -383,7 +406,7 @@ following rules.
 
 .. note::
    We may have :math:`\letin{x}{t:T}{u}` well-typed without having
-   :math:`((λ x:T.u) t)` well-typed (where :math:`T` is a type of
+   :math:`((λ x:T.~u)~t)` well-typed (where :math:`T` is a type of
    :math:`t`). This is because the value :math:`t` associated to
    :math:`x` may be used in a conversion rule
    (see Section :ref:`Conversion-rules`).
@@ -406,18 +429,18 @@ can decide if two programs are *intentionally* equal (one says
 
 We want to be able to identify some terms as we can identify the
 application of a function to a given argument with its result. For
-instance the identity function over a given type T can be written
-:math:`λx:T. x`. In any global environment :math:`E` and local context
+instance the identity function over a given type :math:`T` can be written
+:math:`λx:T.~x`. In any global environment :math:`E` and local context
 :math:`Γ`, we want to identify any object :math:`a` (of type
-:math:`T`) with the application :math:`((λ x:T. x) a)`.  We define for
+:math:`T`) with the application :math:`((λ x:T.~x)~a)`.  We define for
 this a *reduction* (or a *conversion*) rule we call :math:`β`:
 
 .. math::
    
-	E[Γ] ⊢ ((λx:T. t) u)~\triangleright_β~\subst{t}{x}{u}
+        E[Γ] ⊢ ((λx:T.~t)~u)~\triangleright_β~\subst{t}{x}{u}
 
 We say that :math:`\subst{t}{x}{u}` is the *β-contraction* of
-:math:`((λx:T. t) u)` and, conversely, that :math:`((λ x:T. t) u)` is the
+:math:`((λx:T.~t)~u)` and, conversely, that :math:`((λ x:T.~t)~u)` is the
 *β-expansion* of :math:`\subst{t}{x}{u}`.
 
 According to β-reduction, terms of the *Calculus of Inductive
@@ -481,7 +504,7 @@ destroyed, this reduction differs from δ-reduction. It is called
    \WTEG{u}{U}
    \WTE{\Gamma::(x:=u:U)}{t}{T}
    --------------
-   E[Γ] ⊢ \letin{x}{u}{t}~\triangleright_ζ~\subst{t}{x}{u}
+   E[Γ] ⊢ \letin{x}{u:U}{t}~\triangleright_ζ~\subst{t}{x}{u}
 
 
 .. _eta-expansion:
@@ -490,10 +513,10 @@ destroyed, this reduction differs from δ-reduction. It is called
 ~~~~~~~~~~~
 
 Another important concept is η-expansion. It is legal to identify any
-term :math:`t` of functional type :math:`∀ x:T, U` with its so-called η-expansion
+term :math:`t` of functional type :math:`∀ x:T,~U` with its so-called η-expansion
 
 .. math::
-   λx:T. (t~x)
+   λx:T.~(t~x)
 
 for :math:`x` an arbitrary variable name fresh in :math:`t`.
 
@@ -503,27 +526,35 @@ for :math:`x` an arbitrary variable name fresh in :math:`t`.
    We deliberately do not define η-reduction:
 
    .. math::
-      λ x:T. (t~x) \not\triangleright_η t
+      λ x:T.~(t~x)~\not\triangleright_η~t
 
    This is because, in general, the type of :math:`t` need not to be convertible
-   to the type of :math:`λ x:T. (t~x)`. E.g., if we take :math:`f` such that:
+   to the type of :math:`λ x:T.~(t~x)`. E.g., if we take :math:`f` such that:
 
    .. math::
-      f : ∀ x:\Type(2),\Type(1)
+      f ~:~ ∀ x:\Type(2),~\Type(1)
    
    then
 
    .. math::
-      λ x:\Type(1),(f~x) : ∀ x:\Type(1),\Type(1)
+      λ x:\Type(1).~(f~x) ~:~ ∀ x:\Type(1),~\Type(1)
    
    We could not allow
 
    .. math::
-      λ x:Type(1),(f x) \triangleright_η f
+      λ x:\Type(1).~(f~x) ~\triangleright_η~ f
    
-   because the type of the reduced term :math:`∀ x:\Type(2),\Type(1)` would not be
-   convertible to the type of the original term :math:`∀ x:\Type(1),\Type(1).`
+   because the type of the reduced term :math:`∀ x:\Type(2),~\Type(1)` would not be
+   convertible to the type of the original term :math:`∀ x:\Type(1),~\Type(1)`.
 
+.. _proof-irrelevance:
+
+Proof Irrelevance
+~~~~~~~~~~~~~~~~~
+
+It is legal to identify any two terms whose common type is a strict
+proposition :math:`A : \SProp`. Terms in a strict propositions are
+therefore called *irrelevant*.
 
 .. _convertibility:
 
@@ -533,19 +564,19 @@ Convertibility
 Let us write :math:`E[Γ] ⊢ t \triangleright u` for the contextual closure of the
 relation :math:`t` reduces to :math:`u` in the global environment
 :math:`E` and local context :math:`Γ` with one of the previous
-reductions β, ι, δ or ζ.
+reductions β, δ, ι or ζ.
 
 We say that two terms :math:`t_1` and :math:`t_2` are
-*βιδζη-convertible*, or simply *convertible*, or *equivalent*, in the
+*βδιζη-convertible*, or simply *convertible*, or *equivalent*, in the
 global environment :math:`E` and local context :math:`Γ` iff there
 exist terms :math:`u_1` and :math:`u_2` such that :math:`E[Γ] ⊢ t_1 \triangleright
 … \triangleright u_1` and :math:`E[Γ] ⊢ t_2 \triangleright … \triangleright u_2` and either :math:`u_1` and
-:math:`u_2` are identical, or they are convertible up to η-expansion,
-i.e. :math:`u_1` is :math:`λ x:T. u_1'` and :math:`u_2 x` is
-recursively convertible to :math:`u_1'` , or, symmetrically,
-:math:`u_2` is :math:`λx:T. u_2'` 
-and :math:`u_1 x` is recursively convertible to u_2′ . We then write
-:math:`E[Γ] ⊢ t_1 =_{βδιζη} t_2` .
+:math:`u_2` are identical up to irrelevant subterms, or they are convertible up to η-expansion,
+i.e. :math:`u_1` is :math:`λ x:T.~u_1'` and :math:`u_2 x` is
+recursively convertible to :math:`u_1'`, or, symmetrically,
+:math:`u_2` is :math:`λx:T.~u_2'`
+and :math:`u_1 x` is recursively convertible to :math:`u_2'`. We then write
+:math:`E[Γ] ⊢ t_1 =_{βδιζη} t_2`.
 
 Apart from this we consider two instances of polymorphic and
 cumulative (see Chapter :ref:`polymorphicuniverses`) inductive types
@@ -601,8 +632,8 @@ Subtyping rules
 -------------------
 
 At the moment, we did not take into account one rule between universes
-which says that any term in a universe of index i is also a term in
-the universe of index i+1 (this is the *cumulativity* rule of |Cic|).
+which says that any term in a universe of index :math:`i` is also a term in
+the universe of index :math:`i+1` (this is the *cumulativity* rule of |Cic|).
 This property extends the equivalence relation of convertibility into
 a *subtyping* relation inductively defined by:
 
@@ -612,27 +643,28 @@ a *subtyping* relation inductively defined by:
 #. for any :math:`i`, :math:`E[Γ] ⊢ \Set ≤_{βδιζη} \Type(i)`,
 #. :math:`E[Γ] ⊢ \Prop ≤_{βδιζη} \Set`, hence, by transitivity,
    :math:`E[Γ] ⊢ \Prop ≤_{βδιζη} \Type(i)`, for any :math:`i`
+   (note: :math:`\SProp` is not related by cumulativity to any other term)
 #. if :math:`E[Γ] ⊢ T =_{βδιζη} U` and
    :math:`E[Γ::(x:T)] ⊢ T' ≤_{βδιζη} U'` then
-   :math:`E[Γ] ⊢ ∀x:T, T′ ≤_{βδιζη} ∀ x:U, U′`.
+   :math:`E[Γ] ⊢ ∀x:T,~T′ ≤_{βδιζη} ∀ x:U,~U′`.
 #. if :math:`\ind{p}{Γ_I}{Γ_C}` is a universe polymorphic and cumulative
    (see Chapter :ref:`polymorphicuniverses`) inductive type (see below)
    and
-   :math:`(t : ∀Γ_P ,∀Γ_{\mathit{Arr}(t)}, \Sort)∈Γ_I`
+   :math:`(t : ∀Γ_P ,∀Γ_{\mathit{Arr}(t)}, S)∈Γ_I`
    and
-   :math:`(t' : ∀Γ_P' ,∀Γ_{\mathit{Arr}(t)}', \Sort')∈Γ_I`
+   :math:`(t' : ∀Γ_P' ,∀Γ_{\mathit{Arr}(t)}', S')∈Γ_I`
    are two different instances of *the same* inductive type (differing only in
    universe levels) with constructors
 
    .. math::
-      [c_1 : ∀Γ_P ,∀ T_{1,1} … T_{1,n_1} , t~v_{1,1} … v_{1,m} ;…;
-      c_k : ∀Γ_P ,∀ T_{k,1} … T_{k,n_k} ,t~v_{n,1} … v_{n,m} ]
+      [c_1 : ∀Γ_P ,∀ T_{1,1} … T_{1,n_1} ,~t~v_{1,1} … v_{1,m} ;~…;~
+       c_k : ∀Γ_P ,∀ T_{k,1} … T_{k,n_k} ,~t~v_{k,1} … v_{k,m} ]
 
    and
 
    .. math::
-      [c_1 : ∀Γ_P' ,∀ T_{1,1}' … T_{1,n_1}' , t'~v_{1,1}' … v_{1,m}' ;…;
-      c_k : ∀Γ_P' ,∀ T_{k,1}' … T_{k,n_k}' ,t'~v_{n,1}' … v_{n,m}' ]
+      [c_1 : ∀Γ_P' ,∀ T_{1,1}' … T_{1,n_1}' ,~t'~v_{1,1}' … v_{1,m}' ;~…;~
+       c_k : ∀Γ_P' ,∀ T_{k,1}' … T_{k,n_k}' ,~t'~v_{k,1}' … v_{k,m}' ]
    
    respectively then
 
@@ -656,8 +688,8 @@ a *subtyping* relation inductively defined by:
    .. math::
       E[Γ] ⊢ A_i ≤_{βδιζη} A_i'
 
-   where :math:`Γ_{\mathit{Arr}(t)} = [a_1 : A_1 ;  … ; a_l : A_l ]` and
-   :math:`Γ_{\mathit{Arr}(t)}' = [a_1 : A_1';  … ; a_l : A_l']`.
+   where :math:`Γ_{\mathit{Arr}(t)} = [a_1 : A_1 ;~ … ;~a_l : A_l ]` and
+   :math:`Γ_{\mathit{Arr}(t)}' = [a_1 : A_1';~ … ;~a_l : A_l']`.
 
 
 The conversion rule up to subtyping is now exactly:
@@ -677,19 +709,19 @@ The conversion rule up to subtyping is now exactly:
 form*. There are several ways (or strategies) to apply the reduction
 rules. Among them, we have to mention the *head reduction* which will
 play an important role (see Chapter :ref:`tactics`). Any term :math:`t` can be written as
-:math:`λ x_1 :T_1 . … λ x_k :T_k . (t_0~t_1 … t_n )` where :math:`t_0` is not an
-application. We say then that :math:`t~0` is the *head of* :math:`t`. If we assume
-that :math:`t_0` is :math:`λ x:T. u_0` then one step of β-head reduction of :math:`t` is:
+:math:`λ x_1 :T_1 .~… λ x_k :T_k .~(t_0~t_1 … t_n )` where :math:`t_0` is not an
+application. We say then that :math:`t_0` is the *head of* :math:`t`. If we assume
+that :math:`t_0` is :math:`λ x:T.~u_0` then one step of β-head reduction of :math:`t` is:
 
 .. math::
-   λ x_1 :T_1 . … λ x_k :T_k . (λ x:T. u_0~t_1 … t_n ) \triangleright
-   λ (x_1 :T_1 )…(x_k :T_k ). (\subst{u_0}{x}{t_1}~t_2 … t_n )
+   λ x_1 :T_1 .~… λ x_k :T_k .~(λ x:T.~u_0~t_1 … t_n ) ~\triangleright~
+   λ (x_1 :T_1 )…(x_k :T_k ).~(\subst{u_0}{x}{t_1}~t_2 … t_n )
    
 Iterating the process of head reduction until the head of the reduced
 term is no more an abstraction leads to the *β-head normal form* of :math:`t`:
 
 .. math::
-   t \triangleright … \triangleright λ x_1 :T_1 . …λ x_k :T_k . (v~u_1 … u_m )
+   t \triangleright … \triangleright λ x_1 :T_1 .~…λ x_k :T_k .~(v~u_1 … u_m )
    
 where :math:`v` is not an abstraction (nor an application). Note that the head
 normal form must not be confused with the normal form since some :math:`u_i`
@@ -713,12 +745,12 @@ Formally, we can represent any *inductive definition* as
 
 These inductive definitions, together with global assumptions and
 global definitions, then form the global environment. Additionally,
-for any :math:`p` there always exists :math:`Γ_P =[a_1 :A_1 ;…;a_p :A_p ]` such that
+for any :math:`p` there always exists :math:`Γ_P =[a_1 :A_1 ;~…;~a_p :A_p ]` such that
 each :math:`T` in :math:`(t:T)∈Γ_I \cup Γ_C` can be written as: :math:`∀Γ_P , T'` where :math:`Γ_P` is
 called the *context of parameters*. Furthermore, we must have that
 each :math:`T` in :math:`(t:T)∈Γ_I` can be written as: :math:`∀Γ_P,∀Γ_{\mathit{Arr}(t)}, S` where
-:math:`Γ_{\mathit{Arr}(t)}` is called the *Arity* of the inductive type t and :math:`S` is called
-the sort of the inductive type t (not to be confused with :math:`\Sort` which is the set of sorts).
+:math:`Γ_{\mathit{Arr}(t)}` is called the *Arity* of the inductive type :math:`t` and :math:`S` is called
+the sort of the inductive type :math:`t` (not to be confused with :math:`\Sort` which is the set of sorts).
 
 .. example::
 
@@ -726,8 +758,8 @@ the sort of the inductive type t (not to be confused with :math:`\Sort` which is
 
    .. math::
       \ind{1}{[\List:\Set→\Set]}{\left[\begin{array}{rcl}
-      \Nil & : & \forall A:\Set,\List~A \\
-      \cons & : & \forall A:\Set, A→ \List~A→ \List~A
+      \Nil & : & ∀ A:\Set,~\List~A \\
+      \cons & : & ∀ A:\Set,~A→ \List~A→ \List~A
       \end{array}
       \right]}
 
@@ -771,8 +803,8 @@ the sort of the inductive type t (not to be confused with :math:`\Sort` which is
                                       \odd&:&\nat → \Prop \end{array}\right]}
        {\left[\begin{array}{rcl}
                 \evenO &:& \even~0\\
-                \evenS &:& \forall n, \odd~n -> \even~(\kw{S}~n)\\
-                \oddS &:& \forall n, \even~n -> \odd~(\kw{S}~n)
+                \evenS &:& ∀ n,~\odd~n → \even~(\nS~n)\\
+                \oddS &:& ∀ n,~\even~n → \odd~(\nS~n)
                           \end{array}\right]}
 
    which corresponds to the result of the |Coq| declaration:
@@ -782,7 +814,7 @@ the sort of the inductive type t (not to be confused with :math:`\Sort` which is
       Inductive even : nat -> Prop :=
       | even_O : even 0
       | even_S : forall n, odd n -> even (S n)
-      with odd : nat -> prop :=
+      with odd : nat -> Prop :=
       | odd_S : forall n, even n -> odd (S n).
 
 
@@ -792,8 +824,8 @@ the sort of the inductive type t (not to be confused with :math:`\Sort` which is
 Types of inductive objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-We have to give the type of constants in a global environment E which
-contains an inductive declaration.
+We have to give the type of constants in a global environment :math:`E` which
+contains an inductive definition.
 
 .. inference:: Ind
 	       
@@ -820,9 +852,9 @@ contains an inductive declaration.
       \begin{array}{l}
       E[Γ] ⊢ \even : \nat→\Prop\\
       E[Γ] ⊢ \odd : \nat→\Prop\\
-      E[Γ] ⊢ \even\_O : \even~O\\
-      E[Γ] ⊢ \even\_S : \forall~n:\nat, \odd~n → \even~(S~n)\\
-      E[Γ] ⊢ \odd\_S : \forall~n:\nat, \even~n → \odd~(S~n)
+      E[Γ] ⊢ \evenO : \even~\nO\\
+      E[Γ] ⊢ \evenS : ∀ n:\nat,~\odd~n → \even~(\nS~n)\\
+      E[Γ] ⊢ \oddS : ∀ n:\nat,~\even~n → \odd~(\nS~n)
       \end{array}
 
 
@@ -833,7 +865,7 @@ contains an inductive declaration.
 Well-formed inductive definitions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-We cannot accept any inductive declaration because some of them lead
+We cannot accept any inductive definition because some of them lead
 to inconsistent systems. We restrict ourselves to definitions which
 satisfy a syntactic criterion of positivity. Before giving the formal
 rules, we need a few definitions:
@@ -842,11 +874,11 @@ Arity of a given sort
 +++++++++++++++++++++
 
 A type :math:`T` is an *arity of sort* :math:`s` if it converts to the sort :math:`s` or to a
-product :math:`∀ x:T,U` with :math:`U` an arity of sort :math:`s`.
+product :math:`∀ x:T,~U` with :math:`U` an arity of sort :math:`s`.
 
 .. example::
 
-   :math:`A→\Set` is an arity of sort :math:`\Set`. :math:`∀ A:\Prop,A→ \Prop` is an arity of sort
+   :math:`A→\Set` is an arity of sort :math:`\Set`. :math:`∀ A:\Prop,~A→ \Prop` is an arity of sort
    :math:`\Prop`.
 
 
@@ -858,21 +890,21 @@ sort :math:`s`.
 
 .. example::
 
-   :math:`A→ Set` and :math:`∀ A:\Prop,A→ \Prop` are arities.
+   :math:`A→ \Set` and :math:`∀ A:\Prop,~A→ \Prop` are arities.
 
 
-Type constructor
-++++++++++++++++
-We say that T is a *type of constructor of I* in one of the following
+Type of constructor
++++++++++++++++++++
+We say that :math:`T` is a *type of constructor of* :math:`I` in one of the following
 two cases:
 
 + :math:`T` is :math:`(I~t_1 … t_n )`
-+ :math:`T` is :math:`∀ x:U,T'` where :math:`T'` is also a type of constructor of :math:`I`
++ :math:`T` is :math:`∀ x:U,~T'` where :math:`T'` is also a type of constructor of :math:`I`
 
 .. example::
 
    :math:`\nat` and :math:`\nat→\nat` are types of constructor of :math:`\nat`.
-   :math:`∀ A:Type,\List~A` and :math:`∀ A:Type,A→\List~A→\List~A` are types of constructor of :math:`\List`.
+   :math:`∀ A:\Type,~\List~A` and :math:`∀ A:\Type,~A→\List~A→\List~A` are types of constructor of :math:`\List`.
 
 .. _positivity:
 
@@ -883,7 +915,7 @@ The type of constructor :math:`T` will be said to *satisfy the positivity
 condition* for a constant :math:`X` in the following cases:
 
 + :math:`T=(X~t_1 … t_n )` and :math:`X` does not occur free in any :math:`t_i`
-+ :math:`T=∀ x:U,V` and :math:`X` occurs only strictly positively in :math:`U` and the type :math:`V`
++ :math:`T=∀ x:U,~V` and :math:`X` occurs only strictly positively in :math:`U` and the type :math:`V`
   satisfies the positivity condition for :math:`X`.
   
 Strict positivity
@@ -895,13 +927,13 @@ cases:
 
 + :math:`X` does not occur in :math:`T`
 + :math:`T` converts to :math:`(X~t_1 … t_n )` and :math:`X` does not occur in any of :math:`t_i`
-+ :math:`T` converts to :math:`∀ x:U,V` and :math:`X` does not occur in type :math:`U` but occurs
++ :math:`T` converts to :math:`∀ x:U,~V` and :math:`X` does not occur in type :math:`U` but occurs
   strictly positively in type :math:`V`
 + :math:`T` converts to :math:`(I~a_1 … a_m~t_1 … t_p )` where :math:`I` is the name of an
-  inductive declaration of the form
+  inductive definition of the form
   
   .. math::
-     \ind{m}{I:A}{c_1 :∀ p_1 :P_1 ,… ∀p_m :P_m ,C_1 ;…;c_n :∀ p_1 :P_1 ,… ∀p_m :P_m ,C_n}
+     \ind{m}{I:A}{c_1 :∀ p_1 :P_1 ,… ∀p_m :P_m ,~C_1 ;~…;~c_n :∀ p_1 :P_1 ,… ∀p_m :P_m ,~C_n}
      
   (in particular, it is
   not mutually defined and it has :math:`m` parameters) and :math:`X` does not occur in
@@ -914,9 +946,9 @@ Nested Positivity
 The type of constructor :math:`T` of :math:`I` *satisfies the nested positivity
 condition* for a constant :math:`X` in the following cases:
 
-+ :math:`T=(I~b_1 … b_m~u_1 … u_p)`, :math:`I` is an inductive definition with :math:`m`
++ :math:`T=(I~b_1 … b_m~u_1 … u_p)`, :math:`I` is an inductive type with :math:`m`
   parameters and :math:`X` does not occur in any :math:`u_i`
-+ :math:`T=∀ x:U,V` and :math:`X` occurs only strictly positively in :math:`U` and the type :math:`V`
++ :math:`T=∀ x:U,~V` and :math:`X` occurs only strictly positively in :math:`U` and the type :math:`V`
   satisfies the nested positivity condition for :math:`X`
 
 
@@ -929,8 +961,7 @@ condition* for a constant :math:`X` in the following cases:
 
       Inductive nattree (A:Type) : Type :=
       | leaf : nattree A
-      | node : A -> (nat -> nattree A) -> nattree A.
-      End TreeExample.
+      | natnode : A -> (nat -> nattree A) -> nattree A.
 
    Then every instantiated constructor of ``nattree A`` satisfies the nested positivity
    condition for ``nattree``:
@@ -940,10 +971,10 @@ condition* for a constant :math:`X` in the following cases:
      type of that constructor (primarily because ``nattree`` does not have any (real)
      arguments) ... (bullet 1)
 
-   + Type ``A → (nat → nattree A) → nattree A`` of constructor ``node`` satisfies the
+   + Type ``A → (nat → nattree A) → nattree A`` of constructor ``natnode`` satisfies the
      positivity condition for ``nattree`` because:
 
-     - ``nattree`` occurs only strictly positively in ``A`` ... (bullet 3)
+     - ``nattree`` occurs only strictly positively in ``A`` ... (bullet 1)
 
      - ``nattree`` occurs only strictly positively in ``nat → nattree A`` ... (bullet 3 + 2)
 
@@ -958,16 +989,15 @@ We shall now describe the rules allowing the introduction of a new
 inductive definition.
 
 Let :math:`E` be a global environment and :math:`Γ_P`, :math:`Γ_I`, :math:`Γ_C` be contexts
-such that :math:`Γ_I` is :math:`[I_1 :∀ Γ_P ,A_1 ;…;I_k :∀ Γ_P ,A_k]`, and
-:math:`Γ_C` is :math:`[c_1:∀ Γ_P ,C_1 ;…;c_n :∀ Γ_P ,C_n ]`. Then
+such that :math:`Γ_I` is :math:`[I_1 :∀ Γ_P ,A_1 ;~…;~I_k :∀ Γ_P ,A_k]`, and
+:math:`Γ_C` is :math:`[c_1:∀ Γ_P ,C_1 ;~…;~c_n :∀ Γ_P ,C_n ]`. Then
 
 .. inference:: W-Ind
 
    \WFE{Γ_P}
-   (E[Γ_P ] ⊢ A_j : s_j )_{j=1… k}
    (E[Γ_I ;Γ_P ] ⊢ C_i : s_{q_i} )_{i=1… n}
    ------------------------------------------
-   \WF{E;\ind{p}{Γ_I}{Γ_C}}{Γ}
+   \WF{E;~\ind{p}{Γ_I}{Γ_C}}{}
    
 
 provided that the following side conditions hold:
@@ -977,21 +1007,21 @@ provided that the following side conditions hold:
       context of parameters,
     + for :math:`j=1… k` we have that :math:`A_j` is an arity of sort :math:`s_j` and :math:`I_j ∉ E`,
     + for :math:`i=1… n` we have that :math:`C_i` is a type of constructor of :math:`I_{q_i}` which
-      satisfies the positivity condition for :math:`I_1 … I_k` and :math:`c_i ∉ Γ ∪ E`.
+      satisfies the positivity condition for :math:`I_1 … I_k` and :math:`c_i ∉  E`.
 
 One can remark that there is a constraint between the sort of the
 arity of the inductive type and the sort of the type of its
 constructors which will always be satisfied for the impredicative
-sort :math:`\Prop` but may fail to define inductive definition on sort :math:`\Set` and
-generate constraints between universes for inductive definitions in
-the Type hierarchy.
+sorts :math:`\SProp` and :math:`\Prop` but may fail to define
+inductive type on sort :math:`\Set` and generate constraints
+between universes for inductive types in the Type hierarchy.
 
 
 .. example::
 
    It is well known that the existential quantifier can be encoded as an
-   inductive definition. The following declaration introduces the second-
-   order existential quantifier :math:`∃ X.P(X)`.
+   inductive definition. The following declaration introduces the
+   second-order existential quantifier :math:`∃ X.P(X)`.
 
    .. coqtop:: in
 
@@ -1028,7 +1058,7 @@ in :math:`\Type`.
 .. flag:: Auto Template Polymorphism
 
    This option, enabled by default, makes every inductive type declared
-   at level :math:`Type` (without annotations or hiding it behind a
+   at level :math:`\Type` (without annotations or hiding it behind a
    definition) template polymorphic.
 
    This can be prevented using the ``notemplate`` attribute.
@@ -1041,6 +1071,12 @@ in :math:`\Type`.
    enabled it will prevail over automatic template polymorphism and
    cause an error when using the ``template`` attribute.
 
+.. warn:: Automatically declaring @ident as template polymorphic.
+
+   Warning ``auto-template`` can be used to find which types are
+   implicitly declared template polymorphic by :flag:`Auto Template
+   Polymorphism`.
+
 If :math:`A` is an arity of some sort and :math:`s` is a sort, we write :math:`A_{/s}`
 for the arity obtained from :math:`A` by replacing its sort with :math:`s`.
 Especially, if :math:`A` is well-typed in some global environment and local
@@ -1049,17 +1085,17 @@ Calculus of Inductive Constructions. The following typing rule is
 added to the theory.
 
 Let :math:`\ind{p}{Γ_I}{Γ_C}` be an inductive definition. Let
-:math:`Γ_P = [p_1 :P_1 ;…;p_p :P_p ]` be its context of parameters,
-:math:`Γ_I = [I_1:∀ Γ_P ,A_1 ;…;I_k :∀ Γ_P ,A_k ]` its context of definitions and
-:math:`Γ_C = [c_1 :∀ Γ_P ,C_1 ;…;c_n :∀ Γ_P ,C_n]` its context of constructors,
+:math:`Γ_P = [p_1 :P_1 ;~…;~p_p :P_p ]` be its context of parameters,
+:math:`Γ_I = [I_1:∀ Γ_P ,A_1 ;~…;~I_k :∀ Γ_P ,A_k ]` its context of definitions and
+:math:`Γ_C = [c_1 :∀ Γ_P ,C_1 ;~…;~c_n :∀ Γ_P ,C_n]` its context of constructors,
 with :math:`c_i` a constructor of :math:`I_{q_i}`. Let :math:`m ≤ p` be the length of the
 longest prefix of parameters such that the :math:`m` first arguments of all
 occurrences of all :math:`I_j` in all :math:`C_k` (even the occurrences in the
 hypotheses of :math:`C_k`) are exactly applied to :math:`p_1 … p_m` (:math:`m` is the number
 of *recursively uniform parameters* and the :math:`p−m` remaining parameters
-are the *recursively non-uniform parameters*). Let :math:`q_1 , …, q_r` , with
+are the *recursively non-uniform parameters*). Let :math:`q_1 , …, q_r`, with
 :math:`0≤ r≤ m`, be a (possibly) partial instantiation of the recursively
-uniform parameters of :math:`Γ_P` . We have:
+uniform parameters of :math:`Γ_P`. We have:
 
 .. inference:: Ind-Family
 
@@ -1071,15 +1107,15 @@ uniform parameters of :math:`Γ_P` . We have:
    \end{array}
    \right.
    -----------------------------
-   E[] ⊢ I_j~q_1 … q_r :∀ [p_{r+1} :P_{r+1} ;…;p_p :P_p], (A_j)_{/s_j}
+   E[] ⊢ I_j~q_1 … q_r :∀ [p_{r+1} :P_{r+1} ;~…;~p_p :P_p], (A_j)_{/s_j}
 
 provided that the following side conditions hold:
 
     + :math:`Γ_{P′}` is the context obtained from :math:`Γ_P` by replacing each :math:`P_l` that is
       an arity with :math:`P_l'` for :math:`1≤ l ≤ r` (notice that :math:`P_l` arity implies :math:`P_l'`
-      arity since :math:`(E[] ⊢ P_l' ≤_{βδιζη} \subst{P_l}{p_u}{q_u}_{u=1\ldots l-1} )`;
-    + there are sorts :math:`s_i` , for :math:`1 ≤ i ≤ k` such that, for
-      :math:`Γ_{I'} = [I_1 :∀ Γ_{P'} ,(A_1)_{/s_1} ;…;I_k :∀ Γ_{P'} ,(A_k)_{/s_k}]`
+      arity since :math:`E[] ⊢ P_l' ≤_{βδιζη} \subst{P_l}{p_u}{q_u}_{u=1\ldots l-1}`);
+    + there are sorts :math:`s_i`, for :math:`1 ≤ i ≤ k` such that, for
+      :math:`Γ_{I'} = [I_1 :∀ Γ_{P'} ,(A_1)_{/s_1} ;~…;~I_k :∀ Γ_{P'} ,(A_k)_{/s_k}]`
       we have :math:`(E[Γ_{I′} ;Γ_{P′}] ⊢ C_i : s_{q_i})_{i=1… n}` ;
     + the sorts :math:`s_i` are such that all eliminations, to
       :math:`\Prop`, :math:`\Set` and :math:`\Type(j)`, are allowed
@@ -1097,7 +1133,7 @@ replacements of sorts, needed for this derivation, in the parameters
 that are arities (this is possible because :math:`\ind{p}{Γ_I}{Γ_C}` well-formed
 implies that :math:`\ind{p}{Γ_{I'}}{Γ_{C'}}` is well-formed and has the
 same allowed eliminations, where :math:`Γ_{I′}` is defined as above and
-:math:`Γ_{C′} = [c_1 :∀ Γ_{P′} ,C_1 ;…;c_n :∀ Γ_{P′} ,C_n ]`). That is, the changes in the
+:math:`Γ_{C′} = [c_1 :∀ Γ_{P′} ,C_1 ;~…;~c_n :∀ Γ_{P′} ,C_n ]`). That is, the changes in the
 types of each partial instance :math:`q_1 … q_r` can be characterized by the
 ordered sets of arity sorts among the types of parameters, and to each
 signature is associated a new inductive definition with fresh names.
@@ -1199,16 +1235,17 @@ a strongly normalizing reduction, we cannot accept any sort of
 recursion (even terminating). So the basic idea is to restrict
 ourselves to primitive recursive functions and functionals.
 
-For instance, assuming a parameter :g:`A:Set` exists in the local context,
-we want to build a function length of type :g:`list A -> nat` which computes
-the length of the list, such that :g:`(length (nil A)) = O` and :g:`(length
-(cons A a l)) = (S (length l))`. We want these equalities to be
+For instance, assuming a parameter :math:`A:\Set` exists in the local context,
+we want to build a function :math:`\length` of type :math:`\List~A → \nat` which computes
+the length of the list, such that :math:`(\length~(\Nil~A)) = \nO` and
+:math:`(\length~(\cons~A~a~l)) = (\nS~(\length~l))`.
+We want these equalities to be
 recognized implicitly and taken into account in the conversion rule.
 
 From the logical point of view, we have built a type family by giving
 a set of constructors. We want to capture the fact that we do not have
 any other way to build an object in this type. So when trying to prove
-a property about an object :math:`m` in an inductive definition it is enough
+a property about an object :math:`m` in an inductive type it is enough
 to enumerate all the cases where :math:`m` starts with a different
 constructor.
 
@@ -1216,22 +1253,22 @@ In case the inductive definition is effectively a recursive one, we
 want to capture the extra property that we have built the smallest
 fixed point of this recursive equation. This says that we are only
 manipulating finite objects. This analysis provides induction
-principles. For instance, in order to prove :g:`∀ l:list A,(has_length A l
-(length l))` it is enough to prove:
+principles. For instance, in order to prove
+:math:`∀ l:\List~A,~(\kw{has}\_\kw{length}~A~l~(\length~l))` it is enough to prove:
 
 
-+ :g:`(has_length A (nil A) (length (nil A)))`
-+ :g:`∀ a:A, ∀ l:list A, (has_length A l (length l)) →`
-  :g:`(has_length A (cons A a l) (length (cons A a l)))`
++ :math:`(\kw{has}\_\kw{length}~A~(\Nil~A)~(\length~(\Nil~A)))`
++ :math:`∀ a:A,~∀ l:\List~A,~(\kw{has}\_\kw{length}~A~l~(\length~l)) →`
+  :math:`(\kw{has}\_\kw{length}~A~(\cons~A~a~l)~(\length~(\cons~A~a~l)))`
 
 
-which given the conversion equalities satisfied by length is the same
+which given the conversion equalities satisfied by :math:`\length` is the same
 as proving:
 
 
-+ :g:`(has_length A (nil A) O)`
-+ :g:`∀ a:A, ∀ l:list A, (has_length A l (length l)) →`
-  :g:`(has_length A (cons A a l) (S (length l)))`
++ :math:`(\kw{has}\_\kw{length}~A~(\Nil~A)~\nO)`
++ :math:`∀ a:A,~∀ l:\List~A,~(\kw{has}\_\kw{length}~A~l~(\length~l)) →`
+  :math:`(\kw{has}\_\kw{length}~A~(\cons~A~a~l)~(\nS~(\length~l)))`
 
 
 One conceptually simple way to do that, following the basic scheme
@@ -1261,7 +1298,7 @@ The |Coq| term for this proof
 will be written:
 
 .. math::
-   \Match~m~\with~(c_1~x_{11} ... x_{1p_1} ) ⇒ f_1 | … | (c_n~x_{n1} ... x_{np_n} ) ⇒ f_n \kwend
+   \Match~m~\with~(c_1~x_{11} ... x_{1p_1} ) ⇒ f_1 | … | (c_n~x_{n1} ... x_{np_n} ) ⇒ f_n~\kwend
 
 In this expression, if :math:`m` eventually happens to evaluate to
 :math:`(c_i~u_1 … u_{p_i})` then the expression will behave as specified in its :math:`i`-th branch
@@ -1269,7 +1306,7 @@ and it will reduce to :math:`f_i` where the :math:`x_{i1} …x_{ip_i}` are repla
 :math:`u_1 … u_{p_i}` according to the ι-reduction.
 
 Actually, for type checking a :math:`\Match…\with…\kwend` expression we also need
-to know the predicate P to be proved by case analysis. In the general
+to know the predicate :math:`P` to be proved by case analysis. In the general
 case where :math:`I` is an inductively defined :math:`n`-ary relation, :math:`P` is a predicate
 over :math:`n+1` arguments: the :math:`n` first ones correspond to the arguments of :math:`I`
 (parameters excluded), and the last one corresponds to object :math:`m`. |Coq|
@@ -1303,7 +1340,7 @@ inference rules, we use a more compact notation:
 
 .. _Allowed-elimination-sorts:
 
-**Allowed elimination sorts.** An important question for building the typing rule for match is what
+**Allowed elimination sorts.** An important question for building the typing rule for :math:`\Match` is what
 can be the type of :math:`λ a x . P` with respect to the type of :math:`m`. If :math:`m:I`
 and :math:`I:A` and :math:`λ a x . P : B` then by :math:`[I:A|B]` we mean that one can use
 :math:`λ a x . P` with :math:`m` in the above match-construct.
@@ -1314,14 +1351,14 @@ and :math:`I:A` and :math:`λ a x . P : B` then by :math:`[I:A|B]` we mean that 
 **Notations.** The :math:`[I:A|B]` is defined as the smallest relation satisfying the
 following rules: We write :math:`[I|B]` for :math:`[I:A|B]` where :math:`A` is the type of :math:`I`.
 
-The case of inductive definitions in sorts :math:`\Set` or :math:`\Type` is simple.
+The case of inductive types in sorts :math:`\Set` or :math:`\Type` is simple.
 There is no restriction on the sort of the predicate to be eliminated.
 
 .. inference:: Prod
 
    [(I~x):A′|B′]
    -----------------------
-   [I:∀ x:A, A′|∀ x:A, B′]
+   [I:∀ x:A,~A′|∀ x:A,~B′]
 
    
 .. inference:: Set & Type
@@ -1334,14 +1371,15 @@ There is no restriction on the sort of the predicate to be eliminated.
 
 The case of Inductive definitions of sort :math:`\Prop` is a bit more
 complicated, because of our interpretation of this sort. The only
-harmless allowed elimination, is the one when predicate :math:`P` is also of
-sort :math:`\Prop`.
+harmless allowed eliminations, are the ones when predicate :math:`P`
+is also of sort :math:`\Prop` or is of the morally smaller sort
+:math:`\SProp`.
 
 .. inference:: Prop
 	       
-   ~
-   ---------------
-   [I:Prop|I→Prop]
+   s ∈ \{\SProp,\Prop\}
+   --------------------
+   [I:\Prop|I→s]
 
 
 :math:`\Prop` is the type of logical propositions, the proofs of properties :math:`P` in
@@ -1370,7 +1408,7 @@ the proof of :g:`or A B` is not accepted:
 From the computational point of view, the structure of the proof of
 :g:`(or A B)` in this term is needed for computing the boolean value.
 
-In general, if :math:`I` has type :math:`\Prop` then :math:`P` cannot have type :math:`I→Set,` because
+In general, if :math:`I` has type :math:`\Prop` then :math:`P` cannot have type :math:`I→\Set`, because
 it will mean to build an informative proof of type :math:`(P~m)` doing a case
 analysis over a non-computational object that will disappear in the
 extracted program. But the other way is safe with respect to our
@@ -1378,11 +1416,11 @@ interpretation we can have :math:`I` a computational object and :math:`P` a
 non-computational one, it just corresponds to proving a logical property
 of a computational object.
 
-In the same spirit, elimination on :math:`P` of type :math:`I→Type` cannot be allowed
-because it trivially implies the elimination on :math:`P` of type :math:`I→ Set` by
+In the same spirit, elimination on :math:`P` of type :math:`I→\Type` cannot be allowed
+because it trivially implies the elimination on :math:`P` of type :math:`I→ \Set` by
 cumulativity. It also implies that there are two proofs of the same
-property which are provably different, contradicting the proof-
-irrelevance property which is sometimes a useful axiom:
+property which are provably different, contradicting the
+proof-irrelevance property which is sometimes a useful axiom:
 
 .. example::
 
@@ -1390,8 +1428,8 @@ irrelevance property which is sometimes a useful axiom:
 
       Axiom proof_irrelevance : forall (P : Prop) (x y : P), x=y.
 
-The elimination of an inductive definition of type :math:`\Prop` on a predicate
-:math:`P` of type :math:`I→ Type` leads to a paradox when applied to impredicative
+The elimination of an inductive type of sort :math:`\Prop` on a predicate
+:math:`P` of type :math:`I→ \Type` leads to a paradox when applied to impredicative
 inductive definition like the second-order existential quantifier
 :g:`exProp` defined above, because it gives access to the two projections on
 this type.
@@ -1407,7 +1445,7 @@ this type.
    I~\kw{is an empty or singleton definition}
    s ∈ \Sort
    -------------------------------------
-   [I:Prop|I→ s]
+   [I:\Prop|I→ s]
 
 A *singleton definition* has only one constructor and all the
 arguments of this constructor have type :math:`\Prop`. In that case, there is a
@@ -1429,13 +1467,21 @@ type.
 An empty definition has no constructors, in that case also,
 elimination on any sort is allowed.
 
+.. _Eliminaton-for-SProp:
+
+Inductive types in :math:`\SProp` must have no constructors (i.e. be
+empty) to be eliminated to produce relevant values.
+
+Note that thanks to proof irrelevance elimination functions can be
+produced for other types, for instance the elimination for a unit type
+is the identity.
 
 .. _Type-of-branches:
 
 **Type of branches.**
 Let :math:`c` be a term of type :math:`C`, we assume :math:`C` is a type of constructor for an
 inductive type :math:`I`. Let :math:`P` be a term that represents the property to be
-proved. We assume :math:`r` is the number of parameters and :math:`p` is the number of
+proved. We assume :math:`r` is the number of parameters and :math:`s` is the number of
 arguments.
 
 We define a new type :math:`\{c:C\}^P` which represents the type of the branch
@@ -1443,8 +1489,8 @@ corresponding to the :math:`c:C` constructor.
 
 .. math::
    \begin{array}{ll}
-   \{c:(I~p_1\ldots p_r\ t_1 \ldots t_p)\}^P &\equiv (P~t_1\ldots ~t_p~c) \\
-   \{c:\forall~x:T,C\}^P &\equiv \forall~x:T,\{(c~x):C\}^P 
+   \{c:(I~q_1\ldots q_r\ t_1 \ldots t_s)\}^P &\equiv (P~t_1\ldots ~t_s~c) \\
+   \{c:∀ x:T,~C\}^P &\equiv ∀ x:T,~\{(c~x):C\}^P
    \end{array}
 
 We write :math:`\{c\}^P` for :math:`\{c:C\}^P` with :math:`C` the type of :math:`c`.
@@ -1463,7 +1509,7 @@ We write :math:`\{c\}^P` for :math:`\{c:C\}^P` with :math:`C` the type of :math:
    can be represented in abstract syntax as
 
    .. math::
-      \case(t,P,f 1 | f 2 )
+      \case(t,P,f_1 | f_2 )
 
    where
 
@@ -1471,27 +1517,27 @@ We write :math:`\{c\}^P` for :math:`\{c:C\}^P` with :math:`C` the type of :math:
       :nowrap:
 
       \begin{eqnarray*}
-        P & = & \lambda~l~.~P^\prime\\
+        P & = & λ l.~P^\prime\\
         f_1 & = & t_1\\
-        f_2 & = & \lambda~(hd:\nat)~.~\lambda~(tl:\List~\nat)~.~t_2
+        f_2 & = & λ (hd:\nat).~λ (tl:\List~\nat).~t_2
       \end{eqnarray*}
 
    According to the definition:
 
    .. math::
-      \{(\kw{nil}~\nat)\}^P ≡ \{(\kw{nil}~\nat) : (\List~\nat)\}^P ≡ (P~(\kw{nil}~\nat))
+      \{(\Nil~\nat)\}^P ≡ \{(\Nil~\nat) : (\List~\nat)\}^P ≡ (P~(\Nil~\nat))
 
    .. math::
 
       \begin{array}{rl}
-      \{(\kw{cons}~\nat)\}^P & ≡\{(\kw{cons}~\nat) : (\nat→\List~\nat→\List~\nat)\}^P \\
-      & ≡∀ n:\nat, \{(\kw{cons}~\nat~n) : \List~\nat→\List~\nat)\}^P \\
-      & ≡∀ n:\nat, ∀ l:\List~\nat, \{(\kw{cons}~\nat~n~l) : \List~\nat)\}^P \\
-      & ≡∀ n:\nat, ∀ l:\List~\nat,(P~(\kw{cons}~\nat~n~l)).
+      \{(\cons~\nat)\}^P & ≡\{(\cons~\nat) : (\nat→\List~\nat→\List~\nat)\}^P \\
+      & ≡∀ n:\nat,~\{(\cons~\nat~n) : (\List~\nat→\List~\nat)\}^P \\
+      & ≡∀ n:\nat,~∀ l:\List~\nat,~\{(\cons~\nat~n~l) : (\List~\nat)\}^P \\
+      & ≡∀ n:\nat,~∀ l:\List~\nat,~(P~(\cons~\nat~n~l)).
       \end{array}
 
-   Given some :math:`P` then :math:`\{(\kw{nil}~\nat)\}^P` represents the expected type of :math:`f_1` ,
-   and :math:`\{(\kw{cons}~\nat)\}^P` represents the expected type of :math:`f_2`.
+   Given some :math:`P` then :math:`\{(\Nil~\nat)\}^P` represents the expected type of :math:`f_1`,
+   and :math:`\{(\cons~\nat)\}^P` represents the expected type of :math:`f_2`.
 
 
 .. _Typing-rule:
@@ -1512,7 +1558,7 @@ following typing rule
    E[Γ] ⊢ \case(c,P,f_1  |… |f_l ) : (P~t_1 … t_s~c)
 
 provided :math:`I` is an inductive type in a
-definition :math:`\ind{r}{Γ_I}{Γ_C}` with :math:`Γ_C = [c_1 :C_1 ;…;c_n :C_n ]` and
+definition :math:`\ind{r}{Γ_I}{Γ_C}` with :math:`Γ_C = [c_1 :C_1 ;~…;~c_n :C_n ]` and
 :math:`c_{p_1} … c_{p_l}` are the only constructors of :math:`I`.
 
 
@@ -1527,8 +1573,8 @@ definition :math:`\ind{r}{Γ_I}{Γ_C}` with :math:`Γ_C = [c_1 :C_1 ;…;c_n :C_
        E[Γ] ⊢ t : (\List ~\nat) \\
        E[Γ] ⊢ P : B \\
        [(\List ~\nat)|B] \\
-       E[Γ] ⊢ f_1 : {(\kw{nil} ~\nat)}^P \\
-       E[Γ] ⊢ f_2 : {(\kw{cons} ~\nat)}^P
+       E[Γ] ⊢ f_1 : \{(\Nil ~\nat)\}^P \\
+       E[Γ] ⊢ f_2 : \{(\cons ~\nat)\}^P
      \end{array}
      ------------------------------------------------
      E[Γ] ⊢ \case(t,P,f_1 |f_2 ) : (P~t)
@@ -1551,7 +1597,7 @@ The ι-contraction of this term is :math:`(f_i~a_1 … a_m )` leading to the
 general reduction rule:
 
 .. math::
-   \case((c_{p_i}~q_1 … q_r~a_1 … a_m ),P,f_1 |… |f_n ) \triangleright_ι (f_i~a_1 … a_m )
+   \case((c_{p_i}~q_1 … q_r~a_1 … a_m ),P,f_1 |… |f_l ) \triangleright_ι (f_i~a_1 … a_m )
 
 
 .. _Fixpoint-definitions:
@@ -1565,14 +1611,14 @@ concrete syntax for a recursive set of mutually recursive declarations
 is (with :math:`Γ_i` contexts):
 
 .. math::
-   \fix~f_1 (Γ_1 ) :A_1 :=t_1 \with … \with~f_n (Γ_n ) :A_n :=t_n
+   \fix~f_1 (Γ_1 ) :A_1 :=t_1~\with … \with~f_n (Γ_n ) :A_n :=t_n
 
 
 The terms are obtained by projections from this set of declarations
 and are written
 
 .. math::
-   \fix~f_1 (Γ_1 ) :A_1 :=t_1 \with … \with~f_n (Γ_n ) :A_n :=t_n \for~f_i
+   \fix~f_1 (Γ_1 ) :A_1 :=t_1~\with … \with~f_n (Γ_n ) :A_n :=t_n~\for~f_i
 
 In the inference rules, we represent such a term by
 
@@ -1580,7 +1626,7 @@ In the inference rules, we represent such a term by
    \Fix~f_i\{f_1 :A_1':=t_1' … f_n :A_n':=t_n'\}
 
 with :math:`t_i'` (resp. :math:`A_i'`) representing the term :math:`t_i` abstracted (resp.
-generalized) with respect to the bindings in the context Γ_i , namely
+generalized) with respect to the bindings in the context :math:`Γ_i`, namely
 :math:`t_i'=λ Γ_i . t_i` and :math:`A_i'=∀ Γ_i , A_i`.
 
 
@@ -1592,7 +1638,7 @@ The typing rule is the expected one for a fixpoint.
 .. inference:: Fix
 	       
    (E[Γ] ⊢ A_i : s_i )_{i=1… n}
-   (E[Γ,f_1 :A_1 ,…,f_n :A_n ] ⊢ t_i : A_i )_{i=1… n}
+   (E[Γ;~f_1 :A_1 ;~…;~f_n :A_n ] ⊢ t_i : A_i )_{i=1… n}
    -------------------------------------------------------
    E[Γ] ⊢ \Fix~f_i\{f_1 :A_1 :=t_1 … f_n :A_n :=t_n \} : A_i
 
@@ -1608,31 +1654,31 @@ instance in the case of natural numbers, a proof of the induction
 principle of type
 
 .. math::
-   ∀ P:\nat→\Prop, (P~O)→(∀ n:\nat, (P~n)→(P~(\kw{S}~n)))→ ∀ n:\nat, (P~n)
+   ∀ P:\nat→\Prop,~(P~\nO)→(∀ n:\nat,~(P~n)→(P~(\nS~n)))→ ∀ n:\nat,~(P~n)
 
 can be represented by the term:
 
 .. math::
    \begin{array}{l}
-   λ P:\nat→\Prop. λ f:(P~O). λ g:(∀ n:\nat, (P~n)→(P~(S~n))).\\
-   \Fix~h\{h:∀ n:\nat, (P~n):=λ n:\nat. \case(n,P,f | λp:\nat. (g~p~(h~p)))\}
+   λ P:\nat→\Prop.~λ f:(P~\nO).~λ g:(∀ n:\nat,~(P~n)→(P~(\nS~n))).\\
+   \Fix~h\{h:∀ n:\nat,~(P~n):=λ n:\nat.~\case(n,P,f | λp:\nat.~(g~p~(h~p)))\}
    \end{array}
 
 Before accepting a fixpoint definition as being correctly typed, we
 check that the definition is “guarded”. A precise analysis of this
 notion can be found in :cite:`Gim94`. The first stage is to precise on which
 argument the fixpoint will be decreasing. The type of this argument
-should be an inductive definition. For doing this, the syntax of
+should be an inductive type. For doing this, the syntax of
 fixpoints is extended and becomes
 
 .. math::
-   \Fix~f_i\{f_1/k_1 :A_1':=t_1' … f_n/k_n :A_n':=t_n'\}
+   \Fix~f_i\{f_1/k_1 :A_1:=t_1 … f_n/k_n :A_n:=t_n\}
 
 
 where :math:`k_i` are positive integers. Each :math:`k_i` represents the index of
-parameter of :math:`f_i` , on which :math:`f_i` is decreasing. Each :math:`A_i` should be a
+parameter of :math:`f_i`, on which :math:`f_i` is decreasing. Each :math:`A_i` should be a
 type (reducible to a term) starting with at least :math:`k_i` products
-:math:`∀ y_1 :B_1 ,… ∀ y_{k_i} :B_{k_i} , A_i'` and :math:`B_{k_i}` an inductive type.
+:math:`∀ y_1 :B_1 ,~… ∀ y_{k_i} :B_{k_i} ,~A_i'` and :math:`B_{k_i}` an inductive type.
 
 Now in the definition :math:`t_i`, if :math:`f_j` occurs then it should be applied to
 at least :math:`k_j` arguments and the :math:`k_j`-th argument should be
@@ -1642,26 +1688,26 @@ The definition of being structurally smaller is a bit technical. One
 needs first to define the notion of *recursive arguments of a
 constructor*. For an inductive definition :math:`\ind{r}{Γ_I}{Γ_C}`, if the
 type of a constructor :math:`c` has the form
-:math:`∀ p_1 :P_1 ,… ∀ p_r :P_r, ∀ x_1:T_1, … ∀ x_r :T_r, (I_j~p_1 … p_r~t_1 … t_s )`,
+:math:`∀ p_1 :P_1 ,~… ∀ p_r :P_r,~∀ x_1:T_1,~… ∀ x_m :T_m,~(I_j~p_1 … p_r~t_1 … t_s )`,
 then the recursive
 arguments will correspond to :math:`T_i` in which one of the :math:`I_l` occurs.
 
 The main rules for being structurally smaller are the following.
 Given a variable :math:`y` of an inductively defined type in a declaration
-:math:`\ind{r}{Γ_I}{Γ_C}` where :math:`Γ_I` is :math:`[I_1 :A_1 ;…;I_k :A_k]`, and :math:`Γ_C` is
-:math:`[c_1 :C_1 ;…;c_n :C_n ]`, the terms structurally smaller than :math:`y` are:
+:math:`\ind{r}{Γ_I}{Γ_C}` where :math:`Γ_I` is :math:`[I_1 :A_1 ;~…;~I_k :A_k]`, and :math:`Γ_C` is
+:math:`[c_1 :C_1 ;~…;~c_n :C_n ]`, the terms structurally smaller than :math:`y` are:
 
 
-+ :math:`(t~u)` and :math:`λ x:u . t` when :math:`t` is structurally smaller than :math:`y`.
++ :math:`(t~u)` and :math:`λ x:U .~t` when :math:`t` is structurally smaller than :math:`y`.
 + :math:`\case(c,P,f_1 … f_n)` when each :math:`f_i` is structurally smaller than :math:`y`.
   If :math:`c` is :math:`y` or is structurally smaller than :math:`y`, its type is an inductive
-  definition :math:`I_p` part of the inductive declaration corresponding to :math:`y`.
+  type :math:`I_p` part of the inductive definition corresponding to :math:`y`.
   Each :math:`f_i` corresponds to a type of constructor
-  :math:`C_q ≡ ∀ p_1 :P_1 ,…,∀ p_r :P_r , ∀ y_1 :B_1 , … ∀ y_k :B_k , (I~a_1 … a_k )`
-  and can consequently be written :math:`λ y_1 :B_1' . … λ y_k :B_k'. g_i`. (:math:`B_i'` is
+  :math:`C_q ≡ ∀ p_1 :P_1 ,~…,∀ p_r :P_r ,~∀ y_1 :B_1 ,~… ∀ y_m :B_m ,~(I_p~p_1 … p_r~t_1 … t_s )`
+  and can consequently be written :math:`λ y_1 :B_1' .~… λ y_m :B_m'.~g_i`. (:math:`B_i'` is
   obtained from :math:`B_i` by substituting parameters for variables) the variables
   :math:`y_j` occurring in :math:`g_i` corresponding to recursive arguments :math:`B_i` (the
-  ones in which one of the :math:`I_l` occurs) are structurally smaller than y.
+  ones in which one of the :math:`I_l` occurs) are structurally smaller than :math:`y`.
 
 
 The following definitions are correct, we enter them using the :cmd:`Fixpoint`
@@ -1702,7 +1748,7 @@ Let :math:`F` be the set of declarations:
 The reduction for fixpoints is:
 
 .. math::
-   (\Fix~f_i \{F\} a_1 …a_{k_i}) \triangleright_ι \subst{t_i}{f_k}{\Fix~f_k \{F\}}_{k=1… n} ~a_1 … a_{k_i}
+   (\Fix~f_i \{F\}~a_1 …a_{k_i}) ~\triangleright_ι~ \subst{t_i}{f_k}{\Fix~f_k \{F\}}_{k=1… n} ~a_1 … a_{k_i}
    
 when :math:`a_{k_i}` starts with a constructor. This last restriction is needed
 in order to keep strong normalization and corresponds to the reduction
@@ -1712,13 +1758,11 @@ possible:
 .. math::
    :nowrap:
 
-   {\def\plus{\mathsf{plus}}
-    \def\tri{\triangleright_\iota}
-    \begin{eqnarray*}
-    \plus~(\nS~(\nS~\nO))~(\nS~\nO) & \tri & \nS~(\plus~(\nS~\nO)~(\nS~\nO))\\
-                                   & \tri & \nS~(\nS~(\plus~\nO~(\nS~\nO)))\\
-                                   & \tri & \nS~(\nS~(\nS~\nO))\\
-    \end{eqnarray*}}
+   \begin{eqnarray*}
+   \plus~(\nS~(\nS~\nO))~(\nS~\nO)~& \trii & \nS~(\plus~(\nS~\nO)~(\nS~\nO))\\
+                                   & \trii & \nS~(\nS~(\plus~\nO~(\nS~\nO)))\\
+                                   & \trii & \nS~(\nS~(\nS~\nO))\\
+   \end{eqnarray*}
 
 .. _Mutual-induction:
 
@@ -1746,11 +1790,11 @@ One can modify a global declaration by generalizing it over a
 previously assumed constant :math:`c`. For doing that, we need to modify the
 reference to the global declaration in the subsequent global
 environment and local context by explicitly applying this constant to
-the constant :math:`c'`.
+the constant :math:`c`.
 
-Below, if :math:`Γ` is a context of the form :math:`[y_1 :A_1 ;…;y_n :A_n]`, we write
-:math:`∀x:U,\subst{Γ}{c}{x}` to mean
-:math:`[y_1 :∀ x:U,\subst{A_1}{c}{x};…;y_n :∀ x:U,\subst{A_n}{c}{x}]`
+Below, if :math:`Γ` is a context of the form :math:`[y_1 :A_1 ;~…;~y_n :A_n]`, we write
+:math:`∀x:U,~\subst{Γ}{c}{x}` to mean
+:math:`[y_1 :∀ x:U,~\subst{A_1}{c}{x};~…;~y_n :∀ x:U,~\subst{A_n}{c}{x}]`
 and :math:`\subst{E}{|Γ|}{|Γ|c}` to mean the parallel substitution
 :math:`E\{y_1 /(y_1~c)\}…\{y_n/(y_n~c)\}`.
 
@@ -1760,25 +1804,25 @@ and :math:`\subst{E}{|Γ|}{|Γ|c}` to mean the parallel substitution
 **First abstracting property:**
 
 .. math::
-   \frac{\WF{E;c:U;E′;c′:=t:T;E″}{Γ}}
-        {\WF{E;c:U;E′;c′:=λ x:U. \subst{t}{c}{x}:∀x:U,\subst{T}{c}{x};\subst{E″}{c′}{(c′~c)}}
-	{\subst{Γ}{c}{(c~c′)}}}
+   \frac{\WF{E;~c:U;~E′;~c′:=t:T;~E″}{Γ}}
+        {\WF{E;~c:U;~E′;~c′:=λ x:U.~\subst{t}{c}{x}:∀x:U,~\subst{T}{c}{x};~\subst{E″}{c′}{(c′~c)}}
+        {\subst{Γ}{c′}{(c′~c)}}}
 
    
 .. math::
-   \frac{\WF{E;c:U;E′;c′:T;E″}{Γ}}
-        {\WF{E;c:U;E′;c′:∀ x:U,\subst{T}{c}{x};\subst{E″}{c′}{(c′~c)}}{Γ{c/(c~c′)}}}
+   \frac{\WF{E;~c:U;~E′;~c′:T;~E″}{Γ}}
+        {\WF{E;~c:U;~E′;~c′:∀ x:U,~\subst{T}{c}{x};~\subst{E″}{c′}{(c′~c)}}{\subst{Γ}{c′}{(c′~c)}}}
 	
 .. math::
-   \frac{\WF{E;c:U;E′;\ind{p}{Γ_I}{Γ_C};E″}{Γ}}
-        {\WFTWOLINES{E;c:U;E′;\ind{p+1}{∀ x:U,\subst{Γ_I}{c}{x}}{∀ x:U,\subst{Γ_C}{c}{x}};
-	  \subst{E″}{|Γ_I ,Γ_C |}{|Γ_I ,Γ_C | c}}
-	 {\subst{Γ}{|Γ_I ,Γ_C|}{|Γ_I ,Γ_C | c}}}
+   \frac{\WF{E;~c:U;~E′;~\ind{p}{Γ_I}{Γ_C};~E″}{Γ}}
+        {\WFTWOLINES{E;~c:U;~E′;~\ind{p+1}{∀ x:U,~\subst{Γ_I}{c}{x}}{∀ x:U,~\subst{Γ_C}{c}{x}};~
+          \subst{E″}{|Γ_I ;Γ_C |}{|Γ_I ;Γ_C | c}}
+         {\subst{Γ}{|Γ_I ;Γ_C|}{|Γ_I ;Γ_C | c}}}
 
 One can similarly modify a global declaration by generalizing it over
-a previously defined constant :math:`c′`. Below, if :math:`Γ` is a context of the form
-:math:`[y_1 :A_1 ;…;y_n :A_n]`, we write :math:`\subst{Γ}{c}{u}` to mean
-:math:`[y_1 :\subst{A_1} {c}{u};…;y_n:\subst{A_n} {c}{u}]`.
+a previously defined constant :math:`c`. Below, if :math:`Γ` is a context of the form
+:math:`[y_1 :A_1 ;~…;~y_n :A_n]`, we write :math:`\subst{Γ}{c}{u}` to mean
+:math:`[y_1 :\subst{A_1} {c}{u};~…;~y_n:\subst{A_n} {c}{u}]`.
 
 
 .. _Second-abstracting-property:
@@ -1786,16 +1830,16 @@ a previously defined constant :math:`c′`. Below, if :math:`Γ` is a context of
 **Second abstracting property:**
 
 .. math::
-   \frac{\WF{E;c:=u:U;E′;c′:=t:T;E″}{Γ}}
-        {\WF{E;c:=u:U;E′;c′:=(\letin{x}{u:U}{\subst{t}{c}{x}}):\subst{T}{c}{u};E″}{Γ}}
+   \frac{\WF{E;~c:=u:U;~E′;~c′:=t:T;~E″}{Γ}}
+        {\WF{E;~c:=u:U;~E′;~c′:=(\letin{x}{u:U}{\subst{t}{c}{x}}):\subst{T}{c}{u};~E″}{Γ}}
 
 .. math::
-   \frac{\WF{E;c:=u:U;E′;c′:T;E″}{Γ}}
-        {\WF{E;c:=u:U;E′;c′:\subst{T}{c}{u};E″}{Γ}}
+   \frac{\WF{E;~c:=u:U;~E′;~c′:T;~E″}{Γ}}
+        {\WF{E;~c:=u:U;~E′;~c′:\subst{T}{c}{u};~E″}{Γ}}
 
 .. math::
-   \frac{\WF{E;c:=u:U;E′;\ind{p}{Γ_I}{Γ_C};E″}{Γ}}
-        {\WF{E;c:=u:U;E′;\ind{p}{\subst{Γ_I}{c}{u}}{\subst{Γ_C}{c}{u}};E″}{Γ}}
+   \frac{\WF{E;~c:=u:U;~E′;~\ind{p}{Γ_I}{Γ_C};~E″}{Γ}}
+        {\WF{E;~c:=u:U;~E′;~\ind{p}{\subst{Γ_I}{c}{u}}{\subst{Γ_C}{c}{u}};~E″}{Γ}}
 
 .. _Pruning-the-local-context:
 
@@ -1810,7 +1854,7 @@ One can consequently derive the following property.
 
 .. inference:: First pruning property:
 	       
-   \WF{E;c:U;E′}{Γ}
+   \WF{E;~c:U;~E′}{Γ}
    c~\kw{does not occur in}~E′~\kw{and}~Γ
    --------------------------------------
    \WF{E;E′}{Γ}
@@ -1820,7 +1864,7 @@ One can consequently derive the following property.
 
 .. inference:: Second pruning property:
 
-   \WF{E;c:=u:U;E′}{Γ}
+   \WF{E;~c:=u:U;~E′}{Γ}
    c~\kw{does not occur in}~E′~\kw{and}~Γ
    --------------------------------------
    \WF{E;E′}{Γ}
@@ -1861,10 +1905,10 @@ in the sort :math:`\Set`, which is extended to a domain in any sort:
 .. inference:: ProdImp
 
    E[Γ] ⊢ T : s
-   s ∈ {\Sort}
-   E[Γ::(x:T)] ⊢ U : Set
+   s ∈ \Sort
+   E[Γ::(x:T)] ⊢ U : \Set
    ---------------------
-   E[Γ] ⊢ ∀ x:T,U : Set
+   E[Γ] ⊢ ∀ x:T,~U : \Set
 
 This extension has consequences on the inductive definitions which are
 allowed. In the impredicative system, one can build so-called *large
@@ -1879,15 +1923,15 @@ impredicative system for sort :math:`\Set` become:
 
 .. inference:: Set1
 
-   s ∈ \{Prop, Set\}
+   s ∈ \{\Prop, \Set\}
    -----------------
-   [I:Set|I→ s]
+   [I:\Set|I→ s]
 
 .. inference:: Set2
 
    I~\kw{is a small inductive definition}
    s ∈ \{\Type(i)\}
    ----------------
-   [I:Set|I→ s]
+   [I:\Set|I→ s]
 
 

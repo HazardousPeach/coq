@@ -1259,6 +1259,30 @@ Proof.
  f_equal. now rewrite <- add_assoc, add_opp_diag_r, add_0_r.
 Qed.
 
+(** * [testbit] in terms of comparision. *)
+
+Lemma testbit_mod_pow2 a n i (H : 0 <= n)
+  : testbit (a mod 2 ^ n) i = ((i <? n) && testbit a i)%bool.
+Proof.
+  destruct (ltb_spec i n); rewrite
+    ?mod_pow2_bits_low, ?mod_pow2_bits_high by auto; auto.
+Qed.
+
+Lemma testbit_ones n i (H : 0 <= n)
+  : testbit (ones n) i = ((0 <=? i) && (i <? n))%bool.
+Proof.
+  destruct (leb_spec 0 i), (ltb_spec i n); cbn;
+    rewrite ?testbit_neg_r, ?ones_spec_low, ?ones_spec_high by auto; trivial.
+Qed.
+
+Lemma testbit_ones_nonneg n i (Hn : 0 <= n) (Hi: 0 <= i)
+  : testbit (ones n) i = (i <? n).
+Proof.
+  rewrite testbit_ones by auto.
+  destruct (leb_spec 0 i); cbn; solve
+   [ trivial | destruct (proj1 (Z.le_ngt _ _) Hi ltac:(eassumption)) ].
+Qed.
+
 End Z.
 
 Bind Scope Z_scope with Z.t Z.
@@ -1588,40 +1612,18 @@ End Z2Pos.
 
 Notation Zdouble_plus_one := Z.succ_double (only parsing).
 Notation Zdouble_minus_one := Z.pred_double (only parsing).
-Notation Zdouble := Z.double (compat "8.7").
 Notation ZPminus := Z.pos_sub (only parsing).
-Notation Zsucc' := Z.succ (compat "8.7").
-Notation Zpred' := Z.pred (compat "8.7").
-Notation Zplus' := Z.add (compat "8.7").
 Notation Zplus := Z.add (only parsing). (* Slightly incompatible *)
-Notation Zopp := Z.opp (compat "8.7").
-Notation Zsucc := Z.succ (compat "8.7").
-Notation Zpred := Z.pred (compat "8.7").
 Notation Zminus := Z.sub (only parsing).
 Notation Zmult := Z.mul (only parsing).
-Notation Zcompare := Z.compare (compat "8.7").
-Notation Zsgn := Z.sgn (compat "8.7").
-Notation Zle := Z.le (compat "8.7").
-Notation Zge := Z.ge (compat "8.7").
-Notation Zlt := Z.lt (compat "8.7").
-Notation Zgt := Z.gt (compat "8.7").
-Notation Zmax := Z.max (compat "8.7").
-Notation Zmin := Z.min (compat "8.7").
-Notation Zabs := Z.abs (compat "8.7").
-Notation Zabs_nat := Z.abs_nat (compat "8.7").
-Notation Zabs_N := Z.abs_N (compat "8.7").
 Notation Z_of_nat := Z.of_nat (only parsing).
 Notation Z_of_N := Z.of_N (only parsing).
 
 Notation Zind := Z.peano_ind (only parsing).
-Notation Zopp_0 := Z.opp_0 (compat "8.7").
-Notation Zopp_involutive := Z.opp_involutive (compat "8.7").
-Notation Zopp_inj := Z.opp_inj (compat "8.7").
 Notation Zplus_0_l := Z.add_0_l (only parsing).
 Notation Zplus_0_r := Z.add_0_r (only parsing).
 Notation Zplus_comm := Z.add_comm (only parsing).
 Notation Zopp_plus_distr := Z.opp_add_distr (only parsing).
-Notation Zopp_succ := Z.opp_succ (compat "8.7").
 Notation Zplus_opp_r := Z.add_opp_diag_r (only parsing).
 Notation Zplus_opp_l := Z.add_opp_diag_l (only parsing).
 Notation Zplus_assoc := Z.add_assoc (only parsing).
@@ -1630,11 +1632,6 @@ Notation Zplus_reg_l := Z.add_reg_l (only parsing).
 Notation Zplus_succ_l := Z.add_succ_l (only parsing).
 Notation Zplus_succ_comm := Z.add_succ_comm (only parsing).
 Notation Zsucc_discr := Z.neq_succ_diag_r (only parsing).
-Notation Zsucc_inj := Z.succ_inj (compat "8.7").
-Notation Zsucc'_inj := Z.succ_inj (compat "8.7").
-Notation Zsucc'_pred' := Z.succ_pred (compat "8.7").
-Notation Zpred'_succ' := Z.pred_succ (compat "8.7").
-Notation Zpred'_inj := Z.pred_inj (compat "8.7").
 Notation Zsucc'_discr := Z.neq_succ_diag_r (only parsing).
 Notation Zminus_0_r := Z.sub_0_r (only parsing).
 Notation Zminus_diag := Z.sub_diag (only parsing).

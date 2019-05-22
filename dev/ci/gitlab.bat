@@ -26,12 +26,12 @@ if %ARCH% == 64 (
 
 SET CYGROOT=C:\ci\cygwin%ARCH%
 SET DESTCOQ=C:\ci\coq%ARCH%
+SET CYGCACHE=C:\ci\cache\cgwin
 
 CALL :MakeUniqueFolder %CYGROOT% CYGROOT
 CALL :MakeUniqueFolder %DESTCOQ% DESTCOQ
 
 powershell -Command "(New-Object Net.WebClient).DownloadFile('http://www.cygwin.com/%SETUP%', '%SETUP%')"
-SET CYGCACHE=%CYGROOT%\var\cache\setup
 SET CI_PROJECT_DIR_MFMT=%CI_PROJECT_DIR:\=/%
 SET CI_PROJECT_DIR_CFMT=%CI_PROJECT_DIR_MFMT:C:/=/cygdrive/c/%
 SET COQREGTESTING=Y
@@ -39,16 +39,18 @@ SET PATH=%PATH%;C:\Program Files\7-Zip\;C:\Program Files\Microsoft SDKs\Windows\
 
 IF "%WINDOWS%" == "enabled_all_addons" (
   SET EXTRA_ADDONS=^
+    -addon=bignums ^
+    -addon=equations ^
+    -addon=mtac2 ^
     -addon=mathcomp ^
     -addon=menhir ^
     -addon=menhirlib ^
     -addon=compcert ^
     -addon=extlib ^
     -addon=quickchick ^
-    -addon=coquelicot
-  REM addons with build issues
-  REM -addon=vst ^
-  REM -addon=aactactics ^
+    -addon=vst ^
+    -addon=aactactics
+REM -addon=coquelicot ^
 ) ELSE (
   SET "EXTRA_ADDONS= "
 )
@@ -56,10 +58,6 @@ IF "%WINDOWS%" == "enabled_all_addons" (
 call %CI_PROJECT_DIR%\dev\build\windows\MakeCoq_MinGW.bat -threads=1 ^
   -arch=%ARCH% -installer=Y -coqver=%CI_PROJECT_DIR_CFMT% ^
   -destcyg=%CYGROOT% -destcoq=%DESTCOQ% -cygcache=%CYGCACHE% ^
-  -addon=bignums ^
-  -addon=equations ^
-  -addon=ltac2 ^
-  -addon=mtac2 ^
   %EXTRA_ADDONS% ^
   -make=N ^
   -setup %CI_PROJECT_DIR%\%SETUP% || GOTO ErrorCopyLogFilesAndExit

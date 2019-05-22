@@ -12,7 +12,7 @@
 
 Set Implicit Arguments.
 
-Require Import ZArith.
+Require Import BinInt.
 Local Open Scope Z_scope.
 
 Definition base digits := Z.pow 2 (Zpos digits).
@@ -22,7 +22,8 @@ Section Carry.
 
  Variable A : Type.
 
- Inductive carry :=
+ #[universes(template)]
+ Variant carry :=
   | C0 : A -> carry
   | C1 : A -> carry.
 
@@ -44,7 +45,8 @@ Section Zn2Z.
      first.
  *)
 
- Inductive zn2z :=
+ #[universes(template)]
+ Variant zn2z :=
   | W0 : zn2z
   | WW : znz -> znz -> zn2z.
 

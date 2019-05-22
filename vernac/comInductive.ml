@@ -13,6 +13,7 @@ open CErrors
 open Sorts
 open Util
 open Constr
+open Context
 open Environ
 open Declare
 open Names
@@ -22,10 +23,9 @@ open Nameops
 open Constrexpr
 open Constrexpr_ops
 open Constrintern
-open Nametab
 open Impargs
 open Reductionops
-open Indtypes
+open Type_errors
 open Pretyping
 open Indschemes
 open Context.Rel.Declaration
@@ -35,17 +35,27 @@ module RelDecl = Context.Rel.Declaration
 
 (* 3b| Mutual inductive definitions *)
 
+let warn_auto_template =
+  CWarnings.create ~name:"auto-template" ~category:"vernacular" ~default:CWarnings.Disabled
+    (fun id ->
+       Pp.(strbrk "Automatically declaring " ++ Id.print id ++
+           strbrk " as template polymorphic. Use attributes or " ++
+           strbrk "disable Auto Template Polymorphism to avoid this warning."))
+
 let should_auto_template =
   let open Goptions in
   let auto = ref true in
-  let _ = declare_bool_option
+  let () = declare_bool_option
       { optdepr  = false;
         optname  = "Automatically make some inductive types template polymorphic";
         optkey   = ["Auto";"Template";"Polymorphism"];
         optread  = (fun () -> !auto);
         optwrite = (fun b -> auto := b); }
   in
-  fun () -> !auto
+  fun id would_auto ->
+    let b = !auto && would_auto in
+    if b then warn_auto_template id;
+    b
 
 let rec complete_conclusion a cs = CAst.map_with_loc (fun ?loc -> function
   | CProdN (bl,c) -> CProdN (bl,complete_conclusion a cs c)
@@ -61,9 +71,9 @@ let rec complete_conclusion a cs = CAst.map_with_loc (fun ?loc -> function
   | c -> c
   )
 
-let push_types env idl tl =
-  List.fold_left2 (fun env id t -> EConstr.push_rel (LocalAssum (Name id,t)) env)
-    env idl tl
+let push_types env idl rl tl =
+  List.fold_left3 (fun env id r t -> EConstr.push_rel (LocalAssum (make_annot (Name id) r,t)) env)
+    env idl rl tl
 
 type structured_one_inductive_expr = {
   ind_name : Id.t;
@@ -74,10 +84,9 @@ type structured_one_inductive_expr = {
 type structured_inductive_expr =
   local_binder_expr list * structured_one_inductive_expr list
 
-let minductive_message warn = function
+let minductive_message = function
   | []  -> user_err Pp.(str "No inductive definition.")
-  | [x] -> (Id.print x ++ str " is defined" ++
-            if warn then str " as a non-primitive record" else mt())
+  | [x] -> (Id.print x ++ str " is defined")
   | l   -> hov 0  (prlist_with_sep pr_comma Id.print l ++
                      spc () ++ str "are defined")
 
@@ -102,10 +111,6 @@ let check_all_names_different indl =
 let mk_mltype_data sigma env assums arity indname =
   let is_ml_type = is_sort env sigma arity in
   (is_ml_type,indname,assums)
-
-let prepare_param = function
-  | LocalAssum (na,t) -> Name.get_id na, LocalAssumEntry t
-  | LocalDef (na,b,_) -> Name.get_id na, LocalDefEntry b
 
 (** Make the arity conclusion flexible to avoid generating an upper bound universe now,
     only if the universe does not appear anywhere else.
@@ -135,9 +140,6 @@ let make_conclusion_flexible sigma = function
         | None -> sigma)
      | _ -> sigma)
 
-let is_impredicative env u =
-  u = Prop || (is_impredicative_set env && u = Set)
-
 let interp_ind_arity env sigma ind =
   let c = intern_gen IsType env sigma ind.ind_arity in
   let impls = Implicit_quantifiers.implicits_of_glob_constr ~with_products:true c in
@@ -148,7 +150,7 @@ let interp_ind_arity env sigma ind =
     user_err ?loc:(constr_loc ind.ind_arity) (str "Not an arity")
   | s ->
     let concl = if pseudo_poly then Some s else None in
-    sigma, (t, concl, impls)
+    sigma, (t, Retyping.relevance_of_sort s,  concl, impls)
 
 let interp_cstrs env sigma impls mldata arity ind =
   let cnames,ctyps = List.split ind.ind_lc in
@@ -158,7 +160,7 @@ let interp_cstrs env sigma impls mldata arity ind =
   let sigma, (ctyps'', cimpls) =
     on_snd List.split @@
     List.fold_left_map (fun sigma l ->
-        interp_type_evars_impls env sigma ~impls l) sigma ctyps' in
+        interp_type_evars_impls ~program_mode:false env sigma ~impls l) sigma ctyps' in
   sigma, (cnames, ctyps'', cimpls)
 
 let sign_level env evd sign =
@@ -172,14 +174,14 @@ let sign_level env evd sign =
         in
         let u = univ_of_sort s in
           (Univ.sup u lev, push_rel d env))
-    sign (Univ.type0m_univ,env))
+    sign (Univ.Universe.sprop,env))
 
 let sup_list min = List.fold_left Univ.sup min
 
 let extract_level env evd min tys =
   let sorts = List.map (fun ty ->
     let ctx, concl = Reduction.dest_prod_assum env ty in
-      sign_level env evd (LocalAssum (Anonymous, concl) :: ctx)) tys
+      sign_level env evd (LocalAssum (make_annot Anonymous Sorts.Relevant, concl) :: ctx)) tys
   in sup_list min sorts
 
 let is_flexible_sort evd u =
@@ -256,7 +258,7 @@ let solve_constraints_system levels level_bounds =
 let inductive_levels env evd poly arities inds =
   let destarities = List.map (fun x -> x, Reduction.dest_arity env x) arities in
   let levels = List.map (fun (x,(ctx,a)) ->
-    if a = Prop then None
+    if Sorts.is_prop a || Sorts.is_sprop a then None
     else Some (univ_of_sort a)) destarities
   in
   let cstrs_levels, min_levels, sizes =
@@ -265,13 +267,13 @@ let inductive_levels env evd poly arities inds =
         let len = List.length tys in
         let minlev = Sorts.univ_of_sort du in
         let minlev =
-          if len > 1 && not (is_impredicative env du) then
+          if len > 1 && not (is_impredicative_sort env du) then
             Univ.sup minlev Univ.type0_univ
           else minlev
         in
         let minlev =
-          (** Indices contribute. *)
-          if Indtypes.is_indices_matter () && List.length ctx > 0 then (
+          (* Indices contribute. *)
+          if indices_matter env && List.length ctx > 0 then (
             let ilev = sign_level env evd ctx in
               Univ.sup ilev minlev)
           else minlev
@@ -286,39 +288,39 @@ let inductive_levels env evd poly arities inds =
   in
   let evd, arities =
     CList.fold_left3 (fun (evd, arities) cu (arity,(ctx,du)) len ->
-      if is_impredicative env du then
-        (** Any product is allowed here. *)
+      if is_impredicative_sort env du then
+        (* Any product is allowed here. *)
         evd, arity :: arities
-      else (** If in a predicative sort, or asked to infer the type,
-               we take the max of:
-               - indices (if in indices-matter mode)
-               - constructors
-               - Type(1) if there is more than 1 constructor
+      else (* If in a predicative sort, or asked to infer the type,
+              we take the max of:
+              - indices (if in indices-matter mode)
+              - constructors
+              - Type(1) if there is more than 1 constructor
            *)
-        (** Constructors contribute. *)
+        (* Constructors contribute. *)
         let evd =
           if Sorts.is_set du then
             if not (Evd.check_leq evd cu Univ.type0_univ) then
-              raise (Indtypes.InductiveError Indtypes.LargeNonPropInductiveNotInType)
+              raise (InductiveError LargeNonPropInductiveNotInType)
             else evd
           else evd
             (* Evd.set_leq_sort env evd (Type cu) du *)
         in
         let evd =
           if len >= 2 && Univ.is_type0m_univ cu then
-           (** "Polymorphic" type constraint and more than one constructor,
+           (* "Polymorphic" type constraint and more than one constructor,
                should not land in Prop. Add constraint only if it would
                land in Prop directly (no informative arguments as well). *)
-            Evd.set_leq_sort env evd Set du
+            Evd.set_leq_sort env evd Sorts.set du
           else evd
         in
         let duu = Sorts.univ_of_sort du in
         let evd =
           if not (Univ.is_small_univ duu) && Univ.Universe.equal cu duu then
             if is_flexible_sort evd duu && not (Evd.check_leq evd Univ.type0_univ duu) then
-              Evd.set_eq_sort env evd Prop du
+              Evd.set_eq_sort env evd Sorts.prop du
             else evd
-          else Evd.set_eq_sort env evd (Type cu) du
+          else Evd.set_eq_sort env evd (sort_of_univ cu) du
         in
           (evd, arity :: arities))
     (evd,[]) (Array.to_list levels') destarities sizes
@@ -354,9 +356,9 @@ let interp_mutual_inductive_gen env0 ~template udecl (uparamsl,paramsl,indl) not
   then user_err (str "Inductives with uniform parameters may not have attached notations.");
   let sigma, udecl = interp_univ_decl_opt env0 udecl in
   let sigma, (uimpls, ((env_uparams, ctx_uparams), useruimpls)) =
-    interp_context_evars env0 sigma uparamsl in
+    interp_context_evars ~program_mode:false env0 sigma uparamsl in
   let sigma, (impls, ((env_params, ctx_params), userimpls)) =
-    interp_context_evars ~impl_env:uimpls env_uparams sigma paramsl
+    interp_context_evars ~program_mode:false ~impl_env:uimpls env_uparams sigma paramsl
   in
   let indnames = List.map (fun ind -> ind.ind_name) indl in
 
@@ -366,15 +368,15 @@ let interp_mutual_inductive_gen env0 ~template udecl (uparamsl,paramsl,indl) not
 
   (* Interpret the arities *)
   let sigma, arities = List.fold_left_map (fun sigma -> interp_ind_arity env_params sigma) sigma indl in
+  let arities, relevances, arityconcl, indimpls = List.split4 arities in
 
-  let fullarities = List.map (fun (c, _, _) -> EConstr.it_mkProd_or_LetIn c ctx_params) arities in
-  let env_ar = push_types env_uparams indnames fullarities in
+  let fullarities = List.map (fun c -> EConstr.it_mkProd_or_LetIn c ctx_params) arities in
+  let env_ar = push_types env_uparams indnames relevances fullarities in
   let env_ar_params = EConstr.push_rel_context ctx_params env_ar in
 
   (* Compute interpretation metadatas *)
-  let indimpls = List.map (fun (_, _, impls) -> userimpls @
-    lift_implicits (Context.Rel.nhyps ctx_params) impls) arities in
-  let arities = List.map pi1 arities and arityconcl = List.map pi2 arities in
+  let indimpls = List.map (fun impls -> userimpls @
+    lift_implicits (Context.Rel.nhyps ctx_params) impls) indimpls in
   let impls = compute_internalization_env env_uparams sigma ~impls (Inductive (params,true)) indnames fullarities indimpls in
   let ntn_impls = compute_internalization_env env_uparams sigma (Inductive (params,true)) indnames fullarities indimpls in
   let mldatas = List.map2 (mk_mltype_data sigma env_params params) arities indnames in
@@ -403,11 +405,11 @@ let interp_mutual_inductive_gen env0 ~template udecl (uparamsl,paramsl,indl) not
   let userimpls = useruimpls @ (lift_implicits (Context.Rel.nhyps ctx_uparams) userimpls) in
   let indimpls = List.map (fun iimpl -> useruimpls @ (lift_implicits (Context.Rel.nhyps ctx_uparams) iimpl)) indimpls in
   let fullarities = List.map (fun c -> EConstr.it_mkProd_or_LetIn c ctx_uparams) fullarities in
-  let env_ar = push_types env0 indnames fullarities in
+  let env_ar = push_types env0 indnames relevances fullarities in
   let env_ar_params = EConstr.push_rel_context ctx_params env_ar in
 
   (* Try further to solve evars, and instantiate them *)
-  let sigma = solve_remaining_evars all_and_fail_flags env_params sigma (Evd.from_env env_params) in
+  let sigma = solve_remaining_evars all_and_fail_flags env_params sigma in
   (* Compute renewed arities *)
   let sigma = Evd.minimize_universes sigma in
   let nf = Evarutil.nf_evars_universes sigma in
@@ -436,8 +438,8 @@ let interp_mutual_inductive_gen env0 ~template udecl (uparamsl,paramsl,indl) not
           if poly && template then user_err Pp.(strbrk "template and polymorphism not compatible");
           template
         | None ->
-          should_auto_template () && not poly &&
-          Option.cata (fun s -> not (Sorts.is_small s)) false concl
+          should_auto_template ind.ind_name (not poly &&
+          Option.cata (fun s -> not (Sorts.is_small s)) false concl)
       in
       { mind_entry_typename = ind.ind_name;
         mind_entry_arity = arity;
@@ -453,23 +455,16 @@ let interp_mutual_inductive_gen env0 ~template udecl (uparamsl,paramsl,indl) not
         indimpls, List.map (fun impls ->
           userimpls @ (lift_implicits len impls)) cimpls) indimpls constructors
   in
-  let univs =
-    match uctx with
-    | Polymorphic_const_entry uctx ->
-      if cum then
-        Cumulative_ind_entry (Univ.CumulativityInfo.from_universe_context uctx)
-      else Polymorphic_ind_entry uctx
-    | Monomorphic_const_entry uctx ->
-      Monomorphic_ind_entry uctx
-  in
+  let variance = if poly && cum then Some (InferCumulativity.dummy_variance uctx) else None in
   (* Build the mutual inductive entry *)
   let mind_ent =
-    { mind_entry_params = List.map prepare_param ctx_params;
+    { mind_entry_params = ctx_params;
       mind_entry_record = None;
       mind_entry_finite = finite;
       mind_entry_inds = entries;
       mind_entry_private = if prv then Some false else None;
-      mind_entry_universes = univs;
+      mind_entry_universes = uctx;
+      mind_entry_variance = variance;
     }
   in
   (if poly && cum then
@@ -515,7 +510,7 @@ let is_recursive mie =
   let rec is_recursive_constructor lift typ =
     match Constr.kind typ with
     | Prod (_,arg,rest) ->
-        not (EConstr.Vars.noccurn Evd.empty (** FIXME *) lift (EConstr.of_constr arg)) ||
+        not (EConstr.Vars.noccurn Evd.empty (* FIXME *) lift (EConstr.of_constr arg)) ||
         is_recursive_constructor (lift+1) rest
     | LetIn (na,b,t,rest) -> is_recursive_constructor (lift+1) rest
     | _ -> false
@@ -526,7 +521,13 @@ let is_recursive mie =
       List.exists (fun t -> is_recursive_constructor (nparams+1) t) ind.mind_entry_lc
   | _ -> false
 
-let declare_mutual_inductive_with_eliminations mie pl impls =
+let warn_non_primitive_record =
+  CWarnings.create ~name:"non-primitive-record" ~category:"record"
+         (fun indsp ->
+          (hov 0 (str "The record " ++ Nametab.pr_global_env Id.Set.empty (IndRef indsp) ++
+                    strbrk" could not be defined as a primitive record")))
+
+let declare_mutual_inductive_with_eliminations ?(primitive_expected=false) mie pl impls =
   (* spiwack: raises an error if the structure is supposed to be non-recursive,
         but isn't *)
   begin match mie.mind_entry_finite with
@@ -540,19 +541,19 @@ let declare_mutual_inductive_with_eliminations mie pl impls =
   let names = List.map (fun e -> e.mind_entry_typename) mie.mind_entry_inds in
   let (_, kn), prim = declare_mind mie in
   let mind = Global.mind_of_delta_kn kn in
+  if primitive_expected && not prim then warn_non_primitive_record (mind,0);
+  Declare.declare_univ_binders (IndRef (mind,0)) pl;
   List.iteri (fun i (indimpls, constrimpls) ->
               let ind = (mind,i) in
               let gr = IndRef ind in
               maybe_declare_manual_implicits false gr indimpls;
-              Declare.declare_univ_binders gr pl;
               List.iteri
                 (fun j impls ->
                  maybe_declare_manual_implicits false
                     (ConstructRef (ind, succ j)) impls)
                 constrimpls)
       impls;
-  let warn_prim = match mie.mind_entry_record with Some (Some _) -> not prim | _ -> false in
-  Flags.if_verbose Feedback.msg_info (minductive_message warn_prim names);
+  Flags.if_verbose Feedback.msg_info (minductive_message names);
   if mie.mind_entry_private == None
   then declare_default_schemes mind;
   mind
@@ -575,6 +576,6 @@ let do_mutual_inductive ~template udecl indl cum poly prv ~uniform finite =
   (* Declare the possible notations of inductive types *)
   List.iter (Metasyntax.add_notation_interpretation (Global.env ())) ntns;
   (* Declare the coercions *)
-  List.iter (fun qid -> Class.try_add_new_coercion (locate qid) ~local:false poly) coes;
+  List.iter (fun qid -> Class.try_add_new_coercion (Nametab.locate qid) ~local:false poly) coes;
   (* If positivity is assumed declares itself as unsafe. *)
   if Environ.deactivated_guard (Global.env ()) then Feedback.feedback Feedback.AddedAxiom else ()

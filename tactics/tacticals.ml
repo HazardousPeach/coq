@@ -20,11 +20,14 @@ open Tacmach
 open Clenv
 open Tactypes
 
+module RelDecl = Context.Rel.Declaration
 module NamedDecl = Context.Named.Declaration
 
 (************************************************************************)
 (* Tacticals re-exported from the Refiner module                        *)
 (************************************************************************)
+
+type tactic = Proofview.V82.tac
 
 let tclIDTAC         = Refiner.tclIDTAC
 let tclIDTAC_MESSAGE = Refiner.tclIDTAC_MESSAGE
@@ -221,8 +224,8 @@ let compute_induction_names = compute_induction_names_gen true
 (* Compute the let-in signature of case analysis or standard induction scheme *)
 let compute_constructor_signatures ~rec_flag ((_,k as ity),u) =
   let rec analrec c recargs =
-    match Constr.kind c, recargs with
-    | Prod (_,_,c), recarg::rest ->
+    match c, recargs with
+    | RelDecl.LocalAssum _ :: c, recarg::rest ->
         let rest = analrec c rest in
         begin match Declareops.dest_recarg recarg with
         | Norec | Imbr _  -> true :: rest
@@ -230,14 +233,13 @@ let compute_constructor_signatures ~rec_flag ((_,k as ity),u) =
             if rec_flag && Int.equal j k then true :: true :: rest
             else true :: rest
         end
-    | LetIn (_,_,_,c), rest -> false :: analrec c rest
-    | _, [] -> []
+    | RelDecl.LocalDef _ :: c, rest -> false :: analrec c rest
+    | [], [] -> []
     | _ -> anomaly (Pp.str "compute_constructor_signatures.")
   in
   let (mib,mip) = Global.lookup_inductive ity in
-  let n = mib.mind_nparams in
-  let lc =
-    Array.map (fun c -> snd (Term.decompose_prod_n_assum n c)) mip.mind_nf_lc in
+  let map (ctx, _) = List.skipn (Context.Rel.length mib.mind_params_ctxt) (List.rev ctx) in
+  let lc = Array.map map mip.mind_nf_lc in
   let lrecargs = Declareops.dest_subterms mip.mind_recargs in
   Array.map2 analrec lc lrecargs
 
@@ -570,7 +572,7 @@ module New = struct
     with Failure _ -> CErrors.user_err Pp.(str "Not enough hypotheses in the goal.")
 
   let nthHypId m gl =
-    (** We only use [id] *)
+    (* We only use [id] *)
     nthDecl m gl |> NamedDecl.get_id
   let nthHyp m gl = 
     mkVar (nthHypId m gl)
@@ -686,12 +688,12 @@ module New = struct
     end) end
 
   let elimination_sort_of_goal gl =
-    (** Retyping will expand evars anyway. *)
+    (* Retyping will expand evars anyway. *)
     let c = Proofview.Goal.concl gl in
     pf_apply Retyping.get_sort_family_of gl c
 
   let elimination_sort_of_hyp id gl =
-    (** Retyping will expand evars anyway. *)
+    (* Retyping will expand evars anyway. *)
     let c = pf_get_hyp_typ id gl in
     pf_apply Retyping.get_sort_family_of gl c
 
@@ -702,7 +704,8 @@ module New = struct
   (* computing the case/elim combinators *)
 
   let gl_make_elim ind = begin fun gl ->
-    let gr = Indrec.lookup_eliminator (fst ind) (elimination_sort_of_goal gl) in
+    let env = Proofview.Goal.env gl in
+    let gr = Indrec.lookup_eliminator env (fst ind) (elimination_sort_of_goal gl) in
     let (sigma, c) = pf_apply Evd.fresh_global gl gr in
     (sigma, c)
   end

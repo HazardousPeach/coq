@@ -59,10 +59,10 @@
    etc.
 *)
 
-open CErrors
 open Util
 open Names
 open Declarations
+open Constr
 open Context.Named.Declaration
 
 module NamedDecl = Context.Named.Declaration
@@ -192,7 +192,28 @@ let set_engagement c senv =
     engagement = Some c }
 
 let set_typing_flags c senv =
-  { senv with env = Environ.set_typing_flags c senv.env }
+  let env = Environ.set_typing_flags c senv.env in
+  if env == senv.env then senv
+  else { senv with env }
+
+let set_indices_matter indices_matter senv =
+  set_typing_flags { (Environ.typing_flags senv.env) with indices_matter } senv
+
+let set_share_reduction b senv =
+  let flags = Environ.typing_flags senv.env in
+  set_typing_flags { flags with share_reduction = b } senv
+
+let set_VM b senv =
+  let flags = Environ.typing_flags senv.env in
+  set_typing_flags { flags with enable_VM = b } senv
+
+let set_native_compiler b senv =
+  let flags = Environ.typing_flags senv.env in
+  set_typing_flags { flags with enable_native_compiler = b } senv
+
+let make_sprop_cumulative senv = { senv with env = Environ.make_sprop_cumulative senv.env }
+
+let set_allow_sprop b senv = { senv with env = Environ.set_allow_sprop b senv.env }
 
 (** Check that the engagement [c] expected by a library matches
     the current (initial) one *)
@@ -207,57 +228,87 @@ let check_engagement env expected_impredicative_set =
 
 (** {6 Stm machinery } *)
 
-let get_opaque_body env cbo =
-  match cbo.const_body with
-  | Undef _ -> assert false
-  | Def _ -> `Nothing
-  | OpaqueDef opaque ->
-      `Opaque
-        (Opaqueproof.force_proof (Environ.opaque_tables env) opaque,
-         Opaqueproof.force_constraints (Environ.opaque_tables env) opaque)
+type side_effect = {
+  from_env : Declarations.structure_body CEphemeron.key;
+  seff_constant : Constant.t;
+  seff_body : (Constr.t * Univ.ContextSet.t) Declarations.constant_body;
+  seff_role : Entries.side_effect_role;
+}
 
-type private_constants = Term_typing.side_effects
+module SideEffects :
+sig
+  type t
+  val repr : t -> side_effect list
+  val empty : t
+  val add : side_effect -> t -> t
+  val concat : t -> t -> t
+end =
+struct
 
-let empty_private_constants = Term_typing.empty_seff
-let add_private = Term_typing.add_seff
-let concat_private = Term_typing.concat_seff
-let mk_pure_proof = Term_typing.mk_pure_proof
-let inline_private_constants_in_constr = Term_typing.inline_side_effects
-let inline_private_constants_in_definition_entry = Term_typing.inline_entry_side_effects
-let side_effects_of_private_constants = Term_typing.uniq_seff
+module SeffOrd = struct
+type t = side_effect
+let compare e1 e2 =
+  Constant.CanOrd.compare e1.seff_constant e2.seff_constant
+end
 
-let make_eff env cst r =
-  let open Entries in
-  let cbo = Environ.lookup_constant cst env.env in
-  {
-    seff_constant = cst;
-    seff_body = cbo;
-    seff_env = get_opaque_body env.env cbo;
-    seff_role = r;
-  }
+module SeffSet = Set.Make(SeffOrd)
 
-let private_con_of_con env c =
-  let open Entries in
-  let eff = [make_eff env c Subproof] in
-  add_private env.revstruct eff empty_private_constants
+type t = { seff : side_effect list; elts : SeffSet.t }
+(** Invariant: [seff] is a permutation of the elements of [elts] *)
 
-let private_con_of_scheme ~kind env cl =
-  let open Entries in
-  let eff = List.map (fun (i, c) -> make_eff env c (Schema (i, kind))) cl in
-  add_private env.revstruct eff empty_private_constants
+let repr eff = eff.seff
+let empty = { seff = []; elts = SeffSet.empty }
+let add x es =
+  if SeffSet.mem x es.elts then es
+  else { seff = x :: es.seff; elts = SeffSet.add x es.elts }
+let concat xes yes =
+  List.fold_right add xes.seff yes
+
+end
+
+type private_constants = SideEffects.t
+
+let side_effects_of_private_constants l =
+  List.rev (SideEffects.repr l)
+
+(* Only used to push in an Environ.env. *)
+let lift_constant c =
+  let body = match c.const_body with
+  | OpaqueDef _ -> Undef None
+  | Def _ | Undef _ | Primitive _ as body -> body
+  in
+  { c with const_body = body }
+
+let map_constant f c =
+  let body = match c.const_body with
+  | OpaqueDef o -> OpaqueDef (f o)
+  | Def _ | Undef _ | Primitive _ as body -> body
+  in
+  { c with const_body = body }
+
+let push_private_constants env eff =
+  let eff = side_effects_of_private_constants eff in
+  let add_if_undefined env eff =
+    try ignore(Environ.lookup_constant eff.seff_constant env); env
+    with Not_found -> Environ.add_constant eff.seff_constant (lift_constant eff.seff_body) env
+  in
+  List.fold_left add_if_undefined env eff
+
+let empty_private_constants = SideEffects.empty
+let concat_private = SideEffects.concat
 
 let universes_of_private eff =
-  let open Entries in
   let fold acc eff =
-    let acc = match eff.seff_env with
-    | `Nothing -> acc
-    | `Opaque (_, ctx) -> ctx :: acc
+    let acc = match eff.seff_body.const_body with
+    | Def _ -> acc
+    | OpaqueDef (_, ctx) -> ctx :: acc
+    | Primitive _ | Undef _ -> assert false
     in
     match eff.seff_body.const_universes with
-    | Monomorphic_const ctx -> ctx :: acc
-    | Polymorphic_const _ -> acc
+    | Monomorphic ctx -> ctx :: acc
+    | Polymorphic _ -> acc
   in
-  List.fold_left fold [] (Term_typing.uniq_seff eff)
+  List.fold_left fold [] (side_effects_of_private_constants eff)
 
 let env_of_safe_env senv = senv.env
 let env_of_senv = env_of_safe_env
@@ -379,14 +430,16 @@ let safe_push_named d env =
 
 
 let push_named_def (id,de) senv =
-  let c, typ = Term_typing.translate_local_def senv.env id de in
-  let env'' = safe_push_named (LocalDef (id, c, typ)) senv.env in
+  let c, r, typ = Term_typing.translate_local_def senv.env id de in
+  let x = Context.make_annot id r in
+  let env'' = safe_push_named (LocalDef (x, c, typ)) senv.env in
   { senv with env = env'' }
 
 let push_named_assum ((id,t,poly),ctx) senv =
   let senv' = push_context_set poly ctx senv in
-  let t = Term_typing.translate_local_assum senv'.env t in
-  let env'' = safe_push_named (LocalAssum (id,t)) senv'.env in
+  let t, r = Term_typing.translate_local_assum senv'.env t in
+  let x = Context.make_annot id r in
+  let env'' = safe_push_named (LocalAssum (x,t)) senv'.env in
     {senv' with env=env''}
 
 
@@ -407,10 +460,10 @@ let labels_of_mib mib =
 
 let globalize_constant_universes env cb =
   match cb.const_universes with
-  | Monomorphic_const cstrs ->
+  | Monomorphic cstrs ->
     Now (false, cstrs) ::
     (match cb.const_body with
-     | (Undef _ | Def _) -> []
+     | (Undef _ | Def _ | Primitive _) -> []
      | OpaqueDef lc ->
        match Opaqueproof.get_constraints (Environ.opaque_tables env) lc with
        | None -> []
@@ -418,15 +471,14 @@ let globalize_constant_universes env cb =
             match Future.peek_val fc with
              | None -> [Later fc]
              | Some c -> [Now (false, c)])
-  | Polymorphic_const _ ->
+  | Polymorphic _ ->
     [Now (true, Univ.ContextSet.empty)]
       
 let globalize_mind_universes mb =
   match mb.mind_universes with
-  | Monomorphic_ind ctx ->
+  | Monomorphic ctx ->
     [Now (false, ctx)]
-  | Polymorphic_ind _ -> [Now (true, Univ.ContextSet.empty)]
-  | Cumulative_ind _ -> [Now (true, Univ.ContextSet.empty)]
+  | Polymorphic _ -> [Now (true, Univ.ContextSet.empty)]
 
 let constraints_of_sfb env sfb = 
   match sfb with
@@ -434,6 +486,11 @@ let constraints_of_sfb env sfb =
   | SFBmind mib -> globalize_mind_universes mib
   | SFBmodtype mtb -> [Now (false, mtb.mod_constraints)]
   | SFBmodule mb -> [Now (false, mb.mod_constraints)]
+
+let add_retroknowledge pttc senv =
+  { senv with
+    env = Primred.add_retroknowledge senv.env pttc;
+    local_retroknowledge = pttc::senv.local_retroknowledge }
 
 (** A generic function for adding a new field in a same environment.
     It also performs the corresponding [add_constraints]. *)
@@ -444,7 +501,7 @@ type generic_name =
   | M (** name already known, cf the mod_mp field *)
   | MT (** name already known, cf the mod_mp field *)
 
-let add_field ((l,sfb) as field) gn senv =
+let add_field ?(is_include=false) ((l,sfb) as field) gn senv =
   let mlabs,olabs = match sfb with
     | SFBmind mib ->
       let l = labels_of_mib mib in
@@ -454,8 +511,18 @@ let add_field ((l,sfb) as field) gn senv =
     | SFBmodule _ | SFBmodtype _ ->
       check_modlabel l senv; (Label.Set.singleton l, Label.Set.empty)
   in
-  let cst = constraints_of_sfb senv.env sfb in
-  let senv = add_constraints_list cst senv in
+  let senv =
+    if is_include then
+      (* Universes and constraints were added when the included module
+         was defined eg in [Include F X.] (one of the trickier
+         versions of Include) the constraints on the fields are
+         exactly those of the fields of F which was defined
+         separately. *)
+      senv
+    else
+      let cst = constraints_of_sfb senv.env sfb in
+      add_constraints_list cst senv
+  in
   let env' = match sfb, gn with
     | SFBconst cb, C con -> Environ.add_constant con cb senv.env
     | SFBmind mib, I mind -> Environ.add_mind mind mib senv.env
@@ -480,7 +547,6 @@ type 'a effect_entry =
 
 type global_declaration =
   | ConstantEntry : 'a effect_entry * 'a Entries.constant_entry -> global_declaration
-  | GlobalRecipe of Cooking.recipe
 
 type exported_private_constant = 
   Constant.t * Entries.side_effect_role
@@ -507,27 +573,244 @@ let add_constant_aux ~in_section senv (kn, cb) =
   in
   senv''
 
+let mk_pure_proof c = (c, Univ.ContextSet.empty), SideEffects.empty
+
+let inline_side_effects env body side_eff =
+  let open Constr in
+  (** First step: remove the constants that are still in the environment *)
+  let filter e =
+    let cb = (e.seff_constant, e.seff_body) in
+    try ignore (Environ.lookup_constant e.seff_constant env); None
+    with Not_found -> Some (cb, e.from_env)
+  in
+  (* CAVEAT: we assure that most recent effects come first *)
+  let side_eff = List.map_filter filter (SideEffects.repr side_eff) in
+  let sigs = List.rev_map (fun (_, mb) -> mb) side_eff in
+  let side_eff = List.fold_left (fun accu (cb, _) -> cb :: accu) [] side_eff in
+  let side_eff = List.rev side_eff in
+  (** Most recent side-effects first in side_eff *)
+  if List.is_empty side_eff then (body, Univ.ContextSet.empty, sigs)
+  else
+    (** Second step: compute the lifts and substitutions to apply *)
+    let cname c r = Context.make_annot (Name (Label.to_id (Constant.label c))) r in
+    let fold (subst, var, ctx, args) (c, cb) =
+      let (b, opaque) = match cb.const_body with
+      | Def b -> (Mod_subst.force_constr b, false)
+      | OpaqueDef (b, _) -> (b, true)
+      | _ -> assert false
+      in
+      match cb.const_universes with
+      | Monomorphic univs ->
+        (** Abstract over the term at the top of the proof *)
+        let ty = cb.const_type in
+        let subst = Cmap_env.add c (Inr var) subst in
+        let ctx = Univ.ContextSet.union ctx univs in
+        (subst, var + 1, ctx, (cname c cb.const_relevance, b, ty, opaque) :: args)
+      | Polymorphic _ ->
+        (** Inline the term to emulate universe polymorphism *)
+        let subst = Cmap_env.add c (Inl b) subst in
+        (subst, var, ctx, args)
+    in
+    let (subst, len, ctx, args) = List.fold_left fold (Cmap_env.empty, 1, Univ.ContextSet.empty, []) side_eff in
+    (** Third step: inline the definitions *)
+    let rec subst_const i k t = match Constr.kind t with
+    | Const (c, u) ->
+      let data = try Some (Cmap_env.find c subst) with Not_found -> None in
+      begin match data with
+      | None -> t
+      | Some (Inl b) ->
+        (** [b] is closed but may refer to other constants *)
+        subst_const i k (Vars.subst_instance_constr u b)
+      | Some (Inr n) ->
+        mkRel (k + n - i)
+      end
+    | Rel n ->
+      (** Lift free rel variables *)
+      if n <= k then t
+      else mkRel (n + len - i - 1)
+    | _ -> Constr.map_with_binders ((+) 1) (fun k t -> subst_const i k t) k t
+    in
+    let map_args i (na, b, ty, opaque) =
+      (** Both the type and the body may mention other constants *)
+      let ty = subst_const (len - i - 1) 0 ty in
+      let b = subst_const (len - i - 1) 0 b in
+      (na, b, ty, opaque)
+    in
+    let args = List.mapi map_args args in
+    let body = subst_const 0 0 body in
+    let fold_arg (na, b, ty, opaque) accu =
+      if opaque then mkApp (mkLambda (na, ty, accu), [|b|])
+      else mkLetIn (na, b, ty, accu)
+    in
+    let body = List.fold_right fold_arg args body in
+    (body, ctx, sigs)
+
+let inline_private_constants_in_definition_entry env ce =
+  let open Entries in
+  { ce with
+  const_entry_body = Future.chain
+    ce.const_entry_body (fun ((body, ctx), side_eff) ->
+      let body, ctx',_ = inline_side_effects env body side_eff in
+      let ctx' = Univ.ContextSet.union ctx ctx' in
+      (body, ctx'), ());
+  }
+
+let inline_private_constants_in_constr env body side_eff =
+  pi1 (inline_side_effects env body side_eff)
+
+let is_suffix l suf = match l with
+| [] -> false
+| _ :: l -> l == suf
+
+(* Given the list of signatures of side effects, checks if they match.
+ * I.e. if they are ordered descendants of the current revstruct.
+   Returns the number of effects that can be trusted. *)
+let check_signatures curmb sl =
+  let is_direct_ancestor accu mb =
+    match accu with
+    | None -> None
+    | Some (n, curmb) ->
+        try
+          let mb = CEphemeron.get mb in
+          if is_suffix mb curmb
+          then Some (n + 1, mb)
+          else None
+        with CEphemeron.InvalidKey -> None in
+  let sl = List.fold_left is_direct_ancestor (Some (0, curmb)) sl in
+  match sl with
+  | None -> 0
+  | Some (n, _) -> n
+
+
+let constant_entry_of_side_effect eff =
+  let cb = eff.seff_body in
+  let open Entries in
+  let univs =
+    match cb.const_universes with
+    | Monomorphic uctx ->
+      Monomorphic_entry uctx
+    | Polymorphic auctx ->
+      Polymorphic_entry (Univ.AUContext.names auctx, Univ.AUContext.repr auctx)
+  in
+  let pt =
+    match cb.const_body with
+    | OpaqueDef (b, c) -> b, c
+    | Def b -> Mod_subst.force_constr b, Univ.ContextSet.empty
+    | _ -> assert false in
+  DefinitionEntry {
+    const_entry_body = Future.from_val (pt, ());
+    const_entry_secctx = None;
+    const_entry_feedback = None;
+    const_entry_type = Some cb.const_type;
+    const_entry_universes = univs;
+    const_entry_opaque = Declareops.is_opaque cb;
+    const_entry_inline_code = cb.const_inline_code }
+
+let export_eff eff =
+  (eff.seff_constant, eff.seff_body, eff.seff_role)
+
+let export_side_effects mb env c =
+  let open Entries in
+      let body = c.const_entry_body in
+      let _, eff = Future.force body in
+      let ce = { c with
+        Entries.const_entry_body = Future.chain body
+          (fun (b_ctx, _) -> b_ctx, ()) } in
+      let not_exists e =
+        try ignore(Environ.lookup_constant e.seff_constant env); false
+        with Not_found -> true in
+      let aux (acc,sl) e =
+        if not (not_exists e) then acc, sl
+        else e :: acc, e.from_env :: sl in
+      let seff, signatures = List.fold_left aux ([],[]) (SideEffects.repr eff) in
+      let trusted = check_signatures mb signatures in
+      let push_seff env eff =
+        let { seff_constant = kn; seff_body = cb ; _ } = eff in
+        let env = Environ.add_constant kn (lift_constant cb) env in
+        match cb.const_universes with
+        | Polymorphic _ -> env
+        | Monomorphic ctx ->
+          let ctx = match eff.seff_body.const_body with
+          | Def _ -> ctx
+          | OpaqueDef (_, ctx') -> Univ.ContextSet.union ctx' ctx
+          | Undef _ | Primitive _ -> assert false
+          in
+          Environ.push_context_set ~strict:true ctx env
+      in
+      let rec translate_seff sl seff acc env =
+        match seff with
+        | [] -> List.rev acc, ce
+        | eff :: rest ->
+          if Int.equal sl 0 then
+            let env, cb =
+              let kn = eff.seff_constant in
+               let ce = constant_entry_of_side_effect eff in
+               let cb = Term_typing.translate_constant Term_typing.Pure env kn ce in
+               let cb = map_constant Future.force cb in
+               let eff = { eff with seff_body = cb } in
+               (push_seff env eff, export_eff eff)
+            in
+            translate_seff 0 rest (cb :: acc) env
+          else
+           let env = push_seff env eff in
+           let ecb = export_eff eff in
+           translate_seff (sl - 1) rest (ecb :: acc) env
+     in
+       translate_seff trusted seff [] env
+
 let export_private_constants ~in_section ce senv =
-  let exported, ce = Term_typing.export_side_effects senv.revstruct senv.env ce in
-  let bodies = List.map (fun (kn, cb, _) -> (kn, cb)) exported in
+  let exported, ce = export_side_effects senv.revstruct senv.env ce in
+  let map (kn, cb, _) = (kn, map_constant (fun p -> Opaqueproof.create (Future.from_val p)) cb) in
+  let bodies = List.map map exported in
   let exported = List.map (fun (kn, _, r) -> (kn, r)) exported in
   let senv = List.fold_left (add_constant_aux ~in_section) senv bodies in
   (ce, exported), senv
 
-let add_constant ~in_section l decl senv =
+let add_recipe ~in_section l r senv =
   let kn = Constant.make2 senv.modpath l in
-  let senv =
+  let cb = Term_typing.translate_recipe ~hcons:(not in_section) senv.env kn r in
+  let cb = if in_section then cb else Declareops.hcons_const_body cb in
+  let senv = add_constant_aux ~in_section senv (kn, cb) in
+  kn, senv
+
+let add_constant ?role ~in_section l decl senv =
+  let kn = Constant.make2 senv.modpath l in
     let cb = 
       match decl with
       | ConstantEntry (EffectEntry, ce) ->
-        Term_typing.translate_constant (Term_typing.SideEffects senv.revstruct) senv.env kn ce
+        let handle env body eff =
+          let body, uctx, signatures = inline_side_effects env body eff in
+          let trusted = check_signatures senv.revstruct signatures in
+          body, uctx, trusted
+        in
+        Term_typing.translate_constant (Term_typing.SideEffects handle) senv.env kn ce
       | ConstantEntry (PureEntry, ce) ->
         Term_typing.translate_constant Term_typing.Pure senv.env kn ce
-      | GlobalRecipe r ->
-        let cb = Term_typing.translate_recipe ~hcons:(not in_section) senv.env kn r in
-        if in_section then cb else Declareops.hcons_const_body cb in
+    in
+  let senv =
+    let cb = map_constant Opaqueproof.create cb in
     add_constant_aux ~in_section senv (kn, cb) in
-  kn, senv
+  let senv =
+    match decl with
+    | ConstantEntry (_,(Entries.PrimitiveEntry { Entries.prim_entry_content = CPrimitives.OT_type t; _ })) ->
+      if in_section then CErrors.anomaly (Pp.str "Primitive type not allowed in sections");
+      add_retroknowledge (Retroknowledge.Register_type(t,kn)) senv
+    | _ -> senv
+  in
+  let eff = match role with
+  | None -> empty_private_constants
+  | Some role ->
+    let cb = map_constant Future.force cb in
+    let from_env = CEphemeron.create senv.revstruct in
+    let eff = {
+      from_env = from_env;
+      seff_constant = kn;
+      seff_body = cb;
+      seff_role = role;
+    } in
+    SideEffects.add eff empty_private_constants
+  in
+  (kn, eff), senv
 
 (** Insertion of inductive types *)
 
@@ -542,7 +825,7 @@ let check_mind mie lab =
 let add_mind l mie senv =
   let () = check_mind mie l in
   let kn = MutInd.make2 senv.modpath l in
-  let mib = Term_typing.translate_mind senv.env kn mie in
+  let mib = Indtypes.check_inductive senv.env kn mie in
   let mib =
     match mib.mind_hyps with [] -> Declareops.hcons_mind mib | _ -> mib
   in
@@ -780,7 +1063,7 @@ let add_include me is_module inl senv =
       | SFBmodule _ -> M
       | SFBmodtype _ -> MT
     in
-    add_field field new_name senv
+    add_field ~is_include:true field new_name senv
   in
   resolver, List.fold_left add senv str
 
@@ -793,6 +1076,8 @@ type compiled_library = {
   comp_enga : engagement;
   comp_natsymbs : Nativecode.symbols
 }
+
+let module_of_library lib = lib.comp_mod
 
 type native_library = Nativecode.global list
 
@@ -817,7 +1102,7 @@ let start_library dir senv =
     modvariant = LIBRARY;
     required = senv.required }
 
-let export ?except senv dir =
+let export ?except ~output_native_objects senv dir =
   let senv =
     try join_safe_environment ?except senv
     with e ->
@@ -839,7 +1124,7 @@ let export ?except senv dir =
     }
   in
   let ast, symbols =
-    if !Flags.output_native_objects then
+    if output_native_objects then
       Nativelibrary.dump_library mp dir senv.env str
     else [], Nativecode.empty_symbols
   in
@@ -889,18 +1174,6 @@ let typing senv = Typeops.infer (env_of_senv senv)
 
 (** {6 Retroknowledge / native compiler } *)
 
-let register field value senv =
-  (* todo : value closed *)
-  (* spiwack : updates the safe_env with the information that the register
-     action has to be performed (again) when the environment is imported *)
-  { senv with
-    env = Environ.register senv.env field value;
-    local_retroknowledge =
-      Retroknowledge.RKRegister (field,value)::senv.local_retroknowledge
-  }
-
-(* This function serves only for inlining constants in native compiler for now,
-but it is meant to become a replacement for environ.register *)
 let register_inline kn senv =
   let open Environ in
   if not (evaluable_constant kn senv.env) then
@@ -909,6 +1182,88 @@ let register_inline kn senv =
   let cb = lookup_constant kn env in
   let cb = {cb with const_inline_code = true} in
   let env = add_constant kn cb env in { senv with env}
+
+let check_register_ind ind r env =
+  let (mb,ob as spec) = Inductive.lookup_mind_specif env ind in
+  let check_if b msg =
+    if not b then
+      CErrors.user_err ~hdr:"check_register_ind" msg in
+  check_if (Int.equal (Array.length mb.mind_packets) 1) Pp.(str "A non mutual inductive is expected");
+  let is_monomorphic = function Monomorphic _ -> true | Polymorphic _ -> false in
+  check_if (is_monomorphic mb.mind_universes) Pp.(str "A universe monomorphic inductive type is expected");
+  check_if (not @@ Inductive.is_private spec) Pp.(str "A non-private inductive type is expected");
+  let check_nparams n =
+    check_if (Int.equal mb.mind_nparams n) Pp.(str "An inductive type with " ++ int n ++ str " parameters is expected")
+  in
+  let check_nconstr n =
+    check_if (Int.equal (Array.length ob.mind_consnames) n)
+      Pp.(str "an inductive type with " ++ int n ++ str " constructors is expected")
+  in
+  let check_name pos s =
+    check_if (Id.equal ob.mind_consnames.(pos) (Id.of_string s))
+      Pp.(str"the " ++ int (pos + 1) ++ str
+       "th constructor does not have the expected name: " ++ str s) in
+  let check_type pos t =
+    check_if (Constr.equal t ob.mind_user_lc.(pos))
+      Pp.(str"the " ++ int (pos + 1) ++ str
+       "th constructor does not have the expected type") in
+  let check_type_cte pos = check_type pos (Constr.mkRel 1) in
+  match r with
+  | CPrimitives.PIT_bool ->
+    check_nparams 0;
+    check_nconstr 2;
+    check_name 0 "true";
+    check_type_cte 0;
+    check_name 1 "false";
+    check_type_cte 1
+  | CPrimitives.PIT_carry ->
+    check_nparams 1;
+    check_nconstr 2;
+    let test_type pos =
+      let c = ob.mind_user_lc.(pos) in
+      let s = Pp.(str"the " ++ int (pos + 1) ++ str
+              "th constructor does not have the expected type") in
+      check_if (Constr.isProd c) s;
+      let (_,d,cd) = Constr.destProd c in
+      check_if (Constr.is_Type d) s;
+      check_if
+        (Constr.equal
+                (mkProd (Context.anonR,mkRel 1, mkApp (mkRel 3,[|mkRel 2|])))
+                cd)
+        s in
+    check_name 0 "C0";
+    test_type 0;
+    check_name 1 "C1";
+    test_type 1;
+  | CPrimitives.PIT_pair ->
+    check_nparams 2;
+    check_nconstr 1;
+    check_name 0 "pair";
+    let c = ob.mind_user_lc.(0) in
+    let s =  Pp.str "the constructor does not have the expected type" in
+    begin match Term.decompose_prod c with
+      | ([_,b;_,a;_,_B;_,_A], codom) ->
+        check_if (is_Type _A) s;
+        check_if (is_Type _B) s;
+        check_if (Constr.equal a (mkRel 2)) s;
+        check_if (Constr.equal b (mkRel 2)) s;
+        check_if (Constr.equal codom (mkApp (mkRel 5,[|mkRel 4; mkRel 3|]))) s
+      | _ -> check_if false s
+    end
+  | CPrimitives.PIT_cmp ->
+    check_nparams 0;
+    check_nconstr 3;
+    check_name 0 "Eq";
+    check_type_cte 0;
+    check_name 1 "Lt";
+    check_type_cte 1;
+    check_name 2 "Gt";
+    check_type_cte 2
+
+let register_inductive ind prim senv =
+  check_register_ind ind prim senv.env;
+  let action = Retroknowledge.Register_ind(prim,ind) in
+  add_retroknowledge action senv
 
 let add_constraints c =
   add_constraints
@@ -935,128 +1290,6 @@ loaded by side-effect once and for all (like it is done in OCaml).
 Would this be correct with respect to undo's and stuff ?
 *)
 
-let set_strategy e k l = { e with env =
+let set_strategy k l e = { e with env =
    (Environ.set_oracle e.env
       (Conv_oracle.set_strategy (Environ.oracle e.env) k l)) }
-
-(** Register retroknowledge hooks *)
-
-open Retroknowledge
-
-(* the Environ.register function synchronizes the proactive and reactive
-   retroknowledge. *)
-let dispatch =
-
-  (* subfunction used for static decompilation of int31 (after a vm_compute,
-     see pretyping/vnorm.ml for more information) *)
-  let constr_of_int31 =
-    let nth_digit_plus_one i n = (* calculates the nth (starting with 0)
-                                    digit of i and adds 1 to it
-                                    (nth_digit_plus_one 1 3 = 2) *)
-      if Int.equal (i land (1 lsl n)) 0 then
-        1
-      else
-        2
-    in
-      fun ind -> fun digit_ind -> fun tag ->
-        let array_of_int i =
-          Array.init 31 (fun n -> Constr.mkConstruct
-                           (digit_ind, nth_digit_plus_one i (30-n)))
-        in
-        (* We check that no bit above 31 is set to one. This assertion used to
-        fail in the VM, and led to conversion tests failing at Qed. *)
-        assert (Int.equal (tag lsr 31) 0);
-        Constr.mkApp(Constr.mkConstruct(ind, 1), array_of_int tag)
-  in
-
-  (* subfunction which dispatches the compiling information of an
-     int31 operation which has a specific vm instruction (associates
-     it to the name of the coq definition in the reactive retroknowledge) *)
-  let int31_op n op prim kn =
-    { empty_reactive_info with
-      vm_compiling = Some (Clambda.compile_prim n op (kn, Univ.Instance.empty)); (*XXX: FIXME universes? *)
-      native_compiling = Some (Nativelambda.compile_prim prim kn);
-    }
-  in
-
-fun rk value field ->
-  (* subfunction which shortens the (very common) dispatch of operations *)
-  let int31_op_from_const n op prim =
-    match value with
-      | GlobRef.ConstRef kn -> int31_op n op prim kn
-      | _ -> anomaly ~label:"Environ.register" (Pp.str "should be a constant.")
-  in
-  let int31_binop_from_const op prim = int31_op_from_const 2 op prim in
-  let int31_unop_from_const op prim = int31_op_from_const 1 op prim in
-  match field with
-    | KInt31 Int31Type ->
-        let int31bit =
-          (* invariant : the type of bits is registered, otherwise the function
-             would raise Not_found. The invariant is enforced in safe_typing.ml *)
-          match field with
-          | KInt31 Int31Type -> Retroknowledge.find rk (KInt31 Int31Bits)
-          | _ -> anomaly ~label:"Environ.register"
-              (Pp.str "add_int31_decompilation_from_type called with an abnormal field.")
-        in
-        let i31bit_type =
-          match int31bit with
-          | GlobRef.IndRef i31bit_type -> i31bit_type
-          |  _ -> anomaly ~label:"Environ.register"
-              (Pp.str "Int31Bits should be an inductive type.")
-        in
-        let int31_decompilation =
-          match value with
-          | GlobRef.IndRef i31t ->
-              constr_of_int31 i31t i31bit_type
-          | _ -> anomaly ~label:"Environ.register"
-              (Pp.str "should be an inductive type.")
-        in
-        { empty_reactive_info with
-          vm_decompile_const = Some int31_decompilation;
-          vm_before_match = Some Clambda.int31_escape_before_match;
-          native_before_match = Some (Nativelambda.before_match_int31 i31bit_type);
-        }
-    | KInt31 Int31Constructor ->
-        { empty_reactive_info with
-          vm_constant_static = Some Clambda.compile_structured_int31;
-          vm_constant_dynamic = Some Clambda.dynamic_int31_compilation;
-          native_constant_static = Some Nativelambda.compile_static_int31;
-          native_constant_dynamic = Some Nativelambda.compile_dynamic_int31;
-        }
-    | KInt31 Int31Plus -> int31_binop_from_const Cbytecodes.Kaddint31
-                                                          CPrimitives.Int31add
-    | KInt31 Int31PlusC -> int31_binop_from_const Cbytecodes.Kaddcint31
-                                                           CPrimitives.Int31addc
-    | KInt31 Int31PlusCarryC -> int31_binop_from_const Cbytecodes.Kaddcarrycint31
-                                                                CPrimitives.Int31addcarryc
-    | KInt31 Int31Minus -> int31_binop_from_const Cbytecodes.Ksubint31
-                                                           CPrimitives.Int31sub
-    | KInt31 Int31MinusC -> int31_binop_from_const Cbytecodes.Ksubcint31
-                                                            CPrimitives.Int31subc
-    | KInt31 Int31MinusCarryC -> int31_binop_from_const
-                                        Cbytecodes.Ksubcarrycint31 CPrimitives.Int31subcarryc
-    | KInt31 Int31Times -> int31_binop_from_const Cbytecodes.Kmulint31
-                                                           CPrimitives.Int31mul
-    | KInt31 Int31TimesC -> int31_binop_from_const Cbytecodes.Kmulcint31
-                                                           CPrimitives.Int31mulc
-    | KInt31 Int31Div21 -> int31_op_from_const 3 Cbytecodes.Kdiv21int31
-                                                           CPrimitives.Int31div21
-    | KInt31 Int31Diveucl -> int31_binop_from_const Cbytecodes.Kdivint31
-                                                         CPrimitives.Int31diveucl
-    | KInt31 Int31AddMulDiv -> int31_op_from_const 3 Cbytecodes.Kaddmuldivint31
-                                                         CPrimitives.Int31addmuldiv
-    | KInt31 Int31Compare -> int31_binop_from_const Cbytecodes.Kcompareint31
-                                                             CPrimitives.Int31compare
-    | KInt31 Int31Head0 -> int31_unop_from_const Cbytecodes.Khead0int31
-                                                          CPrimitives.Int31head0
-    | KInt31 Int31Tail0 -> int31_unop_from_const Cbytecodes.Ktail0int31
-                                                          CPrimitives.Int31tail0
-    | KInt31 Int31Lor -> int31_binop_from_const Cbytecodes.Klorint31
-                                                         CPrimitives.Int31lor
-    | KInt31 Int31Land -> int31_binop_from_const Cbytecodes.Klandint31
-                                                          CPrimitives.Int31land
-    | KInt31 Int31Lxor -> int31_binop_from_const Cbytecodes.Klxorint31
-                                                          CPrimitives.Int31lxor
-    | _ -> empty_reactive_info
-
-let _ = Hook.set Retroknowledge.dispatch_hook dispatch

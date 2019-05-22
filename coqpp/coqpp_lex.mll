@@ -130,6 +130,8 @@ rule extend = parse
 | space { extend lexbuf }
 | '\"' { string lexbuf }
 | '\n' { newline lexbuf; extend lexbuf }
+| "![" { BANGBRACKET }
+| "#[" { HASHBRACKET }
 | '[' { LBRACKET }
 | ']' { RBRACKET }
 | '|' { PIPE }

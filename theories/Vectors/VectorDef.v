@@ -28,6 +28,7 @@ Local Open Scope nat_scope.
 (**
 A vector is a list of size n whose elements belong to a set A. *)
 
+#[universes(template)]
 Inductive t A : nat -> Type :=
   |nil : t A 0
   |cons : forall (h:A) (n:nat), t A n -> t A (S n).
@@ -131,6 +132,9 @@ replace v (Fin.of_nat_lt H).
 (** Remove the first element of a non empty vector *)
 Definition tl {A} := @caseS _ (fun n v => t A n) (fun h n t => t).
 Global Arguments tl {A} {n} v.
+
+(** Destruct a non empty vector *)
+Definition uncons {A} {n : nat} (v : t A (S n)) : A * t A n := (hd v, tl v).
 
 (** Remove last element of a non-empty vector *)
 Definition shiftout {A} := @rectS _ (fun n _ => t A n) (fun a => [])
@@ -266,28 +270,28 @@ Section SCANNING.
 Inductive Forall {A} (P: A -> Prop): forall {n} (v: t A n), Prop :=
  |Forall_nil: Forall P []
  |Forall_cons {n} x (v: t A n): P x -> Forall P v -> Forall P (x::v).
-Hint Constructors Forall.
+Hint Constructors Forall : core.
 
 Inductive Exists {A} (P:A->Prop): forall {n}, t A n -> Prop :=
  |Exists_cons_hd {m} x (v: t A m): P x -> Exists P (x::v)
  |Exists_cons_tl {m} x (v: t A m): Exists P v -> Exists P (x::v).
-Hint Constructors Exists.
+Hint Constructors Exists : core.
 
 Inductive In {A} (a:A): forall {n}, t A n -> Prop :=
  |In_cons_hd {m} (v: t A m): In a (a::v)
  |In_cons_tl {m} x (v: t A m): In a v -> In a (x::v).
-Hint Constructors In.
+Hint Constructors In : core.
 
 Inductive Forall2 {A B} (P:A->B->Prop): forall {n}, t A n -> t B n -> Prop :=
  |Forall2_nil: Forall2 P [] []
  |Forall2_cons {m} x1 x2 (v1:t A m) v2: P x1 x2 -> Forall2 P v1 v2 ->
     Forall2 P (x1::v1) (x2::v2).
-Hint Constructors Forall2.
+Hint Constructors Forall2 : core.
 
 Inductive Exists2 {A B} (P:A->B->Prop): forall {n}, t A n -> t B n -> Prop :=
  |Exists2_cons_hd {m} x1 x2 (v1: t A m) (v2: t B m): P x1 x2 -> Exists2 P (x1::v1) (x2::v2)
  |Exists2_cons_tl {m} x1 x2 (v1:t A m) v2: Exists2 P v1 v2 -> Exists2 P (x1::v1) (x2::v2).
-Hint Constructors Exists2.
+Hint Constructors Exists2 : core.
 
 End SCANNING.
 

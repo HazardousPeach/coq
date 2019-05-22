@@ -21,7 +21,7 @@ type level = Constrexpr.notation_entry * precedence * tolerability list * constr
   (* first argument is InCustomEntry s for custom entries *)
 
 type grammar_constr_prod_item =
-  | GramConstrTerminal of Tok.t
+  | GramConstrTerminal of string Tok.p
   | GramConstrNonTerminal of Extend.constr_prod_entry_key * Id.t option
   | GramConstrListMark of int * bool * int
     (* tells action rule to make a list of the n previous parsed items;
@@ -32,7 +32,7 @@ type grammar_constr_prod_item =
 
 type one_notation_grammar = {
   notgram_level : level;
-  notgram_assoc : Extend.gram_assoc option;
+  notgram_assoc : Gramlib.Gramext.g_assoc option;
   notgram_notation : Constrexpr.notation;
   notgram_prods : grammar_constr_prod_item list list;
 }

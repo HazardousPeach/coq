@@ -11,17 +11,32 @@
 (** Universes. *)
 module Level :
 sig
+
+  module UGlobal : sig
+    type t
+
+    val make : Names.DirPath.t -> int -> t
+    val equal : t -> t -> bool
+    val hash : t -> int
+    val compare : t -> t -> int
+
+  end
+  (** Qualified global universe level *)
+
   type t
   (** Type of universe levels. A universe level is essentially a unique name
-      that will be associated to constraints later on. *)
+      that will be associated to constraints later on. A level can be local to a
+      definition or global. *)
 
   val set : t
   val prop : t
+  val sprop : t
   (** The set and prop universe levels. *)
 
   val is_small : t -> bool
   (** Is the universe set or prop? *)
 
+  val is_sprop : t -> bool
   val is_prop : t -> bool
   val is_set : t -> bool
   (** Is it specifically Prop or Set *)
@@ -34,9 +49,7 @@ sig
 
   val hash : t -> int
 
-  val make : Names.DirPath.t -> int -> t
-  (** Create a new universe level from a unique identifier and an associated
-      module path. *)
+  val make : UGlobal.t -> t
 
   val pr : t -> Pp.t
   (** Pretty-printing *)
@@ -48,7 +61,7 @@ sig
 
   val var_index : t -> int option
 
-  val name : t -> (Names.DirPath.t * int) option
+  val name : t -> UGlobal.t option
 end
 
 (** Sets of universe levels *)
@@ -108,6 +121,8 @@ sig
   val sup   : t -> t -> t
   (** The l.u.b. of 2 universes *)
 
+  val sprop : t
+
   val type0m : t
   (** image of Prop in the universes hierarchy *)
 
@@ -116,6 +131,10 @@ sig
 
   val type1 : t
   (** the universe of the type of Prop/Set *)
+
+  val is_sprop : t -> bool
+  val is_type0m : t -> bool
+  val is_type0 : t -> bool
 
   val exists : (Level.t * int -> bool) -> t -> bool
   val for_all : (Level.t * int -> bool) -> t -> bool
@@ -155,7 +174,7 @@ val univ_level_rem : Level.t -> Universe.t -> Universe.t -> Universe.t
 
 (** {6 Constraints. } *)
 
-type constraint_type = Lt | Le | Eq
+type constraint_type = AcyclicGraph.constraint_type = Lt | Le | Eq
 type univ_constraint = Level.t * constraint_type * Level.t
 
 module Constraint : sig
@@ -192,7 +211,7 @@ val enforce_leq_level : Level.t constraint_function
   system stores the graph and may result from combination of several
   Constraint.t...
 *)
-type explanation = (constraint_type * Universe.t) list
+type explanation = (constraint_type * Level.t) list
 type univ_inconsistency = constraint_type * Universe.t * Universe.t * explanation Lazy.t option
 
 exception UniverseInconsistency of univ_inconsistency
@@ -204,8 +223,8 @@ module LMap :
 sig
   include CMap.ExtS with type key = Level.t and module Set := LSet
 
-  val union : 'a t -> 'a t -> 'a t
-  (** [union x y] favors the bindings in the first map. *)
+  val lunion : 'a t -> 'a t -> 'a t
+  (** [lunion x y] favors the bindings in the first map. *)
 
   val diff : 'a t -> 'a t -> 'a t
   (** [diff x y] removes bindings from x that appear in y (whatever the value). *)
@@ -336,9 +355,6 @@ sig
   val empty : t
   val is_empty : t -> bool
 
-  (** Don't use. *)
-  val instance : t -> Instance.t
-
   val size : t -> int
 
   (** Keeps the order of the instances *)
@@ -347,45 +363,18 @@ sig
   val instantiate : Instance.t -> t -> Constraint.t
   (** Generate the set of instantiated Constraint.t **)
 
+  val names : t -> Names.Name.t array
+  (** Return the names of the bound universe variables *)
+
 end
 
-(** Universe info for cumulative inductive types: A context of
-   universe levels with universe constraints, representing local
-   universe variables and constraints, together with an array of
-   Variance.t.
+type 'a univ_abstracted = {
+  univ_abstracted_value : 'a;
+  univ_abstracted_binder : AUContext.t;
+}
+(** A value with bound universe levels. *)
 
-    This data structure maintains the invariant that the variance
-   array has the same length as the universe instance. *)
-module CumulativityInfo :
-sig
-  type t
-
-  val make : UContext.t * Variance.t array -> t
-
-  val empty : t
-  val is_empty : t -> bool
-
-  val univ_context : t -> UContext.t
-  val variance : t -> Variance.t array
-
-  (** This function takes a universe context representing constraints
-     of an inductive and produces a CumulativityInfo.t with the
-     trivial subtyping relation. *)
-  val from_universe_context : UContext.t -> t
-
-  val leq_constraints : t -> Instance.t constraint_function
-  val eq_constraints : t -> Instance.t constraint_function
-end
-
-module ACumulativityInfo :
-sig
-  type t
-
-  val univ_context : t -> AUContext.t
-  val variance : t -> Variance.t array
-  val leq_constraints : t -> Instance.t constraint_function
-  val eq_constraints : t -> Instance.t constraint_function
-end
+val map_univ_abstracted : ('a -> 'b) -> 'a univ_abstracted -> 'b univ_abstracted
 
 (** Universe contexts (as sets) *)
 
@@ -466,8 +455,7 @@ val make_instance_subst : Instance.t -> universe_level_subst
 
 val make_inverse_instance_subst : Instance.t -> universe_level_subst
 
-val abstract_universes : UContext.t -> Instance.t * AUContext.t
-val abstract_cumulativity_info : CumulativityInfo.t -> Instance.t * ACumulativityInfo.t
+val abstract_universes : Names.Name.t array -> UContext.t -> Instance.t * AUContext.t
 (** TODO: move universe abstraction out of the kernel *)
 
 val make_abstract_instance : AUContext.t -> Instance.t
@@ -485,10 +473,8 @@ val pr_constraint_type : constraint_type -> Pp.t
 val pr_constraints : (Level.t -> Pp.t) -> Constraint.t -> Pp.t
 val pr_universe_context : (Level.t -> Pp.t) -> ?variance:Variance.t array ->
   UContext.t -> Pp.t
-val pr_cumulativity_info : (Level.t -> Pp.t) -> CumulativityInfo.t -> Pp.t
 val pr_abstract_universe_context : (Level.t -> Pp.t) -> ?variance:Variance.t array ->
   AUContext.t -> Pp.t
-val pr_abstract_cumulativity_info : (Level.t -> Pp.t) -> ACumulativityInfo.t -> Pp.t
 val pr_universe_context_set : (Level.t -> Pp.t) -> ContextSet.t -> Pp.t
 val explain_universe_inconsistency : (Level.t -> Pp.t) ->
   univ_inconsistency -> Pp.t
@@ -504,5 +490,3 @@ val hcons_universe_set : LSet.t -> LSet.t
 val hcons_universe_context : UContext.t -> UContext.t
 val hcons_abstract_universe_context : AUContext.t -> AUContext.t
 val hcons_universe_context_set : ContextSet.t -> ContextSet.t
-val hcons_cumulativity_info : CumulativityInfo.t -> CumulativityInfo.t
-val hcons_abstract_cumulativity_info : ACumulativityInfo.t -> ACumulativityInfo.t

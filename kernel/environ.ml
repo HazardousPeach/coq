@@ -46,7 +46,7 @@ type link_info =
   | LinkedInteractive of string
   | NotLinked
 
-type constant_key = constant_body * (link_info ref * key)
+type constant_key = Opaqueproof.opaque constant_body * (link_info ref * key)
 
 type mind_key = mutual_inductive_body * link_info ref
 
@@ -59,7 +59,8 @@ type globals = {
 
 type stratification = {
   env_universes : UGraph.t;
-  env_engagement : engagement
+  env_engagement : engagement;
+  env_sprop_allowed : bool;
 }
 
 type val_kind =
@@ -117,9 +118,11 @@ let empty_env = {
   env_nb_rel = 0;
   env_stratification = {
     env_universes = UGraph.initial_universes;
-    env_engagement = PredicativeSet };
+    env_engagement = PredicativeSet;
+    env_sprop_allowed = false;
+  };
   env_typing_flags = Declareops.safe_flags Conv_oracle.empty;
-  retroknowledge = Retroknowledge.initial_retroknowledge;
+  retroknowledge = Retroknowledge.empty;
   indirect_pterms = Opaqueproof.empty_opaquetab }
 
 
@@ -184,7 +187,7 @@ let match_named_context_val c = match c.env_named_ctx with
 let map_named_val f ctxt =
   let open Context.Named.Declaration in
   let fold accu d =
-    let d' = map_constr f d in
+    let d' = f d in
     let accu =
       if d == d' then accu
       else Id.Map.modify (get_id d) (fun _ (_, v) -> (d', v)) accu
@@ -222,6 +225,10 @@ let lookup_constant kn env =
 let lookup_mind kn env =
   fst (Mindmap_env.find kn env.env_globals.env_inductives)
 
+let mind_context env mind =
+  let mib = lookup_mind mind env in
+  Declareops.inductive_polymorphic_context mib
+
 let lookup_mind_key kn env =
   Mindmap_env.find kn env.env_globals.env_inductives
 
@@ -238,8 +245,17 @@ let is_impredicative_set env =
   | ImpredicativeSet -> true
   | _ -> false
 
+let is_impredicative_sort env = function
+  | Sorts.SProp | Sorts.Prop -> true
+  | Sorts.Set -> is_impredicative_set env
+  | Sorts.Type _ -> false
+
+let is_impredicative_univ env u = is_impredicative_sort env (Sorts.sort_of_univ u)
+
 let type_in_type env = not (typing_flags env).check_universes
 let deactivated_guard env = not (typing_flags env).check_guarded
+
+let indices_matter env = env.env_typing_flags.indices_matter
 
 let universes env = env.env_stratification.env_universes
 let named_context env = env.env_named_context.env_named_ctx
@@ -350,9 +366,6 @@ let map_universes f env =
     { env with env_stratification =
 	 { s with env_universes = f s.env_universes } }
 
-let set_universes env u =
-  { env with env_stratification = { env.env_stratification with env_universes = u } }
-
 let add_constraints c env =
   if Univ.Constraint.is_empty c then env
   else map_universes (UGraph.merge_constraints c) env
@@ -383,12 +396,52 @@ let add_universes_set strict ctx g =
 let push_context_set ?(strict=false) ctx env =
   map_universes (add_universes_set strict ctx) env
 
+let push_subgraph (levels,csts) env =
+  let add_subgraph g =
+    let newg = Univ.LSet.fold (fun v g -> UGraph.add_universe v false g) levels g in
+    let newg = UGraph.merge_constraints csts newg in
+    (if not (Univ.Constraint.is_empty csts) then
+       let restricted = UGraph.constraints_for ~kept:(UGraph.domain g) newg in
+       (if not (UGraph.check_constraints restricted g) then
+          CErrors.anomaly Pp.(str "Local constraints imply new transitive constraints.")));
+    newg
+  in
+  map_universes add_subgraph env
+
 let set_engagement c env = (* Unsafe *)
   { env with env_stratification =
     { env.env_stratification with env_engagement = c } }
 
+(* It's convenient to use [{flags with foo = bar}] so we're smart wrt to it. *)
+let same_flags {
+     check_guarded;
+     check_universes;
+     conv_oracle;
+     indices_matter;
+     share_reduction;
+     enable_VM;
+     enable_native_compiler;
+  } alt =
+  check_guarded == alt.check_guarded &&
+  check_universes == alt.check_universes &&
+  conv_oracle == alt.conv_oracle &&
+  indices_matter == alt.indices_matter &&
+  share_reduction == alt.share_reduction &&
+  enable_VM == alt.enable_VM &&
+  enable_native_compiler == alt.enable_native_compiler
+[@warning "+9"]
+
 let set_typing_flags c env = (* Unsafe *)
-  { env with env_typing_flags = c }
+  if same_flags env.env_typing_flags c then env
+  else { env with env_typing_flags = c }
+
+let make_sprop_cumulative = map_universes UGraph.make_sprop_cumulative
+
+let set_allow_sprop b env =
+  { env with env_stratification =
+    { env.env_stratification with env_sprop_allowed = b } }
+
+let sprop_allowed env = env.env_stratification.env_sprop_allowed
 
 (* Global constants *)
 
@@ -405,40 +458,40 @@ let add_constant_key kn cb linkinfo env =
 let add_constant kn cb env =
   add_constant_key kn cb no_link_info env
 
-let constraints_of cb u =
-  match cb.const_universes with
-  | Monomorphic_const _ -> Univ.Constraint.empty
-  | Polymorphic_const ctx -> Univ.AUContext.instantiate u ctx
-
 (* constant_type gives the type of a constant *)
 let constant_type env (kn,u) =
   let cb = lookup_constant kn env in
-  match cb.const_universes with
-  | Monomorphic_const _ -> cb.const_type, Univ.Constraint.empty
-  | Polymorphic_const _ctx ->
-    let csts = constraints_of cb u in
-    (subst_instance_constr u cb.const_type, csts)
+  let uctx = Declareops.constant_polymorphic_context cb in
+  let csts = Univ.AUContext.instantiate u uctx in
+  (subst_instance_constr u cb.const_type, csts)
 
-type const_evaluation_result = NoBody | Opaque
+type const_evaluation_result =
+  | NoBody
+  | Opaque
+  | IsPrimitive of CPrimitives.t
 
 exception NotEvaluableConst of const_evaluation_result
 
 let constant_value_and_type env (kn, u) =
   let cb = lookup_constant kn env in
-    if Declareops.constant_is_polymorphic cb then
-      let cst = constraints_of cb u in
-      let b' = match cb.const_body with
-	| Def l_body -> Some (subst_instance_constr u (Mod_subst.force_constr l_body))
-	| OpaqueDef _ -> None
-	| Undef _ -> None
-      in
-	b', subst_instance_constr u cb.const_type, cst
-    else 
-      let b' = match cb.const_body with
-	| Def l_body -> Some (Mod_subst.force_constr l_body)
-	| OpaqueDef _ -> None
-	| Undef _ -> None
-      in b', cb.const_type, Univ.Constraint.empty
+  let uctx = Declareops.constant_polymorphic_context cb in
+  let cst = Univ.AUContext.instantiate u uctx in
+  let b' = match cb.const_body with
+    | Def l_body -> Some (subst_instance_constr u (Mod_subst.force_constr l_body))
+    | OpaqueDef _ -> None
+    | Undef _ | Primitive _ -> None
+  in
+  b', subst_instance_constr u cb.const_type, cst
+
+let body_of_constant_body env cb =
+  let otab = opaque_tables env in
+  match cb.const_body with
+  | Undef _ | Primitive _ ->
+     None
+  | Def c ->
+     Some (Mod_subst.force_constr c, Declareops.constant_polymorphic_context cb)
+  | OpaqueDef o ->
+     Some (Opaqueproof.force_proof otab o, Declareops.constant_polymorphic_context cb)
 
 (* These functions should be called under the invariant that [env] 
    already contains the constraints corresponding to the constant 
@@ -447,9 +500,7 @@ let constant_value_and_type env (kn, u) =
 (* constant_type gives the type of a constant *)
 let constant_type_in env (kn,u) =
   let cb = lookup_constant kn env in
-    if Declareops.constant_is_polymorphic cb then
-      subst_instance_constr u cb.const_type
-    else cb.const_type
+  subst_instance_constr u cb.const_type
 
 let constant_value_in env (kn,u) =
   let cb = lookup_constant kn env in
@@ -459,6 +510,7 @@ let constant_value_in env (kn,u) =
 	subst_instance_constr u b
     | OpaqueDef _ -> raise (NotEvaluableConst Opaque)
     | Undef _ -> raise (NotEvaluableConst NoBody)
+    | Primitive p -> raise (NotEvaluableConst (IsPrimitive p))
 
 let constant_opt_value_in env cst =
   try Some (constant_value_in env cst)
@@ -470,7 +522,13 @@ let evaluable_constant kn env =
     match cb.const_body with
     | Def _ -> true
     | OpaqueDef _ -> false
-    | Undef _ -> false
+    | Undef _ | Primitive _ -> false
+
+let is_primitive env c =
+  let cb = lookup_constant c env in
+  match cb.Declarations.const_body with
+  | Declarations.Primitive _ -> true
+  | _ -> false
 
 let polymorphic_constant cst env =
   Declareops.constant_is_polymorphic (lookup_constant cst env)
@@ -490,7 +548,7 @@ let lookup_projection p env =
   match mib.mind_record with
   | NotRecord | FakeRecord -> anomaly ~label:"lookup_projection" Pp.(str "not a projection")
   | PrimRecord infos ->
-    let _,_,typs = infos.(i) in
+    let _,_,_,typs = infos.(i) in
     typs.(Projection.arg p)
 
 let get_projection env ind ~proj_arg =
@@ -635,6 +693,10 @@ type ('constr, 'types) punsafe_judgment = {
   uj_val : 'constr;
   uj_type : 'types }
 
+let on_judgment f j = { uj_val = f j.uj_val; uj_type = f j.uj_type }
+let on_judgment_value f j = { j with uj_val = f j.uj_val }
+let on_judgment_type f j = { j with uj_type = f j.uj_type }
+
 type unsafe_judgment = (constr, types) punsafe_judgment
 
 let make_judge v tj =
@@ -694,29 +756,20 @@ let is_polymorphic env r =
   | IndRef ind -> polymorphic_ind ind env
   | ConstructRef cstr -> polymorphic_ind (inductive_of_constructor cstr) env
 
-(*spiwack: the following functions assemble the pieces of the retroknowledge
-   note that the "consistent" register function is available in the module
-   Safetyping, Environ only synchronizes the proactive and the reactive parts*)
+let is_template_polymorphic env r =
+  let open Names.GlobRef in
+  match r with
+  | VarRef _id -> false
+  | ConstRef _c -> false
+  | IndRef ind -> template_polymorphic_ind ind env
+  | ConstructRef cstr -> template_polymorphic_ind (inductive_of_constructor cstr) env
 
-open Retroknowledge
+let is_type_in_type env r =
+  let open Names.GlobRef in
+  match r with
+  | VarRef _id -> false
+  | ConstRef c -> type_in_type_constant c env
+  | IndRef ind -> type_in_type_ind ind env
+  | ConstructRef cstr -> type_in_type_ind (inductive_of_constructor cstr) env
 
-(* lifting of the "get" functions works also for "mem"*)
-let retroknowledge f env =
-  f env.retroknowledge
-
-let registered env field =
-    retroknowledge mem env field
-
-let register_one env field entry =
-  { env with retroknowledge = Retroknowledge.add_field env.retroknowledge field entry }
-
-(* [register env field entry] may register several fields when needed *)
-let register env field gr =
-  match field with
-  | KInt31 Int31Type ->
-    let i31c = match gr with
-      | GlobRef.IndRef i31t -> GlobRef.ConstructRef (i31t, 1)
-      | _ -> anomaly ~label:"Environ.register" (Pp.str "should be an inductive type.")
-    in
-    register_one (register_one env (KInt31 Int31Constructor) i31c) field gr
-  | field -> register_one env field gr
+let set_retroknowledge env r = { env with retroknowledge = r }

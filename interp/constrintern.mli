@@ -45,13 +45,15 @@ type var_internalization_type =
 
 type var_internalization_data =
     var_internalization_type *
-      (** type of the "free" variable, for coqdoc, e.g. while typing the
-	  constructor of JMeq, "JMeq" behaves as a variable of type Inductive *)
+      (* type of the "free" variable, for coqdoc, e.g. while typing the
+         constructor of JMeq, "JMeq" behaves as a variable of type Inductive *)
+
     Id.t list *
-      (** impargs to automatically add to the variable, e.g. for "JMeq A a B b"
-          in implicit mode, this is [A;B] and this adds (A:=A) and (B:=B) *)
-    Impargs.implicit_status list * (** signature of impargs of the variable *)
-    Notation_term.scope_name option list (** subscopes of the args of the variable *)
+      (* impargs to automatically add to the variable, e.g. for "JMeq A a B b"
+         in implicit mode, this is [A;B] and this adds (A:=A) and (B:=B) *)
+
+    Impargs.implicit_status list * (* signature of impargs of the variable *)
+    Notation_term.scope_name option list (* subscopes of the args of the variable *)
 
 (** A map of free variables to their implicit arguments and scopes *)
 type internalization_env = var_internalization_data Id.Map.t
@@ -111,26 +113,26 @@ val interp_open_constr : env -> evar_map -> constr_expr -> evar_map * constr
 
 (** Accepting unresolved evars *)
 
-val interp_constr_evars : env -> evar_map ->
+val interp_constr_evars : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> evar_map * constr
 
-val interp_casted_constr_evars : env -> evar_map ->
+val interp_casted_constr_evars : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> types -> evar_map * constr
 
-val interp_type_evars : env -> evar_map ->
+val interp_type_evars : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> evar_map * types
 
 (** Accepting unresolved evars and giving back the manual implicit arguments *)
 
-val interp_constr_evars_impls : env -> evar_map ->
+val interp_constr_evars_impls : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr ->
   evar_map * (constr * Impargs.manual_implicits)
 
-val interp_casted_constr_evars_impls : env -> evar_map ->
+val interp_casted_constr_evars_impls : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr -> types ->
   evar_map * (constr * Impargs.manual_implicits)
 
-val interp_type_evars_impls : env -> evar_map ->
+val interp_type_evars_impls : ?program_mode:bool -> env -> evar_map ->
   ?impls:internalization_env -> constr_expr ->
   evar_map * (types * Impargs.manual_implicits)
 
@@ -156,28 +158,15 @@ val interp_binder_evars : env -> evar_map -> Name.t -> constr_expr -> evar_map *
 (** Interpret contexts: returns extended env and context *)
 
 val interp_context_evars :
-  ?global_level:bool -> ?impl_env:internalization_env -> ?shift:int ->
+  ?program_mode:bool -> ?global_level:bool -> ?impl_env:internalization_env -> ?shift:int ->
   env -> evar_map -> local_binder_expr list ->
   evar_map * (internalization_env * ((env * rel_context) * Impargs.manual_implicits))
-
-(* val interp_context_gen : (env -> glob_constr -> unsafe_type_judgment Evd.in_evar_universe_context) -> *)
-(*   (env -> Evarutil.type_constraint -> glob_constr -> unsafe_judgment Evd.in_evar_universe_context) -> *)
-(*   ?global_level:bool -> ?impl_env:internalization_env -> *)
-(*   env -> evar_map -> local_binder_expr list -> internalization_env * ((env * Evd.evar_universe_context * rel_context * sorts list) * Impargs.manual_implicits) *)
-  
-(* val interp_context : ?global_level:bool -> ?impl_env:internalization_env -> *)
-(*   env -> evar_map -> local_binder_expr list ->  *)
-(*   internalization_env *  *)
-(*   ((env * Evd.evar_universe_context * rel_context * sorts list) * Impargs.manual_implicits) *)
 
 (** Locating references of constructions, possibly via a syntactic definition 
    (these functions do not modify the glob file) *)
 
 val locate_reference :  Libnames.qualid -> GlobRef.t
 val is_global : Id.t -> bool
-val construct_reference : ('c, 't) Context.Named.pt -> Id.t -> GlobRef.t
-val global_reference : Id.t -> GlobRef.t
-val global_reference_in_absolute_module : DirPath.t -> Id.t -> GlobRef.t
 
 (** Interprets a term as the left-hand side of a notation. The returned map is
     guaranteed to have the same domain as the input one. *)
@@ -185,8 +174,18 @@ val interp_notation_constr : env -> ?impls:internalization_env ->
   notation_interp_env -> constr_expr ->
   (bool * subscopes) Id.Map.t * notation_constr * reversibility_status
 
+(** Idem but to glob_constr (weaker check of binders) *)
+
+val intern_core : typing_constraint ->
+  env -> evar_map -> ?pattern_mode:bool -> ?ltacvars:ltac_sign ->
+  Genintern.intern_variable_status -> constr_expr ->
+  glob_constr
+
 (** Globalization options *)
 val parsing_explicit : bool ref
 
 (** Globalization leak for Grammar *)
 val for_grammar : ('a -> 'b) -> 'a -> 'b
+
+(** Placeholder for global option, should be moved to a parameter *)
+val get_asymmetric_patterns : unit -> bool

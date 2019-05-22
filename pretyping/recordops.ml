@@ -20,25 +20,34 @@ open Util
 open Pp
 open Names
 open Globnames
-open Nametab
 open Constr
-open Libobject
 open Mod_subst
 open Reductionops
 
 (*s A structure S is a non recursive inductive type with a single
    constructor (the name of which defaults to Build_S) *)
 
-(* Table des structures: le nom de la structure (un [inductive]) donne
-   le nom du constructeur, le nombre de paramètres et pour chaque
-   argument réel du constructeur, le nom de la projection
-   correspondante, si valide, et un booléen disant si c'est une vraie
-   projection ou bien une fonction constante (associée à un LetIn) *)
+(* Table of structures.
+   It maps to each structure name (of type [inductive]):
+     - the name of its constructor;
+     - the number of parameters;
+     - for each true argument, some data about the corresponding projection:
+         * its name (may be anonymous);
+         * whether it is a true projection (as opposed to a constant function, LetIn);
+         * whether it should be used as a canonical hint;
+         * the constant realizing this projection (if any).
+*)
+
+type proj_kind = {
+  pk_name: Name.t;
+  pk_true_proj: bool;
+  pk_canonical: bool;
+}
 
 type struc_typ = {
   s_CONST : constructor;
   s_EXPECTEDPARAM : int;
-  s_PROJKIND : (Name.t * bool) list;
+  s_PROJKIND : proj_kind list;
   s_PROJ : Constant.t option list }
 
 let structure_table =
@@ -46,15 +55,15 @@ let structure_table =
 let projection_table =
   Summary.ref (Cmap.empty : struc_typ Cmap.t) ~name:"record-projs"
 
-(* TODO: could be unify struc_typ and struc_tuple ? in particular,
-   is the inductive always (fst constructor) ? It seems so... *)
+(* TODO: could be unify struc_typ and struc_tuple ? *)
 
 type struc_tuple =
-    inductive * constructor * (Name.t * bool) list * Constant.t option list
+    constructor * proj_kind list * Constant.t option list
 
-let load_structure i (_,(ind,id,kl,projs)) =
+let register_structure env (id,kl,projs) =
   let open Declarations in
-  let mib, mip = Global.lookup_inductive ind in
+  let ind = fst id in
+  let mib, mip = Inductive.lookup_mind_specif env ind in
   let n = mib.mind_nparams in
   let struc =
     { s_CONST = id; s_EXPECTEDPARAM = n; s_PROJ = projs; s_PROJKIND = kl } in
@@ -63,34 +72,17 @@ let load_structure i (_,(ind,id,kl,projs)) =
     List.fold_right (Option.fold_right (fun proj -> Cmap.add proj struc))
       projs !projection_table
 
-let cache_structure o =
-  load_structure 1 o
-
-let subst_structure (subst,((kn,i),id,kl,projs as obj)) = 
-  let kn' = subst_mind subst kn in
+let subst_structure subst (id, kl, projs as obj) =
   let projs' =
    (* invariant: struc.s_PROJ is an evaluable reference. Thus we can take *)
    (* the first component of subst_con.                                   *)
    List.Smart.map
-     (Option.Smart.map (fun kn -> fst (subst_con_kn subst kn)))
+     (Option.Smart.map (subst_constant subst))
     projs
   in
-  let id' = fst (subst_constructor subst id) in
-    if projs' == projs && kn' == kn && id' == id then obj else
-      ((kn',i),id',kl,projs')
-
-let discharge_structure (_,x) = Some x
-
-let inStruc : struc_tuple -> obj =
-  declare_object {(default_object "STRUCTURE") with
-    cache_function = cache_structure;
-    load_function = load_structure;
-    subst_function = subst_structure;
-    classify_function = (fun x -> Substitute x);
-    discharge_function = discharge_structure }
-
-let declare_structure (s,c,kl,pl) =
-  Lib.add_anonymous_leaf (inStruc (s,c,kl,pl))
+  let id' = subst_constructor subst id in
+  if projs' == projs && id' == id then obj else
+    (id',kl,projs')
 
 let lookup_structure indsp = Indmap.find indsp !structure_table
 
@@ -104,28 +96,13 @@ let find_projection = function
   | ConstRef cst -> Cmap.find cst !projection_table
   | _ -> raise Not_found
 
+let is_projection cst = Cmap.mem cst !projection_table
+
 let prim_table =
   Summary.ref (Cmap_env.empty : Projection.Repr.t Cmap_env.t) ~name:"record-prim-projs"
 
-let load_prim i (_,p) =
-  prim_table := Cmap_env.add (Projection.Repr.constant p) p !prim_table
-
-let cache_prim p = load_prim 1 p
-
-let subst_prim (subst,p) = subst_proj_repr subst p
-
-let discharge_prim (_,p) = Some (Lib.discharge_proj_repr p)
-
-let inPrim : Projection.Repr.t -> obj =
-  declare_object {
-    (default_object "PRIMPROJS") with
-    cache_function = cache_prim ;
-    load_function = load_prim;
-    subst_function = subst_prim;
-    classify_function = (fun x -> Substitute x);
-    discharge_function = discharge_prim }
-
-let declare_primitive_projection p = Lib.add_anonymous_leaf (inPrim p)
+let register_primitive_projection p c =
+  prim_table := Cmap_env.add c p !prim_table
 
 let is_primitive_projection c = Cmap_env.mem c !prim_table
 
@@ -195,28 +172,22 @@ let canonical_projections () =
     !object_table []
 
 let keep_true_projections projs kinds =
-  let filter (p, (_, b)) = if b then Some p else None in
+  let filter (p, { pk_true_proj ; pk_canonical }) = if pk_true_proj then Some (p, pk_canonical) else None in
   List.map_filter filter (List.combine projs kinds)
 
-let cs_pattern_of_constr env t =
+let rec cs_pattern_of_constr env t =
   match kind t with
-      App (f,vargs) ->
-	begin
-	  try Const_cs (global_of_constr f) , None, Array.to_list vargs
-          with e when CErrors.noncritical e -> raise Not_found
-	end
-    | Rel n -> Default_cs, Some n, []
-    | Prod (_,a,b) when Vars.noccurn 1 b -> Prod_cs, None, [a; Vars.lift (-1) b]
-    | Proj (p, c) ->
-      let { Environ.uj_type = ty } = Typeops.infer env c in
-      let _, params = Inductive.find_rectype env ty in
-      Const_cs (ConstRef (Projection.constant p)), None, params @ [c]
-    | Sort s -> Sort_cs (Sorts.family s), None, []
-    | _ ->
-	begin
-	  try Const_cs (global_of_constr t) , None, []
-          with e when CErrors.noncritical e -> raise Not_found
-	end
+  | App (f,vargs) ->
+    let patt, n, args = cs_pattern_of_constr env f in
+    patt, n, args @ Array.to_list vargs
+  | Rel n -> Default_cs, Some n, []
+  | Prod (_,a,b) when Vars.noccurn 1 b -> Prod_cs, None, [a; Vars.lift (-1) b]
+  | Proj (p, c) ->
+    let { Environ.uj_type = ty } = Typeops.infer env c in
+    let _, params = Inductive.find_rectype env ty in
+    Const_cs (ConstRef (Projection.constant p)), None, params @ [c]
+  | Sort s -> Sort_cs (Sorts.family s), None, []
+  | _ -> Const_cs (global_of_constr t) , None, []
 
 let warn_projection_no_head_constant =
   CWarnings.create ~name:"projection-no-head-constant" ~category:"typechecker"
@@ -230,48 +201,43 @@ let warn_projection_no_head_constant =
           ++ con_pp ++ str " of " ++ proji_sp_pp ++ strbrk ", ignoring it.")
 
 (* Intended to always succeed *)
-let compute_canonical_projections env warn (con,ind) =
-  let ctx = Environ.constant_context env con in
-  let u = Univ.make_abstract_instance ctx in
-  let v = (mkConstU (con,u)) in
+let compute_canonical_projections env ~warn (con,ind) =
+  let o_CTX = Environ.constant_context env con in
+  let u = Univ.make_abstract_instance o_CTX in
+  let o_DEF = mkConstU (con, u) in
   let c = Environ.constant_value_in env (con,u) in
   let sign,t = Reductionops.splay_lam env (Evd.from_env env) (EConstr.of_constr c) in
   let sign = List.map (on_snd EConstr.Unsafe.to_constr) sign in
   let t = EConstr.Unsafe.to_constr t in
-  let lt = List.rev_map snd sign in
+  let o_TABS = List.rev_map snd sign in
   let args = snd (decompose_app t) in
   let { s_EXPECTEDPARAM = p; s_PROJ = lpj; s_PROJKIND = kl } =
     lookup_structure ind in
-  let params, projs = List.chop p args in
+  let o_TPARAMS, projs = List.chop p args in
+  let o_NPARAMS = List.length o_TPARAMS in
   let lpj = keep_true_projections lpj kl in
-  let lps = List.combine lpj projs in
   let nenv = Termops.push_rels_assum sign env in
-  let comp =
-    List.fold_left
-      (fun l (spopt,t) -> (* comp=components *)
-	 match spopt with
-           | Some proji_sp ->
-	       begin
-		 try
-		   let patt, n , args = cs_pattern_of_constr nenv t in
-		     ((ConstRef proji_sp, patt, t, n, args) :: l)
-		 with Not_found ->
-                   if warn then warn_projection_no_head_constant (sign,env,t,con,proji_sp);
-                   l
-	       end
-	   | _ -> l)
-      [] lps in
-  List.map (fun (refi,c,t,inj,argj) ->
-    (refi,(c,t)),
-    {o_DEF=v; o_CTX=ctx; o_INJ=inj; o_TABS=lt;
-     o_TPARAMS=params; o_NPARAMS=List.length params; o_TCOMPS=argj})
-    comp
+  List.fold_left2 (fun acc (spopt, canonical) t ->
+      if canonical
+      then
+        Option.cata (fun proji_sp ->
+            match cs_pattern_of_constr nenv t with
+            | patt, o_INJ, o_TCOMPS ->
+              ((ConstRef proji_sp, (patt, t)),
+               { o_DEF ; o_CTX ; o_INJ ; o_TABS ; o_TPARAMS ; o_NPARAMS ; o_TCOMPS })
+              :: acc
+            | exception Not_found ->
+              if warn then warn_projection_no_head_constant (sign, env, t, con, proji_sp);
+              acc
+          ) acc spopt
+      else acc
+    ) [] lpj projs
 
 let pr_cs_pattern = function
     Const_cs c -> Nametab.pr_global_env Id.Set.empty c
   | Prod_cs -> str "_ -> _"
   | Default_cs -> str "_"
-  | Sort_cs s -> Termops.pr_sort_family s
+  | Sort_cs s -> Sorts.pr_sort_family s
 
 let warn_redundant_canonical_projection =
   CWarnings.create ~name:"redundant-canonical-projection" ~category:"typechecker"
@@ -280,73 +246,49 @@ let warn_redundant_canonical_projection =
           ++ strbrk " by " ++ prj ++ strbrk " in "
           ++ new_can_s ++ strbrk ": redundant with " ++ old_can_s)
 
-let add_canonical_structure warn o =
-    (* XXX: Undesired global access to env *)
-    let env = Global.env () in
-    let sigma = Evd.from_env env in
-    let lo = compute_canonical_projections env warn o in
-    List.iter (fun ((proj,(cs_pat,_ as pat)),s) ->
+let register_canonical_structure ~warn env sigma o =
+    compute_canonical_projections env ~warn o |>
+    List.iter (fun ((proj, (cs_pat, _ as pat)), s) ->
       let l = try GlobRef.Map.find proj !object_table with Not_found -> [] in
-      let ocs = try Some (assoc_pat cs_pat l)
-      with Not_found -> None
-      in match ocs with
-        | None -> object_table := GlobRef.Map.add proj ((pat,s)::l) !object_table;
-        | Some (c, cs) ->
-              let old_can_s = (Termops.Internal.print_constr_env env sigma (EConstr.of_constr cs.o_DEF))
-              and new_can_s = (Termops.Internal.print_constr_env env sigma (EConstr.of_constr s.o_DEF))
-              in
-              let prj = (Nametab.pr_global_env Id.Set.empty proj)
-              and hd_val = (pr_cs_pattern cs_pat) in
-              if warn then warn_redundant_canonical_projection (hd_val,prj,new_can_s,old_can_s))
-          lo
+      match assoc_pat cs_pat l with
+      | exception Not_found ->
+          object_table := GlobRef.Map.add proj ((pat, s) :: l) !object_table
+      | _, cs ->
+        if warn
+        then
+          let old_can_s = Termops.Internal.print_constr_env env sigma (EConstr.of_constr cs.o_DEF) in
+          let new_can_s = Termops.Internal.print_constr_env env sigma (EConstr.of_constr s.o_DEF) in
+          let prj = Nametab.pr_global_env Id.Set.empty proj in
+          let hd_val = pr_cs_pattern cs_pat in
+          warn_redundant_canonical_projection (hd_val, prj, new_can_s, old_can_s)
+      )
 
-let open_canonical_structure i (_, o) =
-  if Int.equal i 1 then add_canonical_structure false o
-
-let cache_canonical_structure (_, o) =
-  add_canonical_structure true o
-
-let subst_canonical_structure (subst,(cst,ind as obj)) =
+let subst_canonical_structure subst (cst,ind as obj) =
   (* invariant: cst is an evaluable reference. Thus we can take *)
   (* the first component of subst_con.                                   *)
   let cst' = subst_constant subst cst in
   let ind' = subst_ind subst ind in
   if cst' == cst && ind' == ind then obj else (cst',ind')
 
-let discharge_canonical_structure (_,x) = Some x
-
-let inCanonStruc : Constant.t * inductive -> obj =
-  declare_object {(default_object "CANONICAL-STRUCTURE") with
-    open_function = open_canonical_structure;
-    cache_function = cache_canonical_structure;
-    subst_function = subst_canonical_structure;
-    classify_function = (fun x -> Substitute x);
-    discharge_function = discharge_canonical_structure }
-
-let add_canonical_structure x = Lib.add_anonymous_leaf (inCanonStruc x)
-
 (*s High-level declaration of a canonical structure *)
 
 let error_not_structure ref description =
   user_err ~hdr:"object_declare"
     (str"Could not declare a canonical structure " ++
-       (Id.print (basename_of_global ref) ++ str"." ++ spc() ++
+       (Id.print (Nametab.basename_of_global ref) ++ str"." ++ spc() ++
           description))
 
-let check_and_decompose_canonical_structure ref =
+let check_and_decompose_canonical_structure env sigma ref =
   let sp =
     match ref with
       ConstRef sp -> sp
     |  _ -> error_not_structure ref (str "Expected an instance of a record or structure.")
   in
-  let env = Global.env () in
   let u = Univ.make_abstract_instance (Environ.constant_context env sp) in
   let vc = match Environ.constant_opt_value_in env (sp, u) with
     | Some vc -> vc
     | None -> error_not_structure ref (str "Could not find its value in the global environment.") in
-  let env = Global.env () in
-  let evd = Evd.from_env env in
-  let body = snd (splay_lam (Global.env()) evd (EConstr.of_constr vc)) in
+  let body = snd (splay_lam env sigma (EConstr.of_constr vc)) in
   let body = EConstr.Unsafe.to_constr body in
   let f,args = match kind body with
     | App (f,args) -> f,args
@@ -359,14 +301,11 @@ let check_and_decompose_canonical_structure ref =
     try lookup_structure indsp
     with Not_found ->
       error_not_structure ref
-        (str "Could not find the record or structure " ++ Termops.Internal.print_constr_env env evd (EConstr.mkInd indsp)) in
-  let ntrue_projs = List.count snd s.s_PROJKIND in
+        (str "Could not find the record or structure " ++ Termops.Internal.print_constr_env env sigma (EConstr.mkInd indsp)) in
+  let ntrue_projs = List.count (fun { pk_true_proj } -> pk_true_proj) s.s_PROJKIND in
   if s.s_EXPECTEDPARAM + ntrue_projs > Array.length args then
     error_not_structure ref (str "Got too few arguments to the record or structure constructor.");
   (sp,indsp)
-
-let declare_canonical_structure ref =
-  add_canonical_structure (check_and_decompose_canonical_structure ref)
 
 let lookup_canonical_conversion (proj,pat) =
   assoc_pat pat (GlobRef.Map.find proj !object_table)
@@ -375,7 +314,7 @@ let decompose_projection sigma c args =
   match EConstr.kind sigma c with
   | Const (c, u) ->
      let n = find_projection_nparams (ConstRef c) in
-     (** Check if there is some canonical projection attached to this structure *)
+     (* Check if there is some canonical projection attached to this structure *)
      let _ = GlobRef.Map.find (ConstRef c) !object_table in
      let arg = Stack.nth args n in
      arg

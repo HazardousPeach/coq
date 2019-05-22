@@ -100,26 +100,26 @@ Concrete usage in Coq
 
 .. tacn:: ring
 
-The ``ring`` tactic solves equations upon polynomial expressions of a ring
-(or semiring) structure. It proceeds by normalizing both sides
-of the equation (w.r.t. associativity, commutativity and
-distributivity, constant propagation, rewriting of monomials) and
-comparing syntactically the results.
+   This tactic solves equations upon polynomial expressions of a ring
+   (or semiring) structure. It proceeds by normalizing both sides
+   of the equation (w.r.t. associativity, commutativity and
+   distributivity, constant propagation, rewriting of monomials) and
+   comparing syntactically the results.
 
 .. tacn:: ring_simplify
 
-``ring_simplify`` applies the normalization procedure described above to
-the given terms. The tactic then replaces all occurrences of the terms
-given in the conclusion of the goal by their normal forms. If no term
-is given, then the conclusion should be an equation and both
-sides are normalized. The tactic can also be applied in a hypothesis.
+   This tactic applies the normalization procedure described above to
+   the given terms. The tactic then replaces all occurrences of the terms
+   given in the conclusion of the goal by their normal forms. If no term
+   is given, then the conclusion should be an equation and both
+   sides are normalized. The tactic can also be applied in a hypothesis.
 
-The tactic must be loaded by ``Require Import Ring``. The ring structures
-must be declared with the ``Add Ring`` command (see below). The ring of
-booleans is predefined; if one wants to use the tactic on |nat| one must
-first require the module ``ArithRing`` exported by ``Arith``); for |Z|, do
-``Require Import ZArithRing`` or simply ``Require Import ZArith``; for |N|, do
-``Require Import NArithRing`` or ``Require Import NArith``.
+   The tactic must be loaded by ``Require Import Ring``. The ring structures
+   must be declared with the ``Add Ring`` command (see below). The ring of
+   booleans is predefined; if one wants to use the tactic on |nat| one must
+   first require the module ``ArithRing`` exported by ``Arith``); for |Z|, do
+   ``Require Import ZArithRing`` or simply ``Require Import ZArith``; for |N|, do
+   ``Require Import NArithRing`` or ``Require Import NArith``.
 
 
 .. example::
@@ -141,25 +141,24 @@ first require the module ``ArithRing`` exported by ``Arith``); for |Z|, do
 
 .. tacv:: ring [{* @term }] 
  
-decides the equality of two terms modulo ring operations and 
-the equalities defined by the :n:`@term`\ s.
-Each :n:`@term` has to be a proof of some equality `m = p`, where `m` is a monomial (after “abstraction”), `p` a polynomial and `=` the corresponding equality of the ring structure.
+   This tactic decides the equality of two terms modulo ring operations and
+   the equalities defined by the :token:`term`\ s.
+   Each :token:`term` has to be a proof of some equality :g:`m = p`, where :g:`m`
+   is a monomial (after “abstraction”), :g:`p` a polynomial and :g:`=` the
+   corresponding equality of the ring structure.
 
 .. tacv:: ring_simplify [{* @term }] {* @term } in @ident
  
-performs the simplification in the hypothesis named :n:`@ident`.
+   This tactic performs the simplification in the hypothesis named :token:`ident`.
 
 
 .. note:: 
 
-  .. tacn::  ring_simplify @term1; ring_simplify @term2 
+  :n:`ring_simplify @term__1; ring_simplify @term__2` is not equivalent to
+  :n:`ring_simplify @term__1 @term__2`.
 
-  is not equivalent to 
-
-  .. tacn:: ring_simplify @term1 @term2
-
-  In the latter case the variables map
-  is shared between the two terms, and common subterm `t` of :n:`@term1` and :n:`@term2`
+  In the latter case the variables map is shared between the two terms, and
+  common subterm :g:`t` of :n:`@term__1` and :n:`@term__2`
   will have the same associated variable number. So the first
   alternative should be avoided for terms belonging to the same ring
   theory.
@@ -174,17 +173,17 @@ Error messages:
 
 .. exn:: Arguments of ring_simplify do not have all the same type.
   
-  ``ring_simplify`` cannot simplify terms of several rings at the same
+  :tacn:`ring_simplify` cannot simplify terms of several rings at the same
   time. Invoke the tactic once per ring structure.
 
 .. exn:: Cannot find a declared ring structure over @term.
 
   No ring has been declared for the type of the terms to be simplified.
-  Use ``Add Ring`` first.
+  Use :cmd:`Add Ring` first.
 
 .. exn:: Cannot find a declared ring structure for equality @term.
 
-  Same as above in the case of the ``ring`` tactic.
+  Same as above in the case of the :tacn:`ring` tactic.
 
 
 Adding a ring structure
@@ -198,7 +197,7 @@ be either Leibniz equality, or any relation declared as a setoid (see
 :ref:`tactics-enabled-on-user-provided-relations`).
 The definitions of ring and semiring (see module ``Ring_theory``) are:
 
-.. coqtop:: in
+.. coqdoc::
 
     Record ring_theory : Prop := mk_rt {
       Radd_0_l    : forall x, 0 + x == x;
@@ -236,7 +235,7 @@ coefficients could be the rational numbers, upon which the ring
 operations can be implemented. The fact that there exists a morphism
 is defined by the following properties:
 
-.. coqtop:: in 
+.. coqdoc::
 
     Record ring_morph : Prop := mkmorph {
       morph0    : [cO] == 0;
@@ -286,13 +285,14 @@ following property:
 
 .. coqtop:: in
 
+    Require Import Reals.
     Section POWER.
       Variable Cpow : Set.
       Variable Cp_phi : N -> Cpow.
       Variable rpow : R -> Cpow -> R.
     
       Record power_theory : Prop := mkpow_th {
-        rpow_pow_N : forall r n, req (rpow r (Cp_phi n)) (pow_N rI rmul r n)
+        rpow_pow_N : forall r n, rpow r (Cp_phi n) = pow_N 1%R Rmult r n
       }.
     
     End POWER.
@@ -302,93 +302,93 @@ The syntax for adding a new ring is
 
 .. cmd:: Add Ring @ident : @term {? ( @ring_mod {* , @ring_mod } )}
 
-The :n:`@ident` is not relevant. It is used just for error messages. The
-:n:`@term` is a proof that the ring signature satisfies the (semi-)ring
-axioms. The optional list of modifiers is used to tailor the behavior
-of the tactic. The following list describes their syntax and effects:
+   The :token:`ident` is not relevant. It is used just for error messages. The
+   :token:`term` is a proof that the ring signature satisfies the (semi-)ring
+   axioms. The optional list of modifiers is used to tailor the behavior
+   of the tactic. The following list describes their syntax and effects:
 
-.. productionlist:: coq
-   ring_mod : abstract | decidable `term` | morphism `term`
-            : | setoid `term` `term`
-            : | constants [`ltac`]
-            : | preprocess [`ltac`]
-            : | postprocess [`ltac`]
-            : | power_tac `term` [`ltac`]
-            : | sign `term`
-            : | div `term`
+   .. productionlist:: coq
+      ring_mod : abstract | decidable `term` | morphism `term`
+               : setoid `term` `term`
+               : constants [`ltac`]
+               : preprocess [`ltac`]
+               : postprocess [`ltac`]
+               : power_tac `term` [`ltac`]
+               : sign `term`
+               : div `term`
 
-abstract
-  declares the ring as abstract. This is the default.
+   abstract
+      declares the ring as abstract. This is the default.
 
-decidable :n:`@term`
-  declares the ring as computational. The expression
-  :n:`@term` is the correctness proof of an equality test ``?=!``
-  (which  hould be evaluable). Its type should be of the form 
-  ``forall x y, x ?=! y = true → x == y``.
+   decidable :n:`@term`
+      declares the ring as computational. The expression
+      :n:`@term` is the correctness proof of an equality test ``?=!``
+      (which should be evaluable). Its type should be of the form
+      ``forall x y, x ?=! y = true → x == y``.
 
-morphism :n:`@term`
-  declares the ring as a customized one. The expression
-  :n:`@term` is a proof that there exists a morphism between a set of
-  coefficient and the ring carrier (see ``Ring_theory.ring_morph`` and
-  ``Ring_theory.semi_morph``).
+   morphism :n:`@term`
+      declares the ring as a customized one. The expression
+      :n:`@term` is a proof that there exists a morphism between a set of
+      coefficient and the ring carrier (see ``Ring_theory.ring_morph`` and
+      ``Ring_theory.semi_morph``).
 
-setoid :n:`@term` :n:`@term` 
-  forces the use of given setoid. The first
-  :n:`@term` is a proof that the equality is indeed a setoid (see
-  ``Setoid.Setoid_Theory``), and the second :n:`@term` a proof that the
-  ring operations are morphisms (see ``Ring_theory.ring_eq_ext`` and 
-  ``Ring_theory.sring_eq_ext``).
-  This modifier needs not be used if the setoid and morphisms have been
-  declared.
+   setoid :n:`@term` :n:`@term`
+      forces the use of given setoid. The first
+      :n:`@term` is a proof that the equality is indeed a setoid (see
+      ``Setoid.Setoid_Theory``), and the second :n:`@term` a proof that the
+      ring operations are morphisms (see ``Ring_theory.ring_eq_ext`` and
+      ``Ring_theory.sring_eq_ext``).
+      This modifier needs not be used if the setoid and morphisms have been
+      declared.
 
-constants [:n:`@ltac`] 
-  specifies a tactic expression :n:`@ltac` that, given a
-  term, returns either an object of the coefficient set that is mapped
-  to the expression via the morphism, or returns
-  ``InitialRing.NotConstant``. The default behavior is to map only 0 and 1
-  to their counterpart in the coefficient set. This is generally not
-  desirable for non trivial computational rings.
+   constants [ :n:`@ltac` ]
+      specifies a tactic expression :n:`@ltac` that, given a
+      term, returns either an object of the coefficient set that is mapped
+      to the expression via the morphism, or returns
+      ``InitialRing.NotConstant``. The default behavior is to map only 0 and 1
+      to their counterpart in the coefficient set. This is generally not
+      desirable for non trivial computational rings.
 
-preprocess [:n:`@ltac`]
-  specifies a tactic :n:`@ltac` that is applied as a
-  preliminary step for ``ring`` and ``ring_simplify``. It can be used to
-  transform a goal so that it is better recognized. For instance, ``S n``
-  can be changed to ``plus 1 n``.
+   preprocess [ :n:`@ltac` ]
+      specifies a tactic :n:`@ltac` that is applied as a
+      preliminary step for :tacn:`ring` and :tacn:`ring_simplify`. It can be used to
+      transform a goal so that it is better recognized. For instance, ``S n``
+      can be changed to ``plus 1 n``.
 
-postprocess [:n:`@ltac`]
-  specifies a tactic :n:`@ltac` that is applied as a final
-  step for ``ring_simplify``. For instance, it can be used to undo
-  modifications of the preprocessor.
+   postprocess [ :n:`@ltac` ]
+      specifies a tactic :n:`@ltac` that is applied as a final
+      step for :tacn:`ring_simplify`. For instance, it can be used to undo
+      modifications of the preprocessor.
 
-power_tac :n:`@term` [:n:`@ltac`] 
-  allows ``ring`` and ``ring_simplify`` to recognize
-  power expressions with a constant positive integer exponent (example:
-  ::math:`x^2` ). The term :n:`@term` is a proof that a given power function satisfies
-  the specification of a power function (term has to be a proof of
-  ``Ring_theory.power_theory``) and :n:`@ltac` specifies a tactic expression
-  that, given a term, “abstracts” it into an object of type |N| whose
-  interpretation via ``Cp_phi`` (the evaluation function of power
-  coefficient) is the original term, or returns ``InitialRing.NotConstant``
-  if not a constant coefficient (i.e. |L_tac| is the inverse function of
-  ``Cp_phi``). See files ``plugins/setoid_ring/ZArithRing.v``
-  and ``plugins/setoid_ring/RealField.v`` for examples. By default the tactic
-  does not recognize power expressions as ring expressions.
+   power_tac :n:`@term` [ :n:`@ltac` ]
+      allows :tacn:`ring` and :tacn:`ring_simplify` to recognize
+      power expressions with a constant positive integer exponent (example:
+      :math:`x^2` ). The term :n:`@term` is a proof that a given power function satisfies
+      the specification of a power function (term has to be a proof of
+      ``Ring_theory.power_theory``) and :n:`@ltac` specifies a tactic expression
+      that, given a term, “abstracts” it into an object of type |N| whose
+      interpretation via ``Cp_phi`` (the evaluation function of power
+      coefficient) is the original term, or returns ``InitialRing.NotConstant``
+      if not a constant coefficient (i.e. |L_tac| is the inverse function of
+      ``Cp_phi``). See files ``plugins/setoid_ring/ZArithRing.v``
+      and ``plugins/setoid_ring/RealField.v`` for examples. By default the tactic
+      does not recognize power expressions as ring expressions.
 
-sign :n:`@term`
-  allows ``ring_simplify`` to use a minus operation when
-  outputting its normal form, i.e writing ``x − y`` instead of ``x + (− y)``. The
-  term `:n:`@term` is a proof that a given sign function indicates expressions
-  that are signed (`term` has to be a proof of ``Ring_theory.get_sign``). See
-  ``plugins/setoid_ring/InitialRing.v`` for examples of sign function.
+   sign :n:`@term`
+      allows :tacn:`ring_simplify` to use a minus operation when
+      outputting its normal form, i.e writing ``x − y`` instead of ``x + (− y)``. The
+      term :token:`term` is a proof that a given sign function indicates expressions
+      that are signed (:token:`term` has to be a proof of ``Ring_theory.get_sign``). See
+      ``plugins/setoid_ring/InitialRing.v`` for examples of sign function.
 
-div :n:`@term`
-  allows ``ring`` and ``ring_simplify`` to use monomials with
-  coefficients other than 1 in the rewriting. The term :n:`@term` is a proof
-  that a given division function satisfies the specification of an
-  euclidean division function (:n:`@term` has to be a proof of
-  ``Ring_theory.div_theory``). For example, this function is called when
-  trying to rewrite :math:`7x` by :math:`2x = z` to tell that :math:`7 = 3 \times 2 + 1`. See
-  ``plugins/setoid_ring/InitialRing.v`` for examples of div function.
+   div :n:`@term`
+      allows :tacn:`ring` and :tacn:`ring_simplify` to use monomials with
+      coefficients other than 1 in the rewriting. The term :n:`@term` is a proof
+      that a given division function satisfies the specification of an
+      euclidean division function (:n:`@term` has to be a proof of
+      ``Ring_theory.div_theory``). For example, this function is called when
+      trying to rewrite :math:`7x` by :math:`2x = z` to tell that :math:`7 = 3 \times 2 + 1`. See
+      ``plugins/setoid_ring/InitialRing.v`` for examples of div function.
 
 Error messages:
 
@@ -423,7 +423,7 @@ The interested reader is strongly advised to have a look at the
 file ``Ring_polynom.v``. Here a type for polynomials is defined:
 
 
-.. coqtop:: in
+.. coqdoc::
 
     Inductive PExpr : Type :=
       | PEc : C -> PExpr
@@ -438,7 +438,7 @@ file ``Ring_polynom.v``. Here a type for polynomials is defined:
 Polynomials in normal form are defined as:
 
 
-.. coqtop:: in
+.. coqdoc::
 
     Inductive Pol : Type :=
       | Pc : C -> Pol 
@@ -455,7 +455,7 @@ polynomial to an element of the concrete ring, and the second one that
 does the same for normal forms:
 
 
-.. coqtop:: in
+.. coqdoc::
 
 
     Definition PEeval : list R -> PExpr -> R := [...].
@@ -466,7 +466,7 @@ A function to normalize polynomials is defined, and the big theorem is
 its correctness w.r.t interpretation, that is:
 
 
-.. coqtop:: in
+.. coqdoc::
 
     Definition norm : PExpr -> Pol := [...].
     Lemma Pphi_dev_ok :
@@ -477,8 +477,8 @@ So now, what is the scheme for a normalization proof? Let p be the
 polynomial expression that the user wants to normalize. First a little
 piece of |ML| code guesses the type of `p`, the ring theory `T` to use, an
 abstract polynomial `ap` and a variables map `v` such that `p` is |bdi|-
-equivalent to ``(PEeval`` `v` `ap`\ ``)``. Then we replace it by ``(Pphi_dev`` `v`
-``(norm`` `ap`\ ``))``, using the main correctness theorem and we reduce it to a
+equivalent to `(PEeval v ap)`. Then we replace it by `(Pphi_dev v (norm ap))`,
+using the main correctness theorem and we reduce it to a
 concrete expression `p’`, which is the concrete normal form of `p`. This is summarized in this diagram:
 
 ========= ======  ====
@@ -497,30 +497,31 @@ Dealing with fields
 
 .. tacn:: field
 
-The ``field`` tactic is an extension of the ``ring`` tactic that deals with rational
-expressions. Given a rational expression :math:`F = 0`. It first reduces the
-expression `F` to a common denominator :math:`N/D = 0` where `N` and `D`
-are two ring expressions. For example, if we take :math:`F = (1 − 1/x) x − x + 1`, this
-gives :math:`N = (x − 1) x − x^2 + x` and :math:`D = x`. It then calls ring to solve 
-:math:`N = 0`.
-Note that ``field`` also generates nonzero conditions for all the
-denominators it encounters in the reduction. In our example, it
-generates the condition :math:`x \neq 0`. These conditions appear as one subgoal
-which is a conjunction if there are several denominators. Nonzero
-conditions are always polynomial expressions. For example when
-reducing the expression :math:`1/(1 + 1/x)`, two side conditions are
-generated: :math:`x \neq 0` and :math:`x + 1 \neq 0`. Factorized expressions are broken since
-a field is an integral domain, and when the equality test on
-coefficients is complete w.r.t. the equality of the target field,
-constants can be proven different from zero automatically.
+   This tactic is an extension of the :tacn:`ring` tactic that deals with rational
+   expressions. Given a rational expression :math:`F = 0`. It first reduces the
+   expression `F` to a common denominator :math:`N/D = 0` where `N` and `D`
+   are two ring expressions. For example, if we take :math:`F = (1 − 1/x) x − x + 1`, this
+   gives :math:`N = (x − 1) x − x^2 + x` and :math:`D = x`. It then calls ring to solve
+   :math:`N = 0`.
 
-The tactic must be loaded by ``Require Import Field``. New field
-structures can be declared to the system with the ``Add Field`` command
-(see below). The field of real numbers is defined in module ``RealField``
-(in ``plugins/setoid_ring``). It is exported by module ``Rbase``, so
-that requiring ``Rbase`` or ``Reals`` is enough to use the field tactics on
-real numbers. Rational numbers in canonical form are also declared as
-a field in the module ``Qcanon``.
+   Note that :n:`field` also generates nonzero conditions for all the
+   denominators it encounters in the reduction. In our example, it
+   generates the condition :math:`x \neq 0`. These conditions appear as one subgoal
+   which is a conjunction if there are several denominators. Nonzero
+   conditions are always polynomial expressions. For example when
+   reducing the expression :math:`1/(1 + 1/x)`, two side conditions are
+   generated: :math:`x \neq 0` and :math:`x + 1 \neq 0`. Factorized expressions are broken since
+   a field is an integral domain, and when the equality test on
+   coefficients is complete w.r.t. the equality of the target field,
+   constants can be proven different from zero automatically.
+
+   The tactic must be loaded by ``Require Import Field``. New field
+   structures can be declared to the system with the ``Add Field`` command
+   (see below). The field of real numbers is defined in module ``RealField``
+   (in ``plugins/setoid_ring``). It is exported by module ``Rbase``, so
+   that requiring ``Rbase`` or ``Reals`` is enough to use the field tactics on
+   real numbers. Rational numbers in canonical form are also declared as
+   a field in the module ``Qcanon``.
 
 
 .. example::
@@ -540,15 +541,15 @@ a field in the module ``Qcanon``.
 
 .. tacv:: field [{* @term}] 
 
-  decides the equality of two terms modulo
-  field operations and the equalities defined  
-  by the :n:`@term`\ s. Each :n:`@term` has to be a proof of some equality 
-  `m` ``=`` `p`, where `m` is a monomial (after “abstraction”), `p` a polynomial 
-  and ``=`` the corresponding equality of the field structure.
+   This tactic decides the equality of two terms modulo
+   field operations and the equalities defined
+   by the :token:`term`\s. Each :token:`term` has to be a proof of some equality
+   :g:`m = p`, where :g:`m` is a monomial (after “abstraction”), :g:`p` a polynomial
+   and :g:`=` the corresponding equality of the field structure.
 
 .. note:: 
 
-   rewriting works with the equality  `m` ``=`` `p` only if `p` is a polynomial since
+   Rewriting works with the equality  :g:`m = p` only if :g:`p` is a polynomial since
    rewriting is handled by the underlying ring tactic.
 
 .. tacv:: field_simplify
@@ -562,27 +563,28 @@ a field in the module ``Qcanon``.
 
 .. tacv:: field_simplify [{* @term }] 
 
-  performs the simplification in the conclusion of the goal using the equalities 
-  defined by the :n:`@term`\ s.
+   This variant performs the simplification in the conclusion of the goal using the equalities
+   defined by the :token:`term`\s.
 
 .. tacv:: field_simplify [{* @term }] {* @term }
 
-   performs the simplification in the terms :n:`@terms`  of the conclusion of the goal
-   using the equalities defined by :n:`@term`\ s inside the brackets.
+   This variant performs the simplification in the terms :token:`term`\s  of the conclusion of the goal
+   using the equalities defined by :token:`term`\s inside the brackets.
 
-.. tacv :: field_simplify in @ident
+.. tacv:: field_simplify in @ident
 
-   performs the simplification in the assumption :n:`@ident`.
+   This variant performs the simplification in the assumption :token:`ident`.
 
-.. tacv :: field_simplify [{* @term }] in @ident 
+.. tacv:: field_simplify [{* @term }] in @ident
  
-   performs the simplification
-   in the assumption :n:`@ident` using the equalities defined by the :n:`@term`\ s.
+   This variant performs the simplification
+   in the assumption :token:`ident` using the equalities defined by the :token:`term`\s.
 
 .. tacv:: field_simplify [{* @term }] {* @term } in @ident
 
-   performs the simplification in the :n:`@term`\ s of the assumption :n:`@ident` using the
-   equalities defined by  the :n:`@term`\ s inside the brackets.
+   This variant performs the simplification in the :token:`term`\s of the
+   assumption :token:`ident` using the
+   equalities defined by the :token:`term`\s inside the brackets.
 
 .. tacv:: field_simplify_eq
 
@@ -591,18 +593,17 @@ a field in the module ``Qcanon``.
 
 .. tacv:: field_simplify_eq [ {* @term }]
 
-   performs the simplification in
-   the conclusion of the goal using the equalities defined by 
-   :n:`@term`\ s.
+   This variant performs the simplification in
+   the conclusion of the goal using the equalities defined by :token:`term`\s.
 
 .. tacv:: field_simplify_eq in @ident
 
-   performs the simplification in the assumption :n:`@ident`.
+   This variant performs the simplification in the assumption :token:`ident`.
 
 .. tacv:: field_simplify_eq [{* @term}] in @ident
 
-   performs the simplification in the assumption :n:`@ident` using the equalities defined by
-   :n:`@terms`\ s and removing the denominator.
+   This variant performs the simplification in the assumption :token:`ident`
+   using the equalities defined by :token:`term`\s and removing the denominator.
 
 
 Adding a new field structure
@@ -616,7 +617,7 @@ also supported. The equality can be either Leibniz equality, or any
 relation declared as a setoid (see :ref:`tactics-enabled-on-user-provided-relations`). The definition of
 fields and semifields is:
 
-.. coqtop:: in
+.. coqdoc::
 
     Record field_theory : Prop := mk_field {
       F_R : ring_theory rO rI radd rmul rsub ropp req;
@@ -636,7 +637,7 @@ fields and semifields is:
 The result of the normalization process is a fraction represented by
 the following type:
 
-.. coqtop:: in
+.. coqdoc::
 
     Record linear : Type := mk_linear {
       num : PExpr C;
@@ -654,27 +655,25 @@ The syntax for adding a new field is
 
 .. cmd:: Add Field @ident : @term {? ( @field_mod {* , @field_mod } )}
 
-The :n:`@ident` is not relevant. It is used just for error
-messages. :n:`@term` is a proof that the field signature satisfies the
-(semi-)field axioms. The optional list of modifiers is used to tailor
-the behavior of the tactic.
+   The :n:`@ident` is not relevant. It is used just for error
+   messages. :n:`@term` is a proof that the field signature satisfies the
+   (semi-)field axioms. The optional list of modifiers is used to tailor
+   the behavior of the tactic.
 
-.. productionlist:: coq
-   field_mod : `ring_mod` | completeness `term`
+   .. productionlist:: coq
+      field_mod : `ring_mod` | completeness `term`
 
-Since field tactics are built upon ``ring``
-tactics, all modifiers of the ``Add Ring`` apply. There is only one
-specific modifier:
+   Since field tactics are built upon ``ring``
+   tactics, all modifiers of the ``Add Ring`` apply. There is only one
+   specific modifier:
 
-completeness :n:`@term`
-  allows the field tactic to prove automatically
-  that the image of nonzero coefficients are mapped to nonzero
-  elements of the field. :n:`@term` is a proof of
-
-  ``forall x y, [x] == [y] ->  x ?=! y = true``, 
-
-  which is the completeness of equality on coefficients
-  w.r.t. the field equality.
+   completeness :n:`@term`
+      allows the field tactic to prove automatically
+      that the image of nonzero coefficients are mapped to nonzero
+      elements of the field. :n:`@term` is a proof of
+      :g:`forall x y, [x] == [y] ->  x ?=! y = true`,
+      which is the completeness of equality on coefficients
+      w.r.t. the field equality.
 
 
 History of ring
@@ -692,7 +691,7 @@ for |Coq|’s type checker. Let us see why:
          x + 3 + y + y * z = x + 3 + y + z * y.
   intros; rewrite (Zmult_comm y z); reflexivity.
   Save foo.
-  Print  foo.
+  Print foo.
 
 At each step of rewriting, the whole context is duplicated in the
 proof term. Then, a tactic that does hundreds of rewriting generates

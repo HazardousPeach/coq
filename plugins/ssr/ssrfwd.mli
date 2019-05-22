@@ -22,7 +22,7 @@ val ssrposetac : Id.t * (ssrfwdfmt * ast_closure_term) -> v82tac
 
 val havetac : ist ->
            bool *
-           ((((Ssrast.ssrclear * Ssrast.ssripat list) * Ssrast.ssripats) *
+           ((((Ssrast.ssrclear option * Ssrast.ssripat list) * Ssrast.ssripats) *
              Ssrast.ssripats) *
             (((Ssrast.ssrfwdkind * 'a) * ast_closure_term) *
              (bool * Tacinterp.Value.t option list))) ->
@@ -35,7 +35,7 @@ val basecuttac :
 
 val wlogtac :
   Ltac_plugin.Tacinterp.interp_sign ->
-  ((Ssrast.ssrhyps * Ssrast.ssripats) * 'a) * 'b ->
+  ((Ssrast.ssrclear option * Ssrast.ssripats) * 'a) * 'b ->
   (Ssrast.ssrhyps *
      ((Ssrast.ssrhyp_or_id * string) *
         Ssrmatching_plugin.Ssrmatching.cpattern option)
@@ -50,10 +50,23 @@ val wlogtac :
 
 val sufftac :
   Ssrast.ist ->
-  (((Ssrast.ssrhyps * Ssrast.ssripats) * Ssrast.ssripat list) *
+  (((Ssrast.ssrclear option * Ssrast.ssripats) * Ssrast.ssripat list) *
      Ssrast.ssripat list) *
     (('a *
         ast_closure_term) *
        (bool * Tacinterp.Value.t option list)) ->
   Tacmach.tactic
 
+(* pad_intro (by default false) indicates whether the intro-pattern
+   "=> i..." must be turned into "=> [i...|i...|i...|]" (n+1 branches,
+   assuming there are n provided tactics in the ssrhint argument
+   "do [...|...|...]"; it is useful when the intro-pattern is "=> *").
+   Otherwise, "=> i..." is turned into "=> [i...|]". *)
+val undertac :
+  ?pad_intro:bool ->
+  Ltac_plugin.Tacinterp.interp_sign ->
+  Ssrast.ssripats option -> Ssrequality.ssrrwarg ->
+  Ltac_plugin.Tacinterp.Value.t Ssrast.ssrhint -> unit Proofview.tactic
+
+val overtac :
+  unit Proofview.tactic

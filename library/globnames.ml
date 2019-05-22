@@ -31,8 +31,8 @@ let destConstructRef = function ConstructRef ind -> ind | _ -> failwith "destCon
 
 let subst_constructor subst (ind,j as ref) =
   let ind' = subst_ind subst ind in
-    if ind==ind' then ref, mkConstruct ref
-    else (ind',j), mkConstruct (ind',j)
+  if ind==ind' then ref
+  else (ind',j)
 
 let subst_global_reference subst ref = match ref with
   | VarRef var -> ref
@@ -43,20 +43,20 @@ let subst_global_reference subst ref = match ref with
     let ind' = subst_ind subst ind in
       if ind==ind' then ref else IndRef ind'
   | ConstructRef ((kn,i),j as c) ->
-    let c',t = subst_constructor subst c in
-      if c'==c then ref else ConstructRef c'
+    let c' = subst_constructor subst c in
+    if c'==c then ref else ConstructRef c'
 
 let subst_global subst ref = match ref with
-  | VarRef var -> ref, mkVar var
+  | VarRef var -> ref, None
   | ConstRef kn ->
-     let kn',t = subst_con_kn subst kn in
-      if kn==kn' then ref, mkConst kn else ConstRef kn', t
+     let kn',t = subst_con subst kn in
+      if kn==kn' then ref, None else ConstRef kn', t
   | IndRef ind ->
       let ind' = subst_ind subst ind in
-      if ind==ind' then ref, mkInd ind else IndRef ind', mkInd ind'
+      if ind==ind' then ref, None else IndRef ind', None
   | ConstructRef ((kn,i),j as c) ->
-      let c',t = subst_constructor subst c in
-	if c'==c then ref,t else ConstructRef c', t
+      let c' = subst_constructor subst c in
+      if c'==c then ref,None else ConstructRef c', None
 
 let canonical_gr = function
   | ConstRef con -> ConstRef(Constant.make1 (Constant.canonical con))
@@ -84,15 +84,6 @@ let printable_constr_of_global = function
   | ConstRef sp -> mkConst sp
   | ConstructRef sp -> mkConstruct sp
   | IndRef sp -> mkInd sp
-
-module RefOrdered = Names.GlobRef.Ordered
-module RefOrdered_env = Names.GlobRef.Ordered_env
-
-module Refmap = Names.GlobRef.Map
-module Refset = Names.GlobRef.Set
-
-module Refmap_env = Names.GlobRef.Map_env
-module Refset_env = Names.GlobRef.Set_env
 
 (* Extended global references *)
 
@@ -134,6 +125,3 @@ end
 type global_reference_or_constr = 
   | IsGlobal of global_reference
   | IsConstr of constr
-
-(* Deprecated *)
-let eq_gr = GlobRef.equal

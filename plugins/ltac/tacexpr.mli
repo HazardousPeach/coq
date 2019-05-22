@@ -34,6 +34,7 @@ type rec_flag = bool       (* true = recursive        false = not recursive *)
 type advanced_flag = bool  (* true = advanced         false = basic *)
 type letin_flag = bool     (* true = use local def    false = use Leibniz *)
 type clear_flag = bool option (* true = clear hyp, false = keep hyp, None = use default *)
+type check_flag = bool     (* true = check    false = do not check *)
 
 type ('c,'d,'id) inversion_strength =
   | NonDepInversion of
@@ -78,12 +79,12 @@ type ('a,'t) match_rule =
 
 (** Extension indentifiers for the TACTIC EXTEND mechanism. *)
 type ml_tactic_name = {
+  mltac_plugin : string;
   (** Name of the plugin where the tactic is defined, typically coming from a
       DECLARE PLUGIN statement in the source. *)
-  mltac_plugin : string;
+  mltac_tactic : string;
   (** Name of the tactic entry where the tactic is defined, typically found
       after the TACTIC EXTEND statement in the source. *)
-  mltac_tactic : string;
 }
 
 type ml_tactic_entry = {
@@ -92,20 +93,8 @@ type ml_tactic_entry = {
 }
 
 (** Composite types *)
-
-type glob_constr_and_expr = Genintern.glob_constr_and_expr
-
 type open_constr_expr = unit * constr_expr
-type open_glob_constr = unit * glob_constr_and_expr
-
-type binding_bound_vars = Constr_matching.binding_bound_vars
-type glob_constr_pattern_and_expr = binding_bound_vars * glob_constr_and_expr * constr_pattern
-
-type 'a delayed_open = Environ.env -> Evd.evar_map -> Evd.evar_map * 'a
-
-type delayed_open_constr_with_bindings = EConstr.constr with_bindings delayed_open
-
-type delayed_open_constr = EConstr.constr delayed_open
+type open_glob_constr = unit * Genintern.glob_constr_and_expr
 
 type intro_pattern = delayed_open_constr intro_pattern_expr CAst.t
 type intro_patterns = delayed_open_constr intro_pattern_expr CAst.t list
@@ -136,7 +125,7 @@ type 'a gen_atomic_tactic_expr =
 
   (* Conversion *)
   | TacReduce of ('trm,'cst,'pat) red_expr_gen * 'nam clause_expr
-  | TacChange of 'pat option * 'dtrm * 'nam clause_expr
+  | TacChange of check_flag * 'pat option * 'dtrm * 'nam clause_expr
 
   (* Equality and inversion *)
   | TacRewrite of evars_flag *
@@ -167,7 +156,7 @@ type 'a gen_tactic_arg =
   | TacGeneric     of 'lev generic_argument
   | ConstrMayEval  of ('trm,'cst,'pat) may_eval
   | Reference      of 'ref
-  | TacCall    of ('ref * 'a gen_tactic_arg list) Loc.located
+  | TacCall    of ('ref * 'a gen_tactic_arg list) CAst.t
   | TacFreshId of string or_var list
   | Tacexp of 'tacexpr
   | TacPretype of 'trm
@@ -189,7 +178,7 @@ constraint 'a = <
     'r : ltac refs, 'n : idents, 'l : levels *)
 
 and 'a gen_tactic_expr =
-  | TacAtom of ('a gen_atomic_tactic_expr) Loc.located
+  | TacAtom of ('a gen_atomic_tactic_expr) CAst.t
   | TacThen of
       'a gen_tactic_expr *
       'a gen_tactic_expr
@@ -245,12 +234,12 @@ and 'a gen_tactic_expr =
   | TacMatchGoal of lazy_flag * direction_flag *
       ('p,'a gen_tactic_expr) match_rule list
   | TacFun of 'a gen_tactic_fun_ast
-  | TacArg of 'a gen_tactic_arg located
+  | TacArg of 'a gen_tactic_arg CAst.t
   | TacSelect of Goal_select.t * 'a gen_tactic_expr
   (* For ML extensions *)
-  | TacML of (ml_tactic_entry * 'a gen_tactic_arg list) Loc.located
+  | TacML of (ml_tactic_entry * 'a gen_tactic_arg list) CAst.t
   (* For syntax extensions *)
-  | TacAlias of (KerName.t * 'a gen_tactic_arg list) Loc.located
+  | TacAlias of (KerName.t * 'a gen_tactic_arg list) CAst.t
 
 constraint 'a = <
     term:'t;
@@ -279,9 +268,9 @@ constraint 'a = <
 
 (** Globalized tactics *)
 
-type g_trm = glob_constr_and_expr
-type g_pat = glob_constr_pattern_and_expr
-type g_cst = evaluable_global_reference Stdarg.and_short_name or_var
+type g_trm = Genintern.glob_constr_and_expr
+type g_pat = Genintern.glob_constr_pattern_and_expr
+type g_cst = evaluable_global_reference Genredexpr.and_short_name or_var
 type g_ref = ltac_constant located or_var
 type g_nam = lident
 
@@ -307,9 +296,6 @@ type glob_tactic_arg =
 
 (** Raw tactics *)
 
-type r_trm = constr_expr
-type r_pat = constr_pattern_expr
-type r_cst = qualid or_by_notation
 type r_ref = qualid
 type r_nam = lident
 type r_lev = rlevel

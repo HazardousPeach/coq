@@ -54,7 +54,7 @@ val scope_is_open : scope_name -> bool
 (** Open scope *)
 
 val open_close_scope :
-  (** locality *) bool * (* open *) bool * scope_name -> unit
+  (* locality *) bool * (* open *) bool * scope_name -> unit
 
 (** Extend a list of scopes *)
 val empty_scope_stack : scopes
@@ -70,14 +70,14 @@ val find_delimiters_scope : ?loc:Loc.t -> delimiters -> scope_name
 
 (** {6 Declare and uses back and forth an interpretation of primitive token } *)
 
-(** A numeral interpreter is the pair of an interpreter for **integer**
+(** A numeral interpreter is the pair of an interpreter for **decimal**
    numbers in terms and an optional interpreter in pattern, if
-   negative numbers are not supported, the interpreter must fail with
-   an appropriate error message *)
+   non integer or negative numbers are not supported, the interpreter
+   must fail with an appropriate error message *)
 
 type notation_location = (DirPath.t * DirPath.t) * string
 type required_module = full_path * string list
-type rawnum = Constrexpr.raw_natural_number * Constrexpr.sign
+type rawnum = Constrexpr.sign * Constrexpr.raw_numeral
 
 (** The unique id string below will be used to refer to a particular
     registered interpreter/uninterpreter of numeral or string notation.
@@ -104,16 +104,16 @@ val register_string_interpretation :
 
 (** * Numeral notation *)
 
-type numeral_notation_error =
+type prim_token_notation_error =
   | UnexpectedTerm of Constr.t
   | UnexpectedNonOptionTerm of Constr.t
 
-exception NumeralNotationError of Environ.env * Evd.evar_map * numeral_notation_error
+exception PrimTokenNotationError of string * Environ.env * Evd.evar_map * prim_token_notation_error
 
 type numnot_option =
   | Nop
-  | Warning of raw_natural_number
-  | Abstract of raw_natural_number
+  | Warning of string
+  | Abstract of string
 
 type int_ty =
   { uint : Names.inductive;
@@ -123,25 +123,39 @@ type z_pos_ty =
   { z_ty : Names.inductive;
     pos_ty : Names.inductive }
 
+type decimal_ty =
+  { int : int_ty;
+    decimal : Names.inductive }
+
 type target_kind =
   | Int of int_ty (* Coq.Init.Decimal.int + uint *)
   | UInt of Names.inductive (* Coq.Init.Decimal.uint *)
   | Z of z_pos_ty (* Coq.Numbers.BinNums.Z and positive *)
+  | Int63 (* Coq.Numbers.Cyclic.Int63.Int63.int *)
+  | Decimal of decimal_ty (* Coq.Init.Decimal.decimal + uint + int *)
+
+type string_target_kind =
+  | ListByte
+  | Byte
 
 type option_kind = Option | Direct
-type conversion_kind = target_kind * option_kind
+type 'target conversion_kind = 'target * option_kind
 
-type numeral_notation_obj =
-  { to_kind : conversion_kind;
+type ('target, 'warning) prim_token_notation_obj =
+  { to_kind : 'target conversion_kind;
     to_ty : GlobRef.t;
-    of_kind : conversion_kind;
+    of_kind : 'target conversion_kind;
     of_ty : GlobRef.t;
-    num_ty : Libnames.qualid; (* for warnings / error messages *)
-    warning : numnot_option }
+    ty_name : Libnames.qualid; (* for warnings / error messages *)
+    warning : 'warning }
+
+type numeral_notation_obj = (target_kind, numnot_option) prim_token_notation_obj
+type string_notation_obj = (string_target_kind, unit) prim_token_notation_obj
 
 type prim_token_interp_info =
     Uid of prim_token_uid
   | NumeralNotation of numeral_notation_obj
+  | StringNotation of string_notation_obj
 
 type prim_token_infos = {
   pt_local : bool; (** Is this interpretation local? *)
@@ -297,3 +311,6 @@ val entry_has_ident : notation_entry_level -> bool
 (** Rem: printing rules for primitive token are canonical *)
 
 val with_notation_protection : ('a -> 'b) -> 'a -> 'b
+
+(** Conversion from bigint to int63 *)
+val int63_of_pos_bigint : Bigint.bigint -> Uint63.t

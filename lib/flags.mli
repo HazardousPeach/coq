@@ -31,15 +31,9 @@
 
 (** Command-line flags  *)
 
-val boot : bool ref
-
 (** Set by coqtop to tell the kernel to output to the aux file; will
     be eventually removed by cleanups such as PR#1103 *)
 val record_aux_file : bool ref
-
-(* Flag set when the test-suite is called. Its only effect to display
-   verbose information for `Fail` *)
-val test_mode : bool ref
 
 (** Async-related flags *)
 val async_proofs_worker_id : string ref
@@ -58,7 +52,7 @@ val we_are_parsing : bool ref
 (* Set Printing All flag. For some reason it is a global flag *)
 val raw_print : bool ref
 
-type compat_version = V8_7 | V8_8 | Current
+type compat_version = V8_8 | V8_9 | Current
 val compat_version : compat_version ref
 val version_compare : compat_version -> compat_version -> int
 val version_strictly_greater : compat_version -> bool
@@ -76,21 +70,6 @@ val silently : ('a -> 'b) -> 'a -> 'b
 val verbosely : ('a -> 'b) -> 'a -> 'b
 val if_silent : ('a -> unit) -> 'a -> unit
 val if_verbose : ('a -> unit) -> 'a -> unit
-
-(* Miscellaneus flags for vernac *)
-val make_auto_intros : bool -> unit
-val is_auto_intros : unit -> bool
-
-val program_mode : bool ref
-val is_program_mode : unit -> bool
-
-(** Global universe polymorphism flag. *)
-val make_universe_polymorphism : bool -> unit
-val is_universe_polymorphism : unit -> bool
-
-(** Global polymorphic inductive cumulativity flag. *)
-val make_polymorphic_inductive_cumulativity : bool -> unit
-val is_polymorphic_inductive_cumulativity : unit -> bool
 
 val warn : bool ref
 val make_warn : bool -> unit
@@ -123,11 +102,6 @@ val set_inline_level : int -> unit
 val get_inline_level : unit -> int
 val default_inline_level : int
 
-(** When producing vo objects, also compile the native-code version *)
-val output_native_objects : bool ref
-
-(** Print the mod uid associated to a vo file by the native compiler *)
-val print_mod_uid : bool ref
-
+(** Global profile_ltac flag  *)
 val profile_ltac : bool ref
 val profile_ltac_cutoff : float ref

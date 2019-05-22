@@ -24,17 +24,18 @@
 /.travis.yml      @coq/ci-maintainers
 /.gitlab-ci.yml   @coq/ci-maintainers
 /Makefile.ci      @coq/ci-maintainers
+/dev/ci/nix	@coq/nix-maintainers
 
 /dev/ci/user-overlays/*.sh @ghost
 # Trick to avoid getting review requests
 # each time someone adds an overlay
 
-/appveyor.yml          @maximedenes
-/dev/ci/appveyor.*     @maximedenes
-/dev/ci/*.bat          @maximedenes
-# Secondary maintainer @SkySkimmer
+/dev/ci/*.bat          @coq/ci-maintainers
 
 *.nix             @coq/nix-maintainers
+
+azure-pipelines.yml @coq/ci-maintainers
+/dev/ci/azure* @coq/ci-maintainers
 
 ########## Documentation ##########
 
@@ -53,6 +54,10 @@
 /dev/doc/         @Zimmi48
 # Secondary maintainer @maximedenes
 
+/dev/doc/MERGING.md @coq/pushers
+# This ensures that all members of the @coq/pushers
+# team are notified when the merging doc changes.
+
 /dev/doc/changes.md    @ghost
 # Trick to avoid getting review requests
 # each time someone modifies the dev changelog
@@ -62,6 +67,8 @@
 
 /man/             @silene
 # Secondary maintainer @maximedenes
+
+/doc/plugin_tutorial/ @coq/plugin-tutorial-maintainers
 
 ########## Coqchk ##########
 
@@ -91,16 +98,11 @@
 /engine/uState.* @SkySkimmer
 # Secondary maintainer @mattam82
 
-########## Grammar macros ##########
-
-/grammar/         @ppedrot
-# Secondary maintainer @maximedenes
-
 ########## CoqIDE ##########
 
 /ide/             @ppedrot
 /test-suite/ide/  @ppedrot
-# Secondary maintainer @gares
+# Secondary maintainers @gares @herbelin
 
 ########## Interpretation ##########
 
@@ -127,8 +129,9 @@
 
 ########## Parser ##########
 
-/parsing/         @herbelin
-# Secondary maintainer @mattam82
+/coqpp/           @coq/parsing-maintainers
+/gramlib/         @coq/parsing-maintainers
+/parsing/         @coq/parsing-maintainers
 
 ########## Plugins ##########
 
@@ -161,15 +164,11 @@
 /plugins/setoid_ring/   @amahboubi
 # Secondary maintainer @bgregoir
 
-/plugins/ssrmatching/   @gares
-# Secondary maintainer @maximedenes
+/plugins/ssrmatching/  @coq/ssreflect-maintainers
+/plugins/ssr/          @coq/ssreflect-maintainers
+/test-suite/ssr/       @coq/ssreflect-maintainers
 
-/plugins/ssr/          @gares
-/test-suite/ssr/       @gares
-# Secondary maintainer @maximedenes
-
-/plugins/syntax/        @ppedrot
-# Secondary maintainer @maximedenes
+/plugins/syntax/       @coq/parsing-maintainers
 
 /plugins/rtauto/       @PierreCorbineau
 # Secondary maintainer @herbelin
@@ -241,8 +240,7 @@
 
 /theories/QArith/         @herbelin
 
-/theories/Reals/          @silene
-# Secondary maintainer @ppedrot
+/theories/Reals/          @coq/reals-library-maintainers
 
 /theories/Relations/      @mattam82
 # Secondary maintainer @ppedrot
@@ -268,16 +266,6 @@
 # Secondary maintainer @Zimmi48
 
 /theories/Vectors/        @herbelin
-
-########## Dune  ##########
-
-/.ocamlinit            @ejgallego
-/Makefile.dune         @ejgallego
-/tools/coq_dune*       @ejgallego
-/dune*                 @ejgallego
-/coq.opam              @ejgallego
-/ide/coqide.opam       @ejgallego
-# Secondary maintainer @Zimmi48
 
 ########## Tools ##########
 
@@ -315,6 +303,8 @@
 /vernac/          @mattam82
 # Secondary maintainer @maximedenes
 
+/vernac/metasyntax.*   @coq/parsing-maintainers
+
 ########## Test suite ##########
 
 /test-suite/Makefile    @gares
@@ -322,7 +312,7 @@
 /test-suite/README.md   @gares
 # Secondary maintainer  @SkySkimmer
 
-/test-suite/save-logs   @SkySkimmer
+/test-suite/report.sh   @SkySkimmer
 
 /test-suite/complexity/ @herbelin
 
@@ -352,4 +342,11 @@
 
 /dev/tools/update-compat.py @JasonGross
 /test-suite/tools/update-compat/ @JasonGross
+# Secondary maintainer @Zimmi48
+
+########## Dune  ##########
+
+/.ocamlinit            @ejgallego
+*dune*                 @ejgallego
+*.opam                 @ejgallego
 # Secondary maintainer @Zimmi48

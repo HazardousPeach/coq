@@ -55,7 +55,7 @@ IF DEFINED HTTP_PROXY (
 )
 
 REM see -cygrepo in ReadMe.txt
-SET CYGWIN_REPOSITORY=http://ftp.inf.tu-dresden.de/software/windows/cygwin32
+SET CYGWIN_REPOSITORY=http://mirror.easyname.at/cygwin
 
 REM see -cygcache in ReadMe.txt
 SET CYGWIN_LOCAL_CACHE_WFMT=%BATCHDIR%cygwin_cache
@@ -331,7 +331,7 @@ IF "%CYGWIN_QUIET%" == "Y" (
 )
 
 IF "%GTK_FROM_SOURCES%"=="N" (
-  SET CYGWIN_OPT= %CYGWIN_OPT% -P mingw64-%ARCH%-gtk2.0,mingw64-%ARCH%-gtksourceview2.0
+  SET CYGWIN_OPT= %CYGWIN_OPT% -P mingw64-%ARCH%-gtk3,mingw64-%ARCH%-gtksourceview3.0
 )
 
 REM Cygwin setup sets proper ACLs (permissions) for folders it CREATES.
@@ -373,7 +373,8 @@ IF "%RUNSETUP%"=="Y" (
     -P make,unzip ^
     -P gdb,liblzma5 ^
     -P patch,automake1.14 ^
-    -P mingw64-%ARCH%-binutils,mingw64-%ARCH%-gcc-core,mingw64-%ARCH%-gcc-g++,mingw64-%ARCH%-pkg-config,mingw64-%ARCH%-windows_default_manifest ^
+    -P pkg-config ^
+    -P mingw64-%ARCH%-binutils,mingw64-%ARCH%-gcc-core,mingw64-%ARCH%-gcc-g++,mingw64-%ARCH%-windows_default_manifest ^
     -P mingw64-%ARCH%-headers,mingw64-%ARCH%-runtime,mingw64-%ARCH%-pthreads,mingw64-%ARCH%-zlib ^
     -P libiconv-devel,libunistring-devel,libncurses-devel ^
     -P gettext-devel,libgettextpo-devel ^

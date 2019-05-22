@@ -32,7 +32,7 @@ Names (link targets) are auto-generated for most simple objects, though they can
 - Vernacs (commands) have their name set to the first word of their signature.  For example, the auto-generated name of ``Axiom @ident : @term`` is ``Axiom``, and a link to it would take the form ``:cmd:`Axiom```.
 - Vernac variants, tactic notations, and tactic variants do not have a default name.
 
-Most objects should have a body (i.e. a block of indented text following the signature, called “contents” in Sphinx terms).  Undocumented objects should have the `:undocumented:` flag instead, as shown above.  When multiple objects have a single description, they can be grouped into a single object, like this (semicolons can be used to separate the names of the objects; names starting with ``_`` will be omitted from the indexes)::
+Most objects should have a body (i.e. a block of indented text following the signature, called “contents” in Sphinx terms).  Undocumented objects should have the ``:undocumented:`` flag instead, as shown above.  When multiple objects have a single description, they can be grouped into a single object, like this (semicolons can be used to separate the names of the objects; names starting with ``_`` will be omitted from the indexes)::
 
    .. cmdv:: Lemma @ident {? @binders} : @type
              Remark @ident {? @binders} : @type
@@ -60,8 +60,11 @@ The signatures of most objects can be written using a succinct DSL for Coq notat
 ``{*, …}``, ``{+, …}``
   an optional or mandatory repeatable block, with repetitions separated by commas
 
-``%|``, ``%{``, …
-  an escaped character (rendered without the leading ``%``)
+``{| … | … | … }``
+  an alternative, indicating than one of multiple constructs can be used
+
+``%{``, ``%}``, ``%|``
+  an escaped character (rendered without the leading ``%``).  In most cases, escaping is not necessary.  In particular, the following expressions are all parsed as plain text, and do not need escaping: ``{ xyz }``, ``x |- y``.  But the following escapes *are* needed: ``{| a b %| c | d }``, ``all: %{``.  (We use ``%`` instead of the usual ``\`` because you'd have to type ``\`` twice in your reStructuredText file.)
 
 ..
    FIXME document the new subscript support
@@ -138,7 +141,7 @@ DO
 DON'T
   .. code::
 
-     This is equivalent to ``Axiom`` :token`ident` : :token:`term`.
+     This is equivalent to ``Axiom`` :token:`ident` : :token:`term`.
 
 ..
 
@@ -172,12 +175,12 @@ Omitting annotations
 DO
   .. code::
 
-     .. tacv:: assert @form as @intro_pattern
+     .. tacv:: assert @form as @simple_intropattern
 
 DON'T
   .. code::
 
-     .. tacv:: assert form as intro_pattern
+     .. tacv:: assert form as simple_intropattern
 
 Using the ``.. coqtop::`` directive for syntax highlighting
 -----------------------------------------------------------
@@ -265,7 +268,7 @@ Tips and tricks
 Nested lemmas
 -------------
 
-The ``.. coqtop::`` directive does *not* reset Coq after running its contents.  That is, the following will create two nested lemmas::
+The ``.. coqtop::`` directive does *not* reset Coq after running its contents.  That is, the following will create two nested lemmas (which by default results in a failure)::
 
    .. coqtop:: all
 
@@ -275,7 +278,7 @@ The ``.. coqtop::`` directive does *not* reset Coq after running its contents.  
 
       Lemma l2: 2 + 2 <> 1.
 
-Add either ``undo`` to the first block or ``reset`` to the second block to avoid nesting lemmas.
+Add either ``abort`` to the first block or ``reset`` to the second block to avoid nesting lemmas.
 
 Abbreviations and macros
 ------------------------

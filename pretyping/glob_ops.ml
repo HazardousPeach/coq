@@ -47,11 +47,18 @@ let map_glob_decl_left_to_right f (na,k,obd,ty) =
 
 
 let glob_sort_eq g1 g2 = let open Glob_term in match g1, g2 with
-| GProp, GProp -> true
+| GSProp, GSProp
+| GProp, GProp
 | GSet, GSet -> true
 | GType l1, GType l2 ->
    List.equal (Option.equal (fun (x,m) (y,n) -> Libnames.qualid_eq x y && Int.equal m n)) l1 l2
-| _ -> false
+| (GSProp|GProp|GSet|GType _), _ -> false
+
+let glob_sort_family = let open Sorts in function
+| GSProp -> InSProp
+| GProp -> InProp
+| GSet -> InSet
+| GType _ -> InType
 
 let binding_kind_eq bk1 bk2 = match bk1, bk2 with
   | Decl_kinds.Explicit, Decl_kinds.Explicit -> true
@@ -99,19 +106,9 @@ let glob_decl_eq f (na1, bk1, c1, t1) (na2, bk2, c2, t2) =
   Name.equal na1 na2 && binding_kind_eq bk1 bk2 &&
   Option.equal f c1 c2 && f t1 t2
 
-let fix_recursion_order_eq f o1 o2 = match o1, o2 with
-  | GStructRec, GStructRec -> true
-  | GWfRec c1, GWfRec c2 -> f c1 c2
-  | GMeasureRec (c1, o1), GMeasureRec (c2, o2) ->
-    f c1 c2 && Option.equal f o1 o2
-  | (GStructRec | GWfRec _ | GMeasureRec _), _ -> false
-
-let fix_kind_eq f k1 k2 = match k1, k2 with
+let fix_kind_eq k1 k2 = match k1, k2 with
   | GFix (a1, i1), GFix (a2, i2) ->
-    let eq (i1, o1) (i2, o2) =
-      Option.equal Int.equal i1 i2 && fix_recursion_order_eq f o1 o2
-    in
-    Int.equal i1 i2 && Array.equal eq a1 a2
+    Int.equal i1 i2 && Array.equal (Option.equal Int.equal) a1 a2
   | GCoFix i1, GCoFix i2 -> Int.equal i1 i2
   | (GFix _ | GCoFix _), _ -> false
 
@@ -143,17 +140,19 @@ let mk_glob_constr_eq f c1 c2 = match DAst.get c1, DAst.get c2 with
     f m1 m2 && Name.equal pat1 pat2 &&
     Option.equal f p1 p2 && f c1 c2 && f t1 t2
   | GRec (kn1, id1, decl1, t1, c1), GRec (kn2, id2, decl2, t2, c2) ->
-    fix_kind_eq f kn1 kn2 && Array.equal Id.equal id1 id2 &&
+    fix_kind_eq kn1 kn2 && Array.equal Id.equal id1 id2 &&
     Array.equal (fun l1 l2 -> List.equal (glob_decl_eq f) l1 l2) decl1 decl2 &&
     Array.equal f c1 c2 && Array.equal f t1 t2
   | GSort s1, GSort s2 -> glob_sort_eq s1 s2
   | GHole (kn1, nam1, gn1), GHole (kn2, nam2, gn2) ->
-    Option.equal (==) gn1 gn2 (** Only thing sensible *) &&
+    Option.equal (==) gn1 gn2 (* Only thing sensible *) &&
     Namegen.intro_pattern_naming_eq nam1 nam2
   | GCast (c1, t1), GCast (c2, t2) ->
     f c1 c2 && cast_type_eq f t1 t2
+  | GInt i1, GInt i2 -> Uint63.equal i1 i2
   | (GRef _ | GVar _ | GEvar _ | GPatVar _ | GApp _ | GLambda _ | GProd _ | GLetIn _ |
-     GCases _ | GLetTuple _ | GIf _ | GRec _ | GSort _ | GHole _ | GCast _ ), _ -> false
+     GCases _ | GLetTuple _ | GIf _ | GRec _ | GSort _ | GHole _ | GCast _ |
+     GInt _), _ -> false
 
 let rec glob_constr_eq c = mk_glob_constr_eq glob_constr_eq c
 
@@ -214,7 +213,7 @@ let map_glob_constr_left_to_right f = DAst.map (function
       let comp1 = f c in
       let comp2 = map_cast_type f k in
       GCast (comp1,comp2)
-  | (GVar _ | GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _) as x -> x
+  | (GVar _ | GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _ | GInt _) as x -> x
   )
 
 let map_glob_constr = map_glob_constr_left_to_right
@@ -246,9 +245,8 @@ let fold_glob_constr f acc = DAst.with_val (function
     let acc = match k with
       | CastConv t | CastVM t | CastNative t -> f acc t | CastCoerce -> acc in
     f acc c
-  | (GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _) -> acc
+  | (GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _ | GInt _) -> acc
   )
-
 let fold_return_type_with_binders f g v acc (na,tyopt) =
   Option.fold_left (f (Name.fold_right g na v)) acc tyopt
 
@@ -289,7 +287,7 @@ let fold_glob_constr_with_binders g f v acc = DAst.(with_val (function
     let acc = match k with
       | CastConv t | CastVM t | CastNative t -> f v acc t | CastCoerce -> acc in
     f v acc c
-  | (GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _) -> acc))
+  | (GSort _ | GHole _ | GRef _ | GEvar _ | GPatVar _ | GInt _) -> acc))
 
 let iter_glob_constr f = fold_glob_constr (fun () -> f) ()
 
@@ -484,7 +482,11 @@ let is_gvar id c = match DAst.get c with
 | GVar id' -> Id.equal id id'
 | _ -> false
 
-let rec cases_pattern_of_glob_constr na = DAst.map (function
+let rec cases_pattern_of_glob_constr env na c =
+  (* Forcing evaluation to ensure that the possible raising of
+     Not_found is not delayed *)
+  let c = DAst.force c in
+  DAst.map (function
   | GVar id ->
     begin match na with
     | Name _ ->
@@ -497,22 +499,23 @@ let rec cases_pattern_of_glob_constr na = DAst.map (function
   | GApp (c, l) ->
     begin match DAst.get c with
     | GRef (ConstructRef cstr,_) ->
-      PatCstr (cstr,List.map (cases_pattern_of_glob_constr Anonymous) l,na)
+      let nparams = Inductiveops.inductive_nparams env (fst cstr) in
+      let _,l = List.chop nparams l in
+      PatCstr (cstr,List.map (cases_pattern_of_glob_constr env Anonymous) l,na)
     | _ -> raise Not_found
     end
   | GLetIn (Name id as na',b,None,e) when is_gvar id e && na = Anonymous ->
      (* A canonical encoding of aliases *)
-     DAst.get (cases_pattern_of_glob_constr na' b)
+     DAst.get (cases_pattern_of_glob_constr env na' b)
   | _ -> raise Not_found
-  )
+  ) c
 
 open Declarations
-open Term
 open Context
 
 (* Keep only patterns which are not bound to a local definitions *)
-let drop_local_defs typi args =
-    let (decls,_) = decompose_prod_assum typi in
+let drop_local_defs params decls args =
+    let decls = List.skipn (Rel.length params) (List.rev decls) in
     let rec aux decls args =
       match decls, args with
       | [], [] -> []
@@ -524,18 +527,17 @@ let drop_local_defs typi args =
          end
       | Rel.Declaration.LocalAssum _ :: decls, a :: args -> a :: aux decls args
       | _ -> assert false in
-    aux (List.rev decls) args
+    aux decls args
 
-let add_patterns_for_params_remove_local_defs (ind,j) l =
-  let (mib,mip) = Global.lookup_inductive ind in
+let add_patterns_for_params_remove_local_defs env (ind,j) l =
+  let (mib,mip) = Inductive.lookup_mind_specif env ind in
   let nparams = mib.Declarations.mind_nparams in
   let l =
     if mip.mind_consnrealdecls.(j-1) = mip.mind_consnrealargs.(j-1) then
       (* Optimisation *) l
     else
-      let typi = mip.mind_nf_lc.(j-1) in
-      let (_,typi) = decompose_prod_n_assum (Rel.length mib.mind_params_ctxt) typi in
-      drop_local_defs typi l in
+      let (ctx, _) = mip.mind_nf_lc.(j - 1) in
+      drop_local_defs mib.mind_params_ctxt ctx l in
   Util.List.addn nparams (DAst.make @@ PatVar Anonymous) l
 
 let add_alias ?loc na c =
@@ -544,12 +546,12 @@ let add_alias ?loc na c =
   | Name id -> GLetIn (na,DAst.make ?loc c,None,DAst.make ?loc (GVar id))
 
 (* Turn a closed cases pattern into a glob_constr *)
-let rec glob_constr_of_cases_pattern_aux isclosed x = DAst.map_with_loc (fun ?loc -> function
+let rec glob_constr_of_cases_pattern_aux env isclosed x = DAst.map_with_loc (fun ?loc -> function
   | PatCstr (cstr,[],na) -> add_alias ?loc na (GRef (ConstructRef cstr,None))
   | PatCstr (cstr,l,na)  ->
       let ref = DAst.make ?loc @@ GRef (ConstructRef cstr,None) in
-      let l = add_patterns_for_params_remove_local_defs cstr l in
-      add_alias ?loc na (GApp (ref, List.map (glob_constr_of_cases_pattern_aux isclosed) l))
+      let l = add_patterns_for_params_remove_local_defs env cstr l in
+      add_alias ?loc na (GApp (ref, List.map (glob_constr_of_cases_pattern_aux env isclosed) l))
   | PatVar (Name id) when not isclosed ->
       GVar id
   | PatVar Anonymous when not isclosed ->
@@ -559,14 +561,14 @@ let rec glob_constr_of_cases_pattern_aux isclosed x = DAst.map_with_loc (fun ?lo
   | _ -> raise Not_found
   ) x
 
-let glob_constr_of_closed_cases_pattern p = match DAst.get p with
+let glob_constr_of_closed_cases_pattern env p = match DAst.get p with
   | PatCstr (cstr,l,na) ->
       let loc = p.CAst.loc in
-      na,glob_constr_of_cases_pattern_aux true (DAst.make ?loc @@ PatCstr (cstr,l,Anonymous))
+      na,glob_constr_of_cases_pattern_aux env true (DAst.make ?loc @@ PatCstr (cstr,l,Anonymous))
   | _ ->
       raise Not_found
 
-let glob_constr_of_cases_pattern p = glob_constr_of_cases_pattern_aux false p
+let glob_constr_of_cases_pattern env p = glob_constr_of_cases_pattern_aux env false p
 
 (* This has to be in some file... *)
 

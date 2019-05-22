@@ -50,13 +50,14 @@ let names_of_local_binders bl =
 (**********************************************************************)
 (* Functions on constr_expr *)
 
-(* Note: redundant Numeral representations such as -0 and +0 (or different
-   numbers of leading zeros) are considered different here. *)
+(* Note: redundant Numeral representations, such as -0 and +0 (and others),
+   are considered different here. *)
 
 let prim_token_eq t1 t2 = match t1, t2 with
-| Numeral (n1,s1), Numeral (n2,s2) -> String.equal n1 n2 && s1 == s2
+| Numeral (SPlus,n1), Numeral (SPlus,n2)
+| Numeral (SMinus,n1), Numeral (SMinus,n2) -> NumTok.equal n1 n2
 | String s1, String s2 -> String.equal s1 s2
-| _ -> false
+| (Numeral ((SPlus|SMinus),_) | String _), _ -> false
 
 let explicitation_eq ex1 ex2 = match ex1, ex2 with
 | ExplByPos (i1, id1), ExplByPos (i2, id2) ->
@@ -140,7 +141,7 @@ let rec constr_expr_eq e1 e2 =
       in
       List.equal field_eq l1 l2
     | CCases(_,r1,a1,brl1), CCases(_,r2,a2,brl2) ->
-      (** Don't care about the case_style *)
+      (* Don't care about the case_style *)
       Option.equal constr_expr_eq r1 r2 &&
       List.equal case_expr_eq a1 a2 &&
       List.equal branch_expr_eq brl1 brl2
@@ -195,10 +196,9 @@ and branch_expr_eq {CAst.v=(p1, e1)} {CAst.v=(p2, e2)} =
   List.equal (List.equal cases_pattern_expr_eq) p1 p2 &&
   constr_expr_eq e1 e2
 
-and fix_expr_eq (id1,(j1, r1),bl1,a1,b1) (id2,(j2, r2),bl2,a2,b2) =
+and fix_expr_eq (id1,r1,bl1,a1,b1) (id2,r2,bl2,a2,b2) =
   (eq_ast Id.equal id1 id2) &&
-  Option.equal (eq_ast Id.equal) j1 j2 &&
-  recursion_order_expr_eq r1 r2 &&
+  Option.equal recursion_order_expr_eq r1 r2 &&
   List.equal local_binder_eq bl1 bl2 &&
   constr_expr_eq a1 a2 &&
   constr_expr_eq b1 b2
@@ -209,18 +209,22 @@ and cofix_expr_eq (id1,bl1,a1,b1) (id2,bl2,a2,b2) =
   constr_expr_eq a1 a2 &&
   constr_expr_eq b1 b2
 
-and recursion_order_expr_eq r1 r2 = match r1, r2 with
-  | CStructRec, CStructRec -> true
-  | CWfRec e1, CWfRec e2 -> constr_expr_eq e1 e2
-  | CMeasureRec (e1, o1), CMeasureRec (e2, o2) ->
+and recursion_order_expr_eq_r r1 r2 = match r1, r2 with
+  | CStructRec i1, CStructRec i2 -> eq_ast Id.equal i1 i2
+  | CWfRec (i1,e1), CWfRec (i2,e2) ->
+    constr_expr_eq e1 e2
+  | CMeasureRec (i1, e1, o1), CMeasureRec (i2, e2, o2) ->
+    Option.equal (eq_ast Id.equal) i1 i2 &&
     constr_expr_eq e1 e2 && Option.equal constr_expr_eq o1 o2
   | _ -> false
+
+and recursion_order_expr_eq r1 r2 = eq_ast recursion_order_expr_eq_r r1 r2
 
 and local_binder_eq l1 l2 = match l1, l2 with
   | CLocalDef (n1, e1, t1), CLocalDef (n2, e2, t2) ->
     eq_ast Name.equal n1 n2 && constr_expr_eq e1 e2 && Option.equal constr_expr_eq t1 t2
   | CLocalAssum (n1, _, e1), CLocalAssum (n2, _, e2) ->
-    (** Don't care about the [binder_kind] *)
+    (* Don't care about the [binder_kind] *)
     List.equal (eq_ast Name.equal) n1 n2 && constr_expr_eq e1 e2
   | _ -> false
 
@@ -258,7 +262,6 @@ let local_binders_loc bll = match bll with
   | h :: l -> Loc.merge_opt (local_binder_loc h) (local_binder_loc (List.last bll))
 
 (** Folds and maps *)
-
 let is_constructor id =
   try Globnames.isConstructRef
         (Smartlocate.global_of_extended_global
@@ -293,9 +296,6 @@ let ids_of_pattern_list =
   List.fold_left
     (List.fold_left (cases_pattern_fold_names Id.Set.add))
     Id.Set.empty
-
-let ids_of_cases_indtype p =
-  cases_pattern_fold_names Id.Set.add Id.Set.empty p
 
 let ids_of_cases_tomatch tms =
   List.fold_right
@@ -352,7 +352,7 @@ let fold_constr_expr_with_binders g f n acc = CAst.with_val (function
         (f (Option.fold_right (CAst.with_val (Name.fold_right g)) ona n)) acc po
     | CFix (_,l) ->
       let n' = List.fold_right (fun ( { CAst.v = id },_,_,_,_) -> g id) l n in
-      List.fold_right (fun (_,(_,o),lb,t,c) acc ->
+      List.fold_right (fun (_,ro,lb,t,c) acc ->
           fold_local_binders g f n'
             (fold_local_binders g f n acc t lb) c lb) l acc
     | CCoFix (_,_) ->
@@ -366,6 +366,14 @@ let free_vars_of_constr_expr c =
       if Id.List.mem id bdvars then l else Id.Set.add id l
     | c -> fold_constr_expr_with_binders (fun a l -> a::l) aux bdvars l c
   in aux [] Id.Set.empty c
+
+let names_of_constr_expr c =
+  let vars = ref Id.Set.empty in
+  let rec aux () () = function
+    | { CAst.v = CRef (qid, _) } when qualid_is_ident qid ->
+      let id = qualid_basename qid in vars := Id.Set.add id !vars
+    | c -> fold_constr_expr_with_binders (fun a () -> vars := Id.Set.add a !vars) aux () () c
+  in aux () () c; !vars
 
 let occur_var_constr_expr id c = Id.Set.mem id (free_vars_of_constr_expr c)
 
@@ -603,15 +611,6 @@ let rec coerce_to_cases_pattern_expr c = CAst.map_with_loc (fun ?loc -> function
   | _ ->
      CErrors.user_err ?loc ~hdr:"coerce_to_cases_pattern_expr"
                       (str "This expression should be coercible to a pattern.")) c
-
-let asymmetric_patterns = ref (false)
-let _ = Goptions.declare_bool_option {
-  Goptions.optdepr = false;
-  Goptions.optname = "no parameters in constructors";
-  Goptions.optkey = ["Asymmetric";"Patterns"];
-  Goptions.optread = (fun () -> !asymmetric_patterns);
-  Goptions.optwrite = (fun a -> asymmetric_patterns:=a);
-}
 
 (** Local universe and constraint declarations. *)
 

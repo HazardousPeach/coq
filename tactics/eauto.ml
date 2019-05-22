@@ -15,7 +15,6 @@ open Names
 open Constr
 open Termops
 open EConstr
-open Proof_type
 open Tacticals
 open Tacmach
 open Evd
@@ -29,7 +28,7 @@ open Locusops
 open Hints
 open Proofview.Notations
 
-let eauto_unif_flags = auto_flags_of_state full_transparent_state
+let eauto_unif_flags = auto_flags_of_state TransparentState.full
 
 let e_give_exact ?(flags=eauto_unif_flags) c =
   Proofview.Goal.enter begin fun gl ->
@@ -151,7 +150,7 @@ let rec e_trivial_fail_db db_list local_db =
     (Tacticals.New.tclTHEN Tactics.intro next) ::
     (List.map fst (e_trivial_resolve (Tacmach.New.pf_env gl) (Tacmach.New.project gl) db_list local_db secvars (Tacmach.New.pf_concl gl)))
   in
-  Tacticals.New.tclFIRST (List.map Tacticals.New.tclCOMPLETE tacl)
+  Tacticals.New.tclSOLVE tacl
   end
 
 and e_my_find_search env sigma db_list local_db secvars hdc concl =
@@ -203,7 +202,7 @@ let find_first_goal gls =
 type search_state = {
   priority : int;
   depth : int; (*r depth of search before failing *)
-  tacres : goal list sigma;
+  tacres : Goal.goal list sigma;
   last_tactic : Pp.t Lazy.t;
   dblist : hint_db list;
   localdb :  hint_db list;
@@ -307,7 +306,7 @@ module SearchProblem = struct
 		     let gls = {Evd.it = gl; sigma = lgls.Evd.sigma } in
 		     let hyps' = pf_hyps gls in
 		       if hyps' == hyps then List.hd s.localdb
-		       else make_local_hint_db (pf_env gls) (project gls) ~ts:full_transparent_state true s.local_lemmas)
+                       else make_local_hint_db (pf_env gls) (project gls) ~ts:TransparentState.full true s.local_lemmas)
 		     (List.firstn ((nbgl'-nbgl) + 1) (sig_it lgls))
 	       in
 		 { depth = pred s.depth; priority = cost; tacres = lgls;
@@ -330,21 +329,21 @@ module Search = Explore.Make(SearchProblem)
 let global_debug_eauto = ref false
 let global_info_eauto = ref false
 
-let _ =
-  Goptions.declare_bool_option
-    { Goptions.optdepr  = false;
-      Goptions.optname  = "Debug Eauto";
-      Goptions.optkey   = ["Debug";"Eauto"];
-      Goptions.optread  = (fun () -> !global_debug_eauto);
-      Goptions.optwrite = (:=) global_debug_eauto }
+let () =
+  Goptions.(declare_bool_option
+    { optdepr  = false;
+      optname  = "Debug Eauto";
+      optkey   = ["Debug";"Eauto"];
+      optread  = (fun () -> !global_debug_eauto);
+      optwrite = (:=) global_debug_eauto })
 
-let _ =
-  Goptions.declare_bool_option
-    { Goptions.optdepr  = false;
-      Goptions.optname  = "Info Eauto";
-      Goptions.optkey   = ["Info";"Eauto"];
-      Goptions.optread  = (fun () -> !global_info_eauto);
-      Goptions.optwrite = (:=) global_info_eauto }
+let () =
+  Goptions.(declare_bool_option
+    { optdepr  = false;
+      optname  = "Info Eauto";
+      optkey   = ["Info";"Eauto"];
+      optread  = (fun () -> !global_info_eauto);
+      optwrite = (:=) global_info_eauto })
 
 let mk_eauto_dbg d =
   if d == Debug || !global_debug_eauto then Debug
@@ -388,7 +387,7 @@ let make_initial_state dbg n gl dblist localdb lems =
   }
 
 let e_search_auto debug (in_depth,p) lems db_list gl =
-  let local_db = make_local_hint_db (pf_env gl) (project gl) ~ts:full_transparent_state true lems in
+  let local_db = make_local_hint_db (pf_env gl) (project gl) ~ts:TransparentState.full true lems in
   let d = mk_eauto_dbg debug in
   let tac = match in_depth,d with
     | (true,Debug) -> Search.debug_depth_first
@@ -515,7 +514,7 @@ let autounfold_one db cl =
   in
     if did then
       match cl with
-      | Some hyp -> change_in_hyp None (make_change_arg c') hyp
-      | None -> convert_concl_no_check c' DEFAULTcast
+      | Some hyp -> change_in_hyp ~check:true None (make_change_arg c') hyp
+      | None -> convert_concl ~check:false c' DEFAULTcast
     else Tacticals.New.tclFAIL 0 (str "Nothing to unfold")
   end

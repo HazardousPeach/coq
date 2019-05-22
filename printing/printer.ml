@@ -13,9 +13,9 @@ open CErrors
 open Util
 open Names
 open Constr
+open Context
 open Environ
 open Globnames
-open Nametab
 open Evd
 open Refiner
 open Constrextern
@@ -35,7 +35,7 @@ let should_unfoc() = !enable_unfocused_goal_printing
 let should_gname() = !enable_goal_names_printing
 
 
-let _ =
+let () =
   let open Goptions in
   declare_bool_option
     { optdepr  = false;
@@ -46,7 +46,7 @@ let _ =
 
 (* This is set on by proofgeneral proof-tree mode. But may be used for
    other purposes *)
-let _ =
+let () =
   let open Goptions in
   declare_bool_option
     { optdepr  = false;
@@ -56,7 +56,7 @@ let _ =
       optwrite = (fun b -> enable_goal_tags_printing:=b) }
 
 
-let _ =
+let () =
   let open Goptions in
   declare_bool_option
     { optdepr  = false;
@@ -78,9 +78,9 @@ let _ =
    _not_ occur in the scope of the binder to be printed are avoided. *)
 
 let pr_econstr_n_core goal_concl_style env sigma n t =
-  pr_constr_expr_n n (extern_constr goal_concl_style env sigma t)
+  pr_constr_expr_n env sigma n (extern_constr goal_concl_style env sigma t)
 let pr_econstr_core goal_concl_style env sigma t =
-  pr_constr_expr (extern_constr goal_concl_style env sigma t)
+  pr_constr_expr env sigma (extern_constr goal_concl_style env sigma t)
 let pr_leconstr_core = Proof_diffs.pr_leconstr_core
 
 let pr_constr_n_env env sigma n c = pr_econstr_n_core false env sigma n (EConstr.of_constr c)
@@ -101,14 +101,14 @@ let pr_constr_under_binders_env_gen pr env sigma (ids,c) =
   (* Warning: clashes can occur with variables of same name in env but *)
   (* we also need to preserve the actual names of the patterns *)
   (* So what to do? *)
-  let assums = List.map (fun id -> (Name id,(* dummy *) mkProp)) ids in
+  let assums = List.map (fun id -> (make_annot (Name id) Sorts.Relevant,(* dummy *) mkProp)) ids in
   pr (Termops.push_rels_assum assums env) sigma c
 
 let pr_constr_under_binders_env = pr_constr_under_binders_env_gen pr_econstr_env
 let pr_lconstr_under_binders_env = pr_constr_under_binders_env_gen pr_leconstr_env
 
 let pr_etype_core goal_concl_style env sigma t =
-  pr_constr_expr (extern_type goal_concl_style env sigma t)
+  pr_constr_expr env sigma (extern_type goal_concl_style env sigma t)
 let pr_letype_core = Proof_diffs.pr_letype_core
 
 let pr_ltype_env env sigma c = pr_letype_core false env sigma (EConstr.of_constr c)
@@ -122,29 +122,29 @@ let pr_ljudge_env env sigma j =
   (pr_leconstr_env env sigma j.uj_val, pr_leconstr_env env sigma j.uj_type)
 
 let pr_lglob_constr_env env c =
-  pr_lconstr_expr (extern_glob_constr (Termops.vars_of_env env) c)
+  pr_lconstr_expr env (Evd.from_env env) (extern_glob_constr (Termops.vars_of_env env) c)
 let pr_glob_constr_env env c =
-  pr_constr_expr (extern_glob_constr (Termops.vars_of_env env) c)
+  pr_constr_expr env (Evd.from_env env) (extern_glob_constr (Termops.vars_of_env env) c)
 
 let pr_closed_glob_n_env env sigma n c =
-  pr_constr_expr_n n (extern_closed_glob false env sigma c)
+  pr_constr_expr_n env sigma n (extern_closed_glob false env sigma c)
 let pr_closed_glob_env env sigma c =
-  pr_constr_expr (extern_closed_glob false env sigma c)
+  pr_constr_expr env sigma (extern_closed_glob false env sigma c)
 
 let pr_lconstr_pattern_env env sigma c =
-  pr_lconstr_pattern_expr (extern_constr_pattern (Termops.names_of_rel_context env) sigma c)
+  pr_lconstr_pattern_expr env sigma (extern_constr_pattern (Termops.names_of_rel_context env) sigma c)
 let pr_constr_pattern_env env sigma c =
-  pr_constr_pattern_expr (extern_constr_pattern (Termops.names_of_rel_context env) sigma c)
+  pr_constr_pattern_expr env sigma (extern_constr_pattern (Termops.names_of_rel_context env) sigma c)
 
 let pr_cases_pattern t =
   pr_cases_pattern_expr (extern_cases_pattern Names.Id.Set.empty t)
 
 let pr_sort sigma s = pr_glob_sort (extern_sort sigma s)
 
-let _ = Termops.Internal.set_print_constr
-  (fun env sigma t -> pr_lconstr_expr (extern_constr ~lax:true false env sigma t))
+let () = Termops.Internal.set_print_constr
+  (fun env sigma t -> pr_lconstr_expr env sigma (extern_constr ~lax:true false env sigma t))
 
-let pr_in_comment pr x = str "(* " ++ pr x ++ str " *)"
+let pr_in_comment x = str "(* " ++ x ++ str " *)"
 
 (** Term printers resilient to [Nametab] errors *)
 
@@ -200,53 +200,51 @@ let safe_pr_constr_env = safe_gen pr_constr_env
 
 let pr_universe_ctx_set sigma c =
   if !Detyping.print_universes && not (Univ.ContextSet.is_empty c) then
-    fnl()++pr_in_comment (fun c -> v 0
-      (Univ.pr_universe_context_set (Termops.pr_evd_level sigma) c)) c
+    fnl()++pr_in_comment (v 0 (Univ.pr_universe_context_set (Termops.pr_evd_level sigma) c))
   else
     mt()
 
 let pr_universe_ctx sigma ?variance c =
   if !Detyping.print_universes && not (Univ.UContext.is_empty c) then
-    fnl()++pr_in_comment (fun c -> v 0 
-      (Univ.pr_universe_context (Termops.pr_evd_level sigma) ?variance c)) c
+    fnl()++pr_in_comment (v 0 (Univ.pr_universe_context (Termops.pr_evd_level sigma) ?variance c))
   else
     mt()
 
-let pr_abstract_universe_ctx sigma ?variance c =
-  if !Detyping.print_universes && not (Univ.AUContext.is_empty c) then
-    fnl()++pr_in_comment (fun c -> v 0
-      (Univ.pr_abstract_universe_context (Termops.pr_evd_level sigma) ?variance c)) c
+let pr_abstract_universe_ctx sigma ?variance ?priv c =
+  let open Univ in
+  let priv = Option.default Univ.ContextSet.empty priv in
+  let has_priv = not (ContextSet.is_empty priv) in
+  if !Detyping.print_universes && (not (Univ.AUContext.is_empty c) || has_priv) then
+    let prlev u = Termops.pr_evd_level sigma u in
+    let pub = (if has_priv then str "Public universes:" ++ fnl() else mt()) ++ v 0 (Univ.pr_abstract_universe_context prlev ?variance c) in
+    let priv = if has_priv then fnl() ++ str "Private universes:" ++ fnl() ++ v 0 (Univ.pr_universe_context_set prlev priv) else mt() in
+    fnl()++pr_in_comment (pub ++ priv)
   else
     mt()
 
-let pr_constant_universes sigma = function
-  | Declarations.Monomorphic_const ctx -> pr_universe_ctx_set sigma ctx
-  | Declarations.Polymorphic_const ctx -> pr_abstract_universe_ctx sigma ctx
-
-let pr_cumulativity_info sigma cumi =
-  if !Detyping.print_universes 
-  && not (Univ.UContext.is_empty (Univ.CumulativityInfo.univ_context cumi)) then
-    fnl()++pr_in_comment (fun uii -> v 0 
-      (Univ.pr_cumulativity_info (Termops.pr_evd_level sigma) uii)) cumi
-  else
-    mt()
-
-let pr_abstract_cumulativity_info sigma cumi =
-  if !Detyping.print_universes
-  && not (Univ.AUContext.is_empty (Univ.ACumulativityInfo.univ_context cumi)) then
-    fnl()++pr_in_comment (fun uii -> v 0
-      (Univ.pr_abstract_cumulativity_info (Termops.pr_evd_level sigma) uii)) cumi
-  else
-    mt()
+let pr_universes sigma ?variance ?priv = function
+  | Declarations.Monomorphic ctx -> pr_universe_ctx_set sigma ctx
+  | Declarations.Polymorphic ctx -> pr_abstract_universe_ctx sigma ?variance ?priv ctx
 
 (**********************************************************************)
 (* Global references *)
 
-let pr_global_env = pr_global_env
+let pr_global_env = Nametab.pr_global_env
 let pr_global = pr_global_env Id.Set.empty
 
+let pr_universe_instance_constraints evd inst csts =
+  let open Univ in
+  let prlev = Termops.pr_evd_level evd in
+  let pcsts = if Constraint.is_empty csts then mt()
+    else str " |= " ++
+         prlist_with_sep (fun () -> str "," ++ spc())
+           (fun (u,d,v) -> hov 0 (prlev u ++ pr_constraint_type d ++ prlev v))
+           (Constraint.elements csts)
+  in
+  str"@{" ++ Instance.pr prlev inst ++ pcsts ++ str"}"
+
 let pr_universe_instance evd inst =
-  str"@{" ++ Univ.Instance.pr (Termops.pr_evd_level evd) inst ++ str"}"
+  pr_universe_instance_constraints evd inst Univ.Constraint.empty
 
 let pr_puniverses f env sigma (c,u) =
   if !Constrextern.print_universes
@@ -293,7 +291,7 @@ let pr_compacted_decl env sigma decl =
        let pb = if isCast c then surround pb else pb in
        ids, (str" := " ++ pb ++ cut ()), typ
   in
-  let pids = prlist_with_sep pr_comma pr_id ids in
+  let pids = prlist_with_sep pr_comma (fun id -> pr_id id.binder_name) ids in
   let pt = pr_ltype_env env sigma typ in
   let ptyp = (str" : " ++ pt) in
   hov 0 (pids ++ pbody ++ ptyp)
@@ -337,7 +335,7 @@ let pr_named_context env sigma ne_context =
 
 let pr_rel_context env sigma rel_context =
   let rel_context = List.map (fun d -> Termops.map_rel_decl EConstr.of_constr d) rel_context in
-  pr_binders (extern_rel_context None env sigma rel_context)
+  pr_binders env sigma (extern_rel_context None env sigma rel_context)
 
 let pr_rel_context_of env sigma =
   pr_rel_context env sigma (rel_context env)
@@ -420,7 +418,7 @@ let pr_context_limit_compact ?n env sigma =
 (* If [None], no limit *)
 let print_hyps_limit = ref (None : int option)
 
-let _ =
+let () =
   let open Goptions in
   declare_int_option
     { optdepr  = false;
@@ -446,9 +444,9 @@ let pr_predicate pr_elt (b, elts) =
 let pr_cpred p = pr_predicate (pr_constant (Global.env())) (Cpred.elements p)
 let pr_idpred p = pr_predicate Id.print (Id.Pred.elements p)
 
-let pr_transparent_state (ids, csts) =
-  hv 0 (str"VARIABLES: " ++ pr_idpred ids ++ fnl () ++
-	str"CONSTANTS: " ++ pr_cpred csts ++ fnl ())
+let pr_transparent_state ts =
+  hv 0 (str"VARIABLES: " ++ pr_idpred ts.TransparentState.tr_var ++ fnl () ++
+        str"CONSTANTS: " ++ pr_cpred ts.TransparentState.tr_cst ++ fnl ())
 
 (* display complete goal
  og_s has goal+sigma on the previous proof step for diffs
@@ -535,10 +533,10 @@ let rec pr_evars_int_hd pr sigma i = function
       (hov 0 (pr i evk evi)) ++
       (match rest with [] -> mt () | _ -> fnl () ++ pr_evars_int_hd pr sigma (i+1) rest)
 
-let pr_evars_int sigma ~shelf ~givenup i evs =
+let pr_evars_int sigma ~shelf ~given_up i evs =
   let pr_status i =
     if List.mem i shelf then str " (shelved)"
-    else if List.mem i givenup then str " (given up)"
+    else if List.mem i given_up then str " (given up)"
     else mt () in
   pr_evars_int_hd
     (fun i evk evi ->
@@ -594,12 +592,12 @@ let print_evar_constraints gl sigma =
     let t1 = Evarutil.nf_evar sigma t1
     and t2 = Evarutil.nf_evar sigma t2 in
     let env =
-      (** We currently allow evar instances to refer to anonymous de Bruijn
-          indices, so we protect the error printing code in this case by giving
-          names to every de Bruijn variable in the rel_context of the conversion
-          problem. MS: we should rather stop depending on anonymous variables, they
-          can be used to indicate independency. Also, this depends on a strategy for 
-          naming/renaming *)
+      (* We currently allow evar instances to refer to anonymous de Bruijn
+         indices, so we protect the error printing code in this case by giving
+         names to every de Bruijn variable in the rel_context of the conversion
+         problem. MS: we should rather stop depending on anonymous variables, they
+         can be used to indicate independency. Also, this depends on a strategy for
+         naming/renaming *)
       Namegen.make_all_name_different env sigma in
     str" " ++
       hov 2 (pr_env env ++ pr_leconstr_env env sigma t1 ++ spc () ++
@@ -628,7 +626,7 @@ let print_evar_constraints gl sigma =
 
 let should_print_dependent_evars = ref false
 
-let _ =
+let () =
   let open Goptions in
   declare_bool_option
     { optdepr  = false;
@@ -675,11 +673,7 @@ let pr_subgoals ?(pr_first=true) ?(diffs=false) ?os_map
     | None -> GoalMap.empty
   in
 
-  let map_goal_for_diff ng = (* todo: move to proof_diffs.ml *)
-    try GoalMap.find ng diff_goal_map  with Not_found -> ng
-  in
-
-  (** Printing functions for the extra informations. *)
+  (* Printing functions for the extra informations. *)
   let rec print_stack a = function
     | [] -> Pp.int a
     | b::l -> Pp.int a ++ str"-" ++ print_stack b l
@@ -714,7 +708,12 @@ let pr_subgoals ?(pr_first=true) ?(diffs=false) ?os_map
 
   let get_ogs g =
     match os_map with
-    | Some (osigma, _) -> Some { it = map_goal_for_diff g; sigma = osigma }
+    | Some (osigma, _) ->
+      (* if Not_found, returning None treats the goal as new and it will be diff highlighted;
+         returning Some { it = g; sigma = sigma } will compare the new goal
+         to itself and it won't be highlighted *)
+      (try Some { it = GoalMap.find g diff_goal_map; sigma = osigma }
+      with Not_found -> None)
     | None -> None
   in
   let rec pr_rec n = function
@@ -741,7 +740,7 @@ let pr_subgoals ?(pr_first=true) ?(diffs=false) ?os_map
     | None -> ()
   in
 
-  (** Main function *)
+  (* Main function *)
   match goals with
   | [] ->
       begin
@@ -749,7 +748,7 @@ let pr_subgoals ?(pr_first=true) ?(diffs=false) ?os_map
 	if Evar.Map.is_empty exl then
 	  (str"No more subgoals." ++ print_dependent_evars None sigma seeds)
 	else
-          let pei = pr_evars_int sigma ~shelf ~givenup:[] 1 exl in
+          let pei = pr_evars_int sigma ~shelf ~given_up:[] 1 exl in
 	  v 0 ((str "No more subgoals,"
                 ++ str " but there are non-instantiated existential variables:"
 	        ++ cut () ++ (hov 0 pei)
@@ -777,7 +776,7 @@ let pr_open_subgoals_diff ?(quiet=false) ?(diffs=false) ?oproof proof =
      straightforward, but seriously, [Proof.proof] should return
      [evar_info]-s instead. *)
   let p = proof in
-  let (goals , stack , shelf, given_up, sigma ) = Proof.proof p in
+  let Proof.{goals; stack; shelf; given_up; sigma} = Proof.data p in
   let stack = List.map (fun (l,r) -> List.length l + List.length r) stack in
   let seeds = Proof.V82.top_evars p in
   begin match goals with
@@ -809,7 +808,7 @@ let pr_open_subgoals_diff ?(quiet=false) ?(diffs=false) ?oproof proof =
      let unfocused_if_needed = if should_unfoc() then bgoals_unfocused else [] in
      let os_map = match oproof with
        | Some op when diffs ->
-         let (_,_,_,_, osigma) = Proof.proof op in
+         let Proof.{sigma=osigma} = Proof.data op in
          let diff_goal_map = Proof_diffs.make_goal_map oproof proof in
          Some (osigma, diff_goal_map)
        | _ -> None
@@ -822,8 +821,8 @@ let pr_open_subgoals ~proof =
   pr_open_subgoals_diff proof
 
 let pr_nth_open_subgoal ~proof n =
-  let gls,_,_,_,sigma = Proof.proof proof in
-  pr_subgoal n sigma gls
+  let Proof.{goals;sigma} = Proof.data proof in
+  pr_subgoal n sigma goals
 
 let pr_goal_by_id ~proof id =
   try
@@ -969,20 +968,6 @@ let pr_assumptionset env sigma s =
       opt_list (str "Theory:") theory;
     ] in
     prlist_with_sep fnl (fun x -> x) (Option.List.flatten assums)
-
-let xor a b = 
-  (a && not b) || (not a && b)
-
-let pr_cumulative poly cum =
-  if poly then
-    if cum then str "Cumulative " else str "NonCumulative "
-  else mt ()
-
-let pr_polymorphic b = 
-  let print = xor (Flags.is_universe_polymorphism ()) b in
-  if print then
-    if b then str"Polymorphic " else str"Monomorphic "
-  else mt ()
 
 (* print the proof step, possibly with diffs highlighted, *)
 let print_and_diff oldp newp =

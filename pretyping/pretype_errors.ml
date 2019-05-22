@@ -53,12 +53,14 @@ type pretype_error =
   | NonLinearUnification of Name.t * constr
   (* Pretyping *)
   | VarNotFound of Id.t
+  | EvarNotFound of Id.t
   | UnexpectedType of constr * constr
   | NotProduct of constr
   | TypingError of type_error
   | CannotUnifyOccurrences of subterm_unification_error
   | UnsatisfiableConstraints of
     (Evar.t * Evar_kinds.t) option * Evar.Set.t option
+  | DisallowedSProp
 
 exception PretypeError of env * Evd.evar_map * pretype_error
 
@@ -106,9 +108,9 @@ let error_ill_typed_rec_body ?loc env sigma i na jl tys =
   raise_type_error ?loc
     (env, sigma, IllTypedRecBody (i, na, jl, tys))
 
-let error_elim_arity ?loc env sigma pi s c j a =
+let error_elim_arity ?loc env sigma pi c j a =
   raise_type_error ?loc
-    (env, sigma, ElimArity (pi, s, c, j, a))
+    (env, sigma, ElimArity (pi, c, j, a))
 
 let error_not_a_type ?loc env sigma j =
   raise_type_error ?loc (env, sigma, NotAType j)
@@ -164,8 +166,14 @@ let error_not_product ?loc env sigma c =
 
 (*s Error in conversion from AST to glob_constr *)
 
-let error_var_not_found ?loc s =
-  raise_pretype_error ?loc (empty_env, Evd.from_env empty_env, VarNotFound s)
+let error_var_not_found ?loc env sigma s =
+  raise_pretype_error ?loc (env, sigma, VarNotFound s)
+
+let error_evar_not_found ?loc env sigma id =
+  raise_pretype_error ?loc (env, sigma, EvarNotFound id)
+
+let error_disallowed_sprop env sigma  =
+  raise (PretypeError (env, sigma, DisallowedSProp))
 
 (*s Typeclass errors *)
 

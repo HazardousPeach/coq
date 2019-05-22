@@ -28,7 +28,7 @@ Generating ML Code
 
 .. note::
 
-  In the following, a qualified identifier `qualid`
+  In the following, a qualified identifier :token:`qualid`
   can be used to refer to any kind of |Coq| global "object" : constant,
   inductive type, inductive constructor or module name.
 
@@ -47,30 +47,30 @@ extraction. They both display extracted term(s) inside |Coq|.
 All the following commands produce real ML files. User can choose to
 produce one monolithic file or one file per |Coq| library.
 
-.. cmd:: Extraction "@file" {+ @qualid }
+.. cmd:: Extraction @string {+ @qualid }
 
    Recursive extraction of all the mentioned objects and all
-   their dependencies in one monolithic `file`.
+   their dependencies in one monolithic file :token:`string`.
    Global and local identifiers are renamed according to the chosen ML
    language to fulfill its syntactic conventions, keeping original
    names as much as possible.
   
 .. cmd:: Extraction Library @ident
 
-   Extraction of the whole |Coq| library ``ident.v`` to an ML module
-   ``ident.ml``. In case of name clash, identifiers are here renamed
+   Extraction of the whole |Coq| library :n:`@ident.v` to an ML module
+   :n:`@ident.ml`. In case of name clash, identifiers are here renamed
    using prefixes ``coq_``  or ``Coq_`` to ensure a session-independent
    renaming.
 
 .. cmd:: Recursive Extraction Library @ident
 
-   Extraction of the |Coq| library ``ident.v`` and all other modules 
-   ``ident.v`` depends on.
+   Extraction of the |Coq| library :n:`@ident.v` and all other modules
+   :n:`@ident.v` depends on.
 
 .. cmd:: Separate Extraction {+ @qualid }
 
    Recursive extraction of all the mentioned objects and all
-   their dependencies, just as ``Extraction "file"``,
+   their dependencies, just as :n:`Extraction @string {+ @qualid }`,
    but instead of producing one monolithic file, this command splits
    the produced code in separate ML files, one per corresponding Coq
    ``.v`` file. This command is hence quite similar to
@@ -99,12 +99,12 @@ Extraction Options
 Setting the target language
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ability to fix target language is the first and more important
-of the extraction options. Default is ``OCaml``.
+.. cmd:: Extraction Language {| OCaml | Haskell | Scheme }
+   :name: Extraction Language
 
-.. cmd:: Extraction Language OCaml
-.. cmd:: Extraction Language Haskell
-.. cmd:: Extraction Language Scheme
+   The ability to fix target language is the first and more important
+   of the extraction options. Default is ``OCaml``.
+
 
 Inlining and optimizations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -164,7 +164,7 @@ The type-preserving optimizations are controlled by the following |Coq| options:
 .. cmd:: Extraction Inline {+ @qualid }
 
    In addition to the automatic inline feature, the constants
-   mentionned by this command will always be inlined during extraction.
+   mentioned by this command will always be inlined during extraction.
 
 .. cmd:: Extraction NoInline {+ @qualid }
 
@@ -214,9 +214,9 @@ principles of extraction (logical parts and types).
 .. cmd:: Extraction Implicit @qualid [ {+ @ident } ]
 
    This experimental command allows declaring some arguments of
-   `qualid` as implicit, i.e. useless in extracted code and hence to
-   be removed by extraction. Here `qualid` can be any function or
-   inductive constructor, and the given `ident` are the names of
+   :token:`qualid` as implicit, i.e. useless in extracted code and hence to
+   be removed by extraction. Here :token:`qualid` can be any function or
+   inductive constructor, and the given :token:`ident` are the names of
    the concerned arguments. In fact, an argument can also be referred
    by a number indicating its position, starting from 1.
 
@@ -253,7 +253,7 @@ what ML term corresponds to a given axiom.
 .. cmd:: Extract Constant @qualid => @string
 
    Give an ML extraction for the given constant.
-   The `string` may be an identifier or a quoted string.
+   The :token:`string` may be an identifier or a quoted string.
 
 .. cmd:: Extract Inlined Constant @qualid => @string
 
@@ -283,6 +283,7 @@ arity, that is a sequence of product finished by a sort), then some type
 variables have to be given (as quoted strings). The syntax is then:
 
 .. cmdv:: Extract Constant @qualid @string ... @string => @string
+   :undocumented:
 
 The number of type variables is checked by the system. For example:
 
@@ -314,24 +315,24 @@ native boolean type instead of the |Coq| one. The syntax is the following:
 .. cmd:: Extract Inductive @qualid => @string [ {+ @string } ]
 
    Give an ML extraction for the given inductive type. You must specify
-   extractions for the type itself (first `string`) and all its
-   constructors (all the `string` between square brackets). In this form,
+   extractions for the type itself (first :token:`string`) and all its
+   constructors (all the :token:`string` between square brackets). In this form,
    the ML extraction must be an ML inductive datatype, and the native
    pattern matching of the language will be used.
 
 .. cmdv:: Extract Inductive @qualid => @string [ {+ @string } ] @string
 
-   Same as before, with a final extra `string` that indicates how to
+   Same as before, with a final extra :token:`string` that indicates how to
    perform pattern matching over this inductive type. In this form,
    the ML extraction could be an arbitrary type.
-   For an inductive type with `k` constructors, the function used to
-   emulate the pattern matching should expect `(k+1)` arguments, first the `k`
+   For an inductive type with :math:`k` constructors, the function used to
+   emulate the pattern matching should expect :math:`k+1` arguments, first the :math:`k`
    branches in functional form, and then the inductive element to
    destruct. For instance, the match branch ``| S n => foo`` gives the
    functional form ``(fun n -> foo)``. Note that a constructor with no
    arguments is considered to have one unit argument, in order to block
    early evaluation of the branch: ``| O => bar`` leads to the functional
-   form ``(fun () -> bar)``. For instance, when extracting ``nat``
+   form ``(fun () -> bar)``. For instance, when extracting :g:`nat`
    into |OCaml| ``int``, the code to be provided has type:
    ``(unit->'a)->(int->'a)->int->'a``.
 
@@ -408,6 +409,52 @@ It is possible to instruct the extraction not to use particular filenames.
 
 For |OCaml|, a typical use of these commands is
 ``Extraction Blacklist String List``.
+
+Additional settings
+~~~~~~~~~~~~~~~~~~~
+
+.. opt:: Extraction File Comment @string
+   :name: Extraction File Comment
+
+   Provides a comment that is included at the beginning of the output files.
+
+.. opt:: Extraction Flag @num
+   :name: Extraction Flag
+
+   Controls which optimizations are used during extraction, providing a finer-grained
+   control than :flag:`Extraction Optimize`.  The bits of :token:`num` are used as a bit mask.
+   Keeping an option off keeps the extracted ML more similar to the Coq term.
+   Values are:
+
+   +-----+-------+----------------------------------------------------------------+
+   | Bit | Value | Optimization (default is on unless noted otherwise)            |
+   +-----+-------+----------------------------------------------------------------+
+   |   0 |    1  | Remove local dummy variables                                   |
+   +-----+-------+----------------------------------------------------------------+
+   |   1 |    2  | Use special treatment for fixpoints                            |
+   +-----+-------+----------------------------------------------------------------+
+   |   2 |    4  | Simplify case with iota-redux                                  |
+   +-----+-------+----------------------------------------------------------------+
+   |   3 |    8  | Factor case branches as functions                              |
+   +-----+-------+----------------------------------------------------------------+
+   |   4 |   16  | (not available, default false)                                 |
+   +-----+-------+----------------------------------------------------------------+
+   |   5 |   32  | Simplify case as function of one argument                      |
+   +-----+-------+----------------------------------------------------------------+
+   |   6 |   64  | Simplify case by swapping case and lambda                      |
+   +-----+-------+----------------------------------------------------------------+
+   |   7 |  128  | Some case optimization                                         |
+   +-----+-------+----------------------------------------------------------------+
+   |   8 |  256  | Push arguments inside a letin                                  |
+   +-----+-------+----------------------------------------------------------------+
+   |   9 |  512  | Use linear let reduction (default false)                       |
+   +-----+-------+----------------------------------------------------------------+
+   |  10 | 1024  | Use linear beta reduction (default false)                      |
+   +-----+-------+----------------------------------------------------------------+
+
+.. flag:: Extraction TypeExpand
+
+   If set, fully expand Coq types in ML.  See the Coq source code to learn more.
 
 Differences between |Coq| and ML type systems
 ----------------------------------------------

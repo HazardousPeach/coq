@@ -57,21 +57,29 @@ let coqide_known_option table = List.mem table [
   ["Diffs"]]
 
 let is_known_option cmd = match Vernacprop.under_control cmd with
-  | VernacSetOption (_, o, BoolValue true)
-  | VernacSetOption (_, o, StringValue _)
-  | VernacUnsetOption (_, o) -> coqide_known_option o
+  | VernacSetOption (_, o, OptionSetTrue)
+  | VernacSetOption (_, o, OptionSetString _)
+  | VernacSetOption (_, o, OptionUnset) -> coqide_known_option o
   | _ -> false
 
 (** Check whether a command is forbidden in the IDE *)
 
-let ide_cmd_checks ~id {CAst.loc;v=ast} =
-  let user_error s = CErrors.user_err ?loc ~hdr:"IDE" (str s) in
+let ide_cmd_checks ~last_valid ({ CAst.loc; _ } as cmd) =
+  let user_error s =
+    try CErrors.user_err ?loc ~hdr:"IDE" (str s)
+    with e ->
+      let (e, info) = CErrors.push e in
+      let info = Stateid.add info ~valid:last_valid Stateid.dummy in
+      Exninfo.raise ~info e
+  in
+  if is_debug cmd then
+    user_error "Debug mode not available in the IDE"
+
+let ide_cmd_warns ~id ({ CAst.loc; _ } as cmd) =
   let warn msg = Feedback.(feedback ~id (Message (Warning, loc, strbrk msg))) in
-  if is_debug ast then
-    user_error "Debug mode not available in the IDE";
-  if is_known_option ast then
+  if is_known_option cmd then
     warn "Set this option from the IDE menu instead";
-  if is_navigation_vernac ast || is_undo ast then
+  if is_navigation_vernac cmd || is_undo cmd then
     warn "Use IDE navigation instead"
 
 (** Interpretation (cf. [Ide_intf.interp]) *)
@@ -83,21 +91,24 @@ let set_doc doc = ide_doc := Some doc
 let add ((s,eid),(sid,verbose)) =
   let doc = get_doc () in
   let pa = Pcoq.Parsable.make (Stream.of_string s) in
-  let loc_ast = Stm.parse_sentence ~doc sid pa in
-  let doc, newid, rc = Stm.add ~doc ~ontop:sid verbose loc_ast in
-  set_doc doc;
-  let rc = match rc with `NewTip -> CSig.Inl () | `Unfocus id -> CSig.Inr id in
-  ide_cmd_checks ~id:newid loc_ast;
-  (* TODO: the "" parameter is a leftover of the times the protocol
-   * used to include stderr/stdout output.
-   *
-   * Currently, we force all the output meant for the to go via the
-   * feedback mechanism, and we don't manipulate stderr/stdout, which
-   * are left to the client's discrection. The parameter is still there
-   * as not to break the core protocol for this minor change, but it should
-   * be removed in the next version of the protocol.
-   *)
-  newid, (rc, "")
+  match Stm.parse_sentence ~doc sid ~entry:Pvernac.main_entry pa with
+  | None -> assert false (* s is not an empty string *)
+  | Some ast ->
+    ide_cmd_checks ~last_valid:sid ast;
+    let doc, newid, rc = Stm.add ~doc ~ontop:sid verbose ast in
+    set_doc doc;
+    let rc = match rc with `NewTip -> CSig.Inl () | `Unfocus id -> CSig.Inr id in
+    ide_cmd_warns ~id:newid ast;
+    (* TODO: the "" parameter is a leftover of the times the protocol
+     * used to include stderr/stdout output.
+     *
+     * Currently, we force all the output meant for the to go via the
+     * feedback mechanism, and we don't manipulate stderr/stdout, which
+     * are left to the client's discrection. The parameter is still there
+     * as not to break the core protocol for this minor change, but it should
+     * be removed in the next version of the protocol.
+    *)
+    newid, (rc, "")
 
 let edit_at id =
   let doc = get_doc () in
@@ -121,12 +132,12 @@ let query (route, (s,id)) =
 
 let annotate phrase =
   let doc = get_doc () in
-  let {CAst.loc;v=ast} =
-    let pa = Pcoq.Parsable.make (Stream.of_string phrase) in
-    Stm.parse_sentence ~doc (Stm.get_current_state ~doc) pa
-  in
-  (* XXX: Width should be a parameter of annotate... *)
-  Richpp.richpp_of_pp 78 (Ppvernac.pr_vernac ast)
+  let pa = Pcoq.Parsable.make (Stream.of_string phrase) in
+  match Stm.parse_sentence ~doc (Stm.get_current_state ~doc) ~entry:Pvernac.main_entry pa with
+  | None -> Richpp.richpp_of_pp 78 (Pp.mt ())
+  | Some ast ->
+    (* XXX: Width should be a parameter of annotate... *)
+    Richpp.richpp_of_pp 78 (Ppvernac.pr_vernac ast)
 
 (** Goal display *)
 
@@ -196,70 +207,66 @@ let process_goal sigma g =
       (Termops.compact_named_context (Environ.named_context env)) ~init:(min_env,[]) in
   { Interface.goal_hyp = List.rev hyps; Interface.goal_ccl = ccl; Interface.goal_id = id; }
 
-let export_pre_goals pgs =
-  {
-    Interface.fg_goals       = pgs.Proof.fg_goals;
-    Interface.bg_goals       = pgs.Proof.bg_goals;
-    Interface.shelved_goals  = pgs.Proof.shelved_goals;
-    Interface.given_up_goals = pgs.Proof.given_up_goals
+let process_goal_diffs diff_goal_map oldp nsigma ng =
+  let open Evd in
+  let og_s = match oldp with
+    | Some oldp ->
+      let Proof.{ sigma=osigma } = Proof.data oldp in
+      (try Some { it = Evar.Map.find ng diff_goal_map; sigma = osigma }
+       with Not_found -> None)
+    | None -> None
+  in
+  let (hyps_pp_list, concl_pp) = Proof_diffs.diff_goal_ide og_s ng nsigma in
+  { Interface.goal_hyp = hyps_pp_list; Interface.goal_ccl = concl_pp; Interface.goal_id = Goal.uid ng }
+
+let export_pre_goals Proof.{ sigma; goals; stack; shelf; given_up } process =
+  let process = List.map (process sigma) in
+  { Interface.fg_goals       = process goals
+  ; Interface.bg_goals       = List.(map (fun (lg,rg) -> process lg, process rg)) stack
+  ; Interface.shelved_goals  = process shelf
+  ; Interface.given_up_goals = process given_up
   }
 
 let goals () =
   let doc = get_doc () in
   set_doc @@ Stm.finish ~doc;
   try
-    let newp = Proof_global.give_me_the_proof () in
+    let newp = Vernacstate.Proof_global.give_me_the_proof () in
     if Proof_diffs.show_diffs () then begin
       let oldp = Stm.get_prev_proof ~doc (Stm.get_current_state ~doc) in
       let diff_goal_map = Proof_diffs.make_goal_map oldp newp in
-      let map_goal_for_diff ng = (* todo: move to proof_diffs.ml *)
-        try Evar.Map.find ng diff_goal_map  with Not_found -> ng
-      in
-
-      let process_goal_diffs nsigma ng =
-        let open Evd in
-        let og = map_goal_for_diff ng in
-        let og_s = match oldp with
-        | Some oldp ->
-          let (_,_,_,_,osigma) = Proof.proof oldp in
-          Some { it = og; sigma = osigma }
-        | None -> None
-        in
-        let (hyps_pp_list, concl_pp) = Proof_diffs.diff_goal_ide og_s ng nsigma in
-        { Interface.goal_hyp = hyps_pp_list; Interface.goal_ccl = concl_pp; Interface.goal_id = Goal.uid ng }
-      in
-      try
-        Some (export_pre_goals (Proof.map_structured_proof newp process_goal_diffs))
-      with Pp_diff.Diff_Failure _ -> Some (export_pre_goals (Proof.map_structured_proof newp process_goal))
+      Some (export_pre_goals Proof.(data newp) (process_goal_diffs diff_goal_map oldp))
     end else
-      Some (export_pre_goals (Proof.map_structured_proof newp process_goal))
-  with Proof_global.NoCurrentProof -> None;;
+      Some (export_pre_goals Proof.(data newp) process_goal)
+  with Vernacstate.Proof_global.NoCurrentProof -> None
+  [@@ocaml.warning "-3"];;
 
 let evars () =
   try
     let doc = get_doc () in
     set_doc @@ Stm.finish ~doc;
-    let pfts = Proof_global.give_me_the_proof () in
-    let all_goals, _, _, _, sigma = Proof.proof pfts in
+    let pfts = Vernacstate.Proof_global.give_me_the_proof () in
+    let Proof.{ sigma } = Proof.data pfts in
     let exl = Evar.Map.bindings (Evd.undefined_map sigma) in
     let map_evar ev = { Interface.evar_info = string_of_ppcmds (pr_evar sigma ev); } in
     let el = List.map map_evar exl in
     Some el
-  with Proof_global.NoCurrentProof -> None
+  with Vernacstate.Proof_global.NoCurrentProof -> None
+  [@@ocaml.warning "-3"]
 
 let hints () =
   try
-    let pfts = Proof_global.give_me_the_proof () in
-    let all_goals, _, _, _, sigma = Proof.proof pfts in
-    match all_goals with
+    let pfts = Vernacstate.Proof_global.give_me_the_proof () in
+    let Proof.{ goals; sigma } = Proof.data pfts in
+    match goals with
     | [] -> None
     | g :: _ ->
       let env = Goal.V82.env sigma g in
       let get_hint_hyp env d accu = hyp_next_tac sigma env d :: accu in
       let hint_hyps = List.rev (Environ.fold_named_context get_hint_hyp env ~init: []) in
       Some (hint_hyps, concl_next_tac)
-  with Proof_global.NoCurrentProof -> None
-
+  with Vernacstate.Proof_global.NoCurrentProof -> None
+  [@@ocaml.warning "-3"]
 
 (** Other API calls *)
 
@@ -268,9 +275,9 @@ let wait () =
   set_doc (Stm.wait ~doc)
 
 let status force =
-  (** We remove the initial part of the current [DirPath.t]
-      (usually Top in an interactive session, cf "coqtop -top"),
-      and display the other parts (opened sections and modules) *)
+  (* We remove the initial part of the current [DirPath.t]
+     (usually Top in an interactive session, cf "coqtop -top"),
+     and display the other parts (opened sections and modules) *)
   set_doc (Stm.finish ~doc:(get_doc ()));
   if force then
     set_doc (Stm.join ~doc:(get_doc ()));
@@ -279,11 +286,11 @@ let status force =
     List.rev_map Names.Id.to_string l
   in
   let proof =
-    try Some (Names.Id.to_string (Proof_global.get_current_proof_name ()))
-    with Proof_global.NoCurrentProof -> None
+    try Some (Names.Id.to_string (Vernacstate.Proof_global.get_current_proof_name ()))
+    with Vernacstate.Proof_global.NoCurrentProof -> None
   in
   let allproofs =
-    let l = Proof_global.get_all_proof_names () in
+    let l = Vernacstate.Proof_global.get_all_proof_names () in
     List.map Names.Id.to_string l
   in
   {
@@ -292,6 +299,7 @@ let status force =
     Interface.status_allproofs = allproofs;
     Interface.status_proofnum = Stm.current_proof_depth ~doc:(get_doc ());
   }
+  [@@ocaml.warning "-3"]
 
 let export_coq_object t = {
   Interface.coq_object_prefix = t.Search.coq_object_prefix;
@@ -331,9 +339,11 @@ let import_search_constraint = function
   | Interface.Include_Blacklist -> Search.Include_Blacklist
 
 let search flags =
-  List.map export_coq_object (Search.interface_search (
+  let pstate = Vernacstate.Proof_global.get () in
+  List.map export_coq_object (Search.interface_search ?pstate (
     List.map (fun (c, b) -> (import_search_constraint c, b)) flags)
   )
+  [@@ocaml.warning "-3"]
 
 let export_option_value = function
   | Goptions.BoolValue b   -> Interface.BoolValue b
@@ -360,12 +370,13 @@ let get_options () =
   Goptions.OptionMap.fold fold table []
 
 let set_options options =
+  let open Goptions in
   let iter (name, value) = match import_option_value value with
-  | BoolValue b -> Goptions.set_bool_option_value name b
-  | IntValue i -> Goptions.set_int_option_value name i
-  | StringValue s -> Goptions.set_string_option_value name s
-  | StringOptValue (Some s) -> Goptions.set_string_option_value name s
-  | StringOptValue None -> Goptions.unset_option_value_gen name
+  | BoolValue b -> set_bool_option_value name b
+  | IntValue i -> set_int_option_value name i
+  | StringValue s -> set_string_option_value name s
+  | StringOptValue (Some s) -> set_string_option_value name s
+  | StringOptValue None -> unset_option_value_gen name
   in
   List.iter iter options
 
@@ -413,14 +424,12 @@ let interp ((_raw, verbose), s) =
 (** When receiving the Quit call, we don't directly do an [exit 0],
     but rather set this reference, in order to send a final answer
     before exiting. *)
-
 let quit = ref false
 
 (** Disabled *)
 let print_ast id = Xml_datatype.PCData "ERROR"
 
 (** Grouping all call handlers together + error handling *)
-
 let eval_call c =
   let interruptible f x =
     catch_break := true;
@@ -462,7 +471,7 @@ let print_xml =
   let m = Mutex.create () in
   fun oc xml ->
     Mutex.lock m;
-    try Xml_printer.print oc xml; Mutex.unlock m
+    try Control.protect_sigalrm (Xml_printer.print oc) xml; Mutex.unlock m
     with e -> let e = CErrors.push e in Mutex.unlock m; iraise e
 
 let slave_feeder fmt xml_oc msg =
@@ -528,7 +537,11 @@ let rec parse = function
         Xmlprotocol.document Xml_printer.to_string_fmt; exit 0
   | "--xml_format=Ppcmds" :: rest ->
         msg_format := (fun () -> Xmlprotocol.Ppcmds); parse rest
-  | x :: rest -> x :: parse rest
+  | x :: rest ->
+     if String.length x > 0 && x.[0] = '-' then
+       (prerr_endline ("Unknown option " ^ x); exit 1)
+     else
+       x :: parse rest
   | [] -> []
 
 let () = Usage.add_to_usage "coqidetop"
@@ -542,5 +555,5 @@ let islave_init ~opts extra_args =
 
 let () =
   let open Coqtop in
-  let custom = { init = islave_init; run = loop; } in
+  let custom = { init = islave_init; run = loop; opts = Coqargs.default } in
   start_coq custom

@@ -47,7 +47,7 @@ type session = {
 }
 
 let create_buffer () =
-  let buffer = GSourceView2.source_buffer
+  let buffer = GSourceView3.source_buffer
     ~tag_table:Tags.Script.table
     ~highlight_matching_brackets:true
     ?language:(lang_manager#language source_language#get)
@@ -145,10 +145,12 @@ let set_buffer_handlers
     buffer#apply_tag Tags.Script.edit_zone
       ~start:(get_start()) ~stop:(get_stop())
     end in
-  let backto_before_error it =
+  let processed_sentence_just_before_error it =
     let rec aux old it =
-      if it#is_start || not(it#has_tag Tags.Script.error_bg) then old
-      else aux it it#backward_char in
+      if it#is_start then None
+      else if it#has_tag Tags.Script.processed then Some old
+      else if it#has_tag Tags.Script.error_bg then aux it it#backward_char 
+      else None in
     aux it it in
   let insert_cb it s = if String.length s = 0 then () else begin
     Minilib.log ("insert_cb " ^ string_of_int it#offset);
@@ -156,12 +158,16 @@ let set_buffer_handlers
     let () = update_prev it in
     if it#has_tag Tags.Script.to_process then
       cancel_signal "Altering the script being processed in not implemented"
+    else if it#has_tag Tags.Script.incomplete then
+      cancel_signal "Altering the script being processed in not implemented"
     else if it#has_tag Tags.Script.processed then
       call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
     else if it#has_tag Tags.Script.error_bg then begin
-      let prev_sentence_end = backto_before_error it in
-      let text_mark = add_mark prev_sentence_end in
-      call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
+      match processed_sentence_just_before_error it with
+      | None -> ()
+      | Some prev_sentence_end ->
+          let text_mark = add_mark prev_sentence_end in
+          call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
     end end in
   let delete_cb ~start ~stop =
     Minilib.log (Printf.sprintf "delete_cb %d %d" start#offset stop#offset);
@@ -171,14 +177,18 @@ let set_buffer_handlers
     let text_mark = add_mark min_iter in
     let rec aux min_iter =
       if min_iter#equal max_iter then ()
+      else if min_iter#has_tag Tags.Script.incomplete then
+        cancel_signal "Altering the script being processed in not implemented"
       else if min_iter#has_tag Tags.Script.to_process then
         cancel_signal "Altering the script being processed in not implemented"
       else if min_iter#has_tag Tags.Script.processed then
         call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
       else if min_iter#has_tag Tags.Script.error_bg then
-        let prev_sentence_end = backto_before_error min_iter in
-        let text_mark = add_mark prev_sentence_end in
-        call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
+        match processed_sentence_just_before_error min_iter with
+        | None -> ()
+        | Some prev_sentence_end ->
+            let text_mark = add_mark prev_sentence_end in
+            call_coq_or_cancel_action (coqops#go_to_mark (`MARK text_mark))
       else aux min_iter#forward_char in
     aux min_iter in
   let begin_action_cb () =
@@ -217,7 +227,7 @@ let set_buffer_handlers
     | Some s -> Minilib.log (s^" moved")
     | None -> ()
   in
-  (** Pluging callbacks *)
+  (* Pluging callbacks *)
   let _ = buffer#connect#insert_text ~callback:insert_cb in
   let _ = buffer#connect#delete_range ~callback:delete_cb in
   let _ = buffer#connect#begin_user_action ~callback:begin_action_cb in
@@ -247,9 +257,10 @@ let make_table_widget ?sort cd cb =
       ~model:store ~packing:frame#add () in
   let () = data#set_headers_visible true in
   let () = data#set_headers_clickable true in
-  let refresh clr = data#misc#modify_base [`NORMAL, `NAME clr] in
-  let _ = background_color#connect#changed ~callback:refresh in
-  let _ = data#misc#connect#realize ~callback:(fun () -> refresh background_color#get) in
+(* FIXME: handle this using CSS *)
+(*   let refresh clr = data#misc#modify_bg [`NORMAL, `NAME clr] in *)
+(*   let _ = background_color#connect#changed ~callback:refresh in *)
+(*   let _ = data#misc#connect#realize ~callback:(fun () -> refresh background_color#get) in *)
   let mk_rend c = GTree.cell_renderer_text [], ["text",c] in
   let cols =
     List.map2 (fun (_,c) (_,n,v) ->
@@ -427,18 +438,18 @@ let build_layout (sn:session) =
     GPack.vbox ~packing:(session_paned#pack1 ~shrink:false ~resize:true) ()
   in
 
-  (** Right part of the window. *)
+  (* Right part of the window. *)
 
   let eval_paned = GPack.paned `HORIZONTAL ~border_width:5
     ~packing:(session_box#pack ~expand:true) () in
   let script_frame = GBin.frame ~shadow_type:`IN
-    ~packing:eval_paned#add1 () in
+    ~packing:(eval_paned#pack1 ~shrink:false) () in
   let script_scroll = GBin.scrolled_window
     ~vpolicy:`AUTOMATIC ~hpolicy:`AUTOMATIC ~packing:script_frame#add () in
   let state_paned = GPack.paned `VERTICAL
-    ~packing:eval_paned#add2 () in
+    ~packing:(eval_paned#pack2 ~shrink:false) () in
 
-  (** Proof buffer. *)
+  (* Proof buffer. *)
 
   let title = Printf.sprintf "Proof (%s)" sn.tab_label#text in
   let proof_detachable = Wg_Detachable.detachable ~title () in
@@ -454,7 +465,7 @@ let build_layout (sn:session) =
   let proof_scroll = GBin.scrolled_window
     ~vpolicy:`AUTOMATIC ~hpolicy:`AUTOMATIC ~packing:proof_detachable#pack () in
 
-  (** Message buffer. *)
+  (* Message buffer. *)
 
   let message_frame = GPack.notebook ~packing:state_paned#add () in
   let add_msg_page pos name text (w : GObj.widget) =
@@ -514,14 +525,14 @@ let build_layout (sn:session) =
   let detach, _ = add_msg_page 0 sn.tab_label#text "Messages" sn.messages#default_route#coerce in
   let _, label = add_msg_page 1 sn.tab_label#text "Errors" sn.errpage#coerce in
   let _, _ = add_msg_page 2 sn.tab_label#text "Jobs" sn.jobpage#coerce in
-  (** When a message is received, focus on the message pane *)
+  (* When a message is received, focus on the message pane *)
   let _ =
     sn.messages#default_route#connect#pushed ~callback:(fun _ _ ->
       let num = message_frame#page_num detach#coerce in
       if 0 <= num then message_frame#goto_page num
     )
   in
-  (** When an error occurs, paint the error label in red *)
+  (* When an error occurs, paint the error label in red *)
   let txt = label#text in
   let red s = "<span foreground=\"#FF0000\">" ^ s ^ "</span>" in
   sn.errpage#on_update ~callback:(fun l ->

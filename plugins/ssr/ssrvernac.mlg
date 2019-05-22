@@ -152,7 +152,7 @@ let declare_one_prenex_implicit locality f =
     with _ -> errorstrm (pr_qualid f ++ str " is not declared") in
   let rec loop = function
   | a :: args' when Impargs.is_status_implicit a ->
-    (ExplByName (Impargs.name_of_implicit a), (true, true, true)) :: loop args'
+    Impargs.MaximallyImplicit :: loop args'
   | args' when List.exists Impargs.is_status_implicit args' ->
       errorstrm (str "Expected prenex implicits for " ++ pr_qualid f)
   | _ -> [] in
@@ -165,15 +165,14 @@ let declare_one_prenex_implicit locality f =
   | [] ->
     errorstrm (str "Expected some implicits for " ++ pr_qualid f)
   | impls ->
-    Impargs.declare_manual_implicits locality fref ~enriching:false [impls]
+    Impargs.set_implicits locality fref [impls]
 
 }
 
 VERNAC COMMAND EXTEND Ssrpreneximplicits CLASSIFIED AS SIDEFF
-  | [ "Prenex" "Implicits" ne_global_list(fl) ]
+  | #[ locality = Attributes.locality; ] [ "Prenex" "Implicits" ne_global_list(fl) ]
   -> {
-         let open Vernacinterp in
-         let locality = Locality.make_section_locality atts.locality in
+         let locality = Locality.make_section_locality locality in
          List.iter (declare_one_prenex_implicit locality) fl;
      }
 END
@@ -184,7 +183,7 @@ GRAMMAR EXTEND Gram
   GLOBAL: gallina_ext;
   gallina_ext:
    [ [ IDENT "Import"; IDENT "Prenex"; IDENT "Implicits" ->
-      { Vernacexpr.VernacUnsetOption (false, ["Printing"; "Implicit"; "Defensive"]) }
+      { Vernacexpr.VernacSetOption (false, ["Printing"; "Implicit"; "Defensive"], Vernacexpr.OptionUnset) }
    ] ]
   ;
 END
@@ -199,13 +198,13 @@ type raw_glob_search_about_item =
   | RGlobSearchSubPattern of constr_expr
   | RGlobSearchString of Loc.t * string * string option
 
-let pr_search_item = function
+let pr_search_item env sigma = function
   | RGlobSearchString (_,s,_) -> str s
-  | RGlobSearchSubPattern p -> pr_constr_expr p
+  | RGlobSearchSubPattern p -> pr_constr_expr env sigma p
 
 let wit_ssr_searchitem = add_genarg "ssr_searchitem" pr_search_item
 
-let pr_ssr_search_item _ _ _ = pr_search_item
+let pr_ssr_search_item env sigma _ _ _ = pr_search_item env sigma
 
 (* Workaround the notation API that can only print notations *)
 
@@ -317,7 +316,7 @@ let interp_search_notation ?loc tag okey =
 }
 
 ARGUMENT EXTEND ssr_search_item TYPED AS ssr_searchitem
-  PRINTED BY { pr_ssr_search_item }
+  PRINTED BY { pr_ssr_search_item env sigma }
   | [ string(s) ] -> {  RGlobSearchString (loc,s,None)  }
   | [ string(s) "%" preident(key) ] -> {  RGlobSearchString (loc,s,Some key)  }
   | [ constr_pattern(p) ] -> {  RGlobSearchSubPattern p  }
@@ -325,14 +324,14 @@ END
 
 {
 
-let pr_ssr_search_arg _ _ _ =
-  let pr_item (b, p) = str (if b then "-" else "") ++ pr_search_item p in
+let pr_ssr_search_arg env sigma _ _ _ =
+  let pr_item (b, p) = str (if b then "-" else "") ++ pr_search_item env sigma p in
   pr_list spc pr_item
 
 }
 
 ARGUMENT EXTEND ssr_search_arg TYPED AS (bool * ssr_searchitem) list
-  PRINTED BY { pr_ssr_search_arg }
+  PRINTED BY { pr_ssr_search_arg env sigma }
   | [ "-" ssr_search_item(p) ssr_search_arg(a) ] -> {  (false, p) :: a  }
   | [ ssr_search_item(p) ssr_search_arg(a) ] -> {  (true, p) :: a  }
   | [ ] -> {  []  }
@@ -360,7 +359,7 @@ let coerce_search_pattern_to_sort hpat =
     Pattern.PApp (fp, args') in
   let hr, na = splay_search_pattern 0 hpat in
   let dc, ht =
-    let hr, _ = Global.type_of_global_in_context (Global.env ()) hr (** FIXME *) in
+    let hr, _ = Typeops.type_of_global_in_context env hr (* FIXME *) in
     Reductionops.splay_prod env sigma (EConstr.of_constr hr) in
   let np = List.length dc in
   if np < na then CErrors.user_err (Pp.str "too many arguments in head search pattern") else
@@ -433,7 +432,7 @@ let interp_search_arg arg =
 
 let pr_modloc (b, m) = if b then str "-" ++ pr_qualid m else pr_qualid m
 
-let wit_ssrmodloc = add_genarg "ssrmodloc" pr_modloc
+let wit_ssrmodloc = add_genarg "ssrmodloc" (fun env sigma -> pr_modloc)
 
 let pr_ssr_modlocs _ _ _ ml =
   if ml = [] then str "" else spc () ++ str "in " ++ pr_list spc pr_modloc ml
@@ -466,7 +465,7 @@ let interp_modloc mr =
 (* The unified, extended vernacular "Search" command *)
 
 let ssrdisplaysearch gr env t =
-  let pr_res = pr_global gr ++ spc () ++ str " " ++ pr_lconstr_env env Evd.empty t in
+  let pr_res = pr_global gr ++ str ":" ++ spc () ++ pr_lconstr_env env Evd.empty t in
   Feedback.msg_info (hov 2 pr_res ++ fnl ())
 
 }
@@ -492,24 +491,23 @@ END
 
 {
 
-let pr_raw_ssrhintref prc _ _ = let open CAst in function
+let pr_raw_ssrhintref env sigma prc _ _ = let open CAst in function
   | { v = CAppExpl ((None, r,x), args) } when isCHoles args ->
-    prc (CAst.make @@ CRef (r,x)) ++ str "|" ++ int (List.length args)
-  | { v = CApp ((_, { v = CRef _ }), _) } as c -> prc c
+    prc env sigma (CAst.make @@ CRef (r,x)) ++ str "|" ++ int (List.length args)
+  | { v = CApp ((_, { v = CRef _ }), _) } as c -> prc env sigma c
   | { v = CApp ((_, c), args) } when isCxHoles args ->
-    prc c ++ str "|" ++ int (List.length args)
-  | c -> prc c
+    prc env sigma c ++ str "|" ++ int (List.length args)
+  | c -> prc env sigma c
 
-let pr_rawhintref c =
-  let _, env = Pfedit.get_current_context () in
+let pr_rawhintref env sigma c =
   match DAst.get c with
   | GApp (f, args) when isRHoles args ->
     pr_glob_constr_env env f ++ str "|" ++ int (List.length args)
   | _ -> pr_glob_constr_env env c
 
-let pr_glob_ssrhintref _ _ _ (c, _) = pr_rawhintref c
+let pr_glob_ssrhintref env sigma _ _ _ (c, _) = pr_rawhintref env sigma c
 
-let pr_ssrhintref prc _ _ = prc
+let pr_ssrhintref env sigma prc _ _ = prc env sigma
 
 let mkhintref ?loc c n = match c.CAst.v with
   | CRef (r,x) -> CAst.make ?loc @@ CAppExpl ((None, r, x), mkCHoles ?loc n)
@@ -519,9 +517,9 @@ let mkhintref ?loc c n = match c.CAst.v with
 
 ARGUMENT EXTEND ssrhintref
   TYPED AS constr
-  PRINTED BY { pr_ssrhintref }
-  RAW_PRINTED BY { pr_raw_ssrhintref }
-  GLOB_PRINTED BY { pr_glob_ssrhintref }
+  PRINTED BY { pr_ssrhintref env sigma }
+  RAW_PRINTED BY { pr_raw_ssrhintref env sigma }
+  GLOB_PRINTED BY { pr_glob_ssrhintref env sigma }
   | [ constr(c) ] -> {  c  }
   | [ constr(c) "|" natural(n) ] -> {  mkhintref ~loc c n  }
 END
@@ -560,22 +558,29 @@ END
 
 {
 
-let print_view_hints kind l =
+let print_view_hints env sigma kind l =
   let pp_viewname = str "Hint View" ++ pr_viewpos (Some kind) ++ str " " in
-  let pp_hints = pr_list spc pr_rawhintref l in
+  let pp_hints = pr_list spc (pr_rawhintref env sigma) l in
   Feedback.msg_info  (pp_viewname ++ hov 0 pp_hints ++ Pp.cut ())
 
 }
 
 VERNAC COMMAND EXTEND PrintView CLASSIFIED AS QUERY
-| [ "Print" "Hint" "View" ssrviewpos(i) ] ->
-  { match i with
-    | Some k -> print_view_hints k (Ssrview.AdaptorDb.get k)
+| ![proof] [ "Print" "Hint" "View" ssrviewpos(i) ] ->
+  {
+    fun ~pstate ->
+    (* XXX this is incorrect *)
+    let sigma, env = Option.cata Pfedit.get_current_context
+        (let e = Global.env () in Evd.from_env e, e) pstate in
+    (match i with
+    | Some k ->
+      print_view_hints env sigma k (Ssrview.AdaptorDb.get k)
     | None ->
-        List.iter (fun k -> print_view_hints k (Ssrview.AdaptorDb.get k))
+        List.iter (fun k -> print_view_hints env sigma k (Ssrview.AdaptorDb.get k))
           [ Ssrview.AdaptorDb.Forward;
             Ssrview.AdaptorDb.Backward;
-            Ssrview.AdaptorDb.Equivalence ]
+            Ssrview.AdaptorDb.Equivalence ]);
+    pstate
   }
 END
 
@@ -595,26 +600,6 @@ VERNAC COMMAND EXTEND HintView CLASSIFIED AS SIDEFF
           Ssrview.AdaptorDb.declare Ssrview.AdaptorDb.Backward hints
        | Some k ->
           Ssrview.AdaptorDb.declare k hints }
-END
-
-(** Canonical Structure alias *)
-
-GRAMMAR EXTEND Gram
-  GLOBAL: gallina_ext;
-
-  gallina_ext:
-      (* Canonical structure *)
-     [[ IDENT "Canonical"; qid = Constr.global ->
-          { Vernacexpr.VernacCanonical (CAst.make @@ AN qid) }
-      | IDENT "Canonical"; ntn = Prim.by_notation ->
-          { Vernacexpr.VernacCanonical (CAst.make @@ ByNotation ntn) }
-      | IDENT "Canonical"; qid = Constr.global;
-          d = G_vernac.def_body ->
-          { let s = coerce_reference_to_id qid in
-    Vernacexpr.VernacDefinition
-      ((Decl_kinds.NoDischarge,Decl_kinds.CanonicalStructure),
-          ((CAst.make (Name s)),None), d) }
-  ]];
 END
 
 (** Keyword compatibility fixes. *)

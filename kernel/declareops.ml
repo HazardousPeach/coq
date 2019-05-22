@@ -22,6 +22,9 @@ let safe_flags oracle = {
   check_universes = true;
   conv_oracle = oracle;
   share_reduction = true;
+  enable_VM = true;
+  enable_native_compiler = true;
+  indices_matter = true;
 }
 
 (** {6 Arities } *)
@@ -46,25 +49,36 @@ let hcons_template_arity ar =
       (* List.Smart.map (Option.Smart.map Univ.hcons_univ_level) ar.template_param_levels; *)
     template_level = Univ.hcons_univ ar.template_level }
 
+let universes_context = function
+  | Monomorphic _ -> Univ.AUContext.empty
+  | Polymorphic ctx -> ctx
+
+let abstract_universes = function
+  | Entries.Monomorphic_entry ctx ->
+    Univ.empty_level_subst, Monomorphic ctx
+  | Entries.Polymorphic_entry (nas, ctx) ->
+    let (inst, auctx) = Univ.abstract_universes nas ctx in
+    let inst = Univ.make_instance_subst inst in
+    (inst, Polymorphic auctx)
+
 (** {6 Constants } *)
 
 let constant_is_polymorphic cb =
   match cb.const_universes with
-  | Monomorphic_const _ -> false
-  | Polymorphic_const _ -> true
+  | Monomorphic _ -> false
+  | Polymorphic _ -> true
+
 
 let constant_has_body cb = match cb.const_body with
-  | Undef _ -> false
+  | Undef _ | Primitive _ -> false
   | Def _ | OpaqueDef _ -> true
 
 let constant_polymorphic_context cb =
-  match cb.const_universes with
-  | Monomorphic_const _ -> Univ.AUContext.empty
-  | Polymorphic_const ctx -> ctx
+  universes_context cb.const_universes
 
 let is_opaque cb = match cb.const_body with
   | OpaqueDef _ -> true
-  | Undef _ | Def _ -> false
+  | Undef _ | Def _ | Primitive _ -> false
 
 (** {7 Constant substitutions } *)
 
@@ -80,7 +94,7 @@ let subst_const_type sub arity =
 (** No need here to check for physical equality after substitution,
     at least for Def due to the delayed substitution [subst_constr_subst]. *)
 let subst_const_def sub def = match def with
-  | Undef _ -> def
+  | Undef _ | Primitive _ -> def
   | Def c -> Def (subst_constr sub c)
   | OpaqueDef o -> OpaqueDef (Opaqueproof.subst_opaque sub o)
 
@@ -99,6 +113,8 @@ let subst_const_body sub cb =
         const_body_code =
           Option.map (Cemitcodes.subst_to_patch_subst sub) cb.const_body_code;
         const_universes = cb.const_universes;
+        const_private_poly_univs = cb.const_private_poly_univs;
+        const_relevance = cb.const_relevance;
         const_inline_code = cb.const_inline_code;
         const_typing_flags = cb.const_typing_flags }
 
@@ -115,23 +131,30 @@ let hcons_rel_context l = List.Smart.map hcons_rel_decl l
 
 let hcons_const_def = function
   | Undef inl -> Undef inl
+  | Primitive p -> Primitive p
   | Def l_constr ->
     let constr = force_constr l_constr in
     Def (from_val (Constr.hcons constr))
   | OpaqueDef _ as x -> x (* hashconsed when turned indirect *)
 
-let hcons_const_universes cbu =
+let hcons_universes cbu =
   match cbu with
-  | Monomorphic_const ctx -> 
-    Monomorphic_const (Univ.hcons_universe_context_set ctx)
-  | Polymorphic_const ctx -> 
-    Polymorphic_const (Univ.hcons_abstract_universe_context ctx)
+  | Monomorphic ctx ->
+    Monomorphic (Univ.hcons_universe_context_set ctx)
+  | Polymorphic ctx ->
+    Polymorphic (Univ.hcons_abstract_universe_context ctx)
+
+let hcons_const_private_univs = function
+  | None -> None
+  | Some univs -> Some (Univ.hcons_universe_context_set univs)
 
 let hcons_const_body cb =
   { cb with
     const_body = hcons_const_def cb.const_body;
     const_type = Constr.hcons cb.const_type;
-    const_universes = hcons_const_universes cb.const_universes }
+    const_universes = hcons_universes cb.const_universes;
+    const_private_poly_univs = hcons_const_private_univs cb.const_private_poly_univs;
+  }
 
 (** {6 Inductive types } *)
 
@@ -192,7 +215,7 @@ let subst_mind_packet sub mbp =
     mind_consnrealdecls = mbp.mind_consnrealdecls;
     mind_consnrealargs = mbp.mind_consnrealargs;
     mind_typename = mbp.mind_typename;
-    mind_nf_lc = Array.Smart.map (subst_mps sub) mbp.mind_nf_lc;
+    mind_nf_lc = Array.Smart.map (fun (ctx, c) -> Context.Rel.map (subst_mps sub) ctx, subst_mps sub c) mbp.mind_nf_lc;
     mind_arity_ctxt = subst_rel_context sub mbp.mind_arity_ctxt;
     mind_arity = subst_ind_arity sub mbp.mind_arity;
     mind_user_lc = Array.Smart.map (subst_mps sub) mbp.mind_user_lc;
@@ -200,6 +223,7 @@ let subst_mind_packet sub mbp =
     mind_nrealdecls = mbp.mind_nrealdecls;
     mind_kelim = mbp.mind_kelim;
     mind_recargs = subst_wf_paths sub mbp.mind_recargs (*wf_paths*);
+    mind_relevance = mbp.mind_relevance;
     mind_nb_constant = mbp.mind_nb_constant;
     mind_nb_args = mbp.mind_nb_args;
     mind_reloc_tbl = mbp.mind_reloc_tbl }
@@ -208,10 +232,10 @@ let subst_mind_record sub r = match r with
 | NotRecord -> NotRecord
 | FakeRecord -> FakeRecord
 | PrimRecord infos ->
-  let map (id, ps, pb as info) =
+  let map (id, ps, rs, pb as info) =
     let pb' = Array.Smart.map (subst_mps sub) pb in
     if pb' == pb then info
-    else (id, ps, pb')
+    else (id, ps, rs, pb')
   in
   let infos' = Array.Smart.map map infos in
   if infos' == infos then r else PrimRecord infos'
@@ -227,46 +251,51 @@ let subst_mind_body sub mib =
       Context.Rel.map (subst_mps sub) mib.mind_params_ctxt;
     mind_packets = Array.Smart.map (subst_mind_packet sub) mib.mind_packets ;
     mind_universes = mib.mind_universes;
+    mind_variance = mib.mind_variance;
     mind_private = mib.mind_private;
     mind_typing_flags = mib.mind_typing_flags;
   }
 
 let inductive_polymorphic_context mib =
-  match mib.mind_universes with
-  | Monomorphic_ind _ -> Univ.AUContext.empty
-  | Polymorphic_ind ctx -> ctx
-  | Cumulative_ind cumi -> Univ.ACumulativityInfo.univ_context cumi
+  universes_context mib.mind_universes
 
 let inductive_is_polymorphic mib =
   match mib.mind_universes with
-  | Monomorphic_ind _ -> false
-  | Polymorphic_ind _ctx -> true
-  | Cumulative_ind _cumi -> true
+  | Monomorphic _ -> false
+  | Polymorphic _ctx -> true
 
 let inductive_is_cumulative mib =
-  match mib.mind_universes with
-  | Monomorphic_ind _ -> false
-  | Polymorphic_ind _ctx -> false
-  | Cumulative_ind _cumi -> true
+  Option.has_some mib.mind_variance
 
 let inductive_make_projection ind mib ~proj_arg =
   match mib.mind_record with
   | NotRecord | FakeRecord -> None
   | PrimRecord infos ->
+    let _, labs, _, _ = infos.(snd ind) in
     Some (Names.Projection.Repr.make ind
             ~proj_npars:mib.mind_nparams
             ~proj_arg
-            (pi2 infos.(snd ind)).(proj_arg))
+            labs.(proj_arg))
 
 let inductive_make_projections ind mib =
   match mib.mind_record with
   | NotRecord | FakeRecord -> None
   | PrimRecord infos ->
+    let _, labs, _, _ = infos.(snd ind) in
     let projs = Array.mapi (fun proj_arg lab ->
         Names.Projection.Repr.make ind ~proj_npars:mib.mind_nparams ~proj_arg lab)
-        (pi2 infos.(snd ind))
+        labs
     in
     Some projs
+
+let relevance_of_projection_repr mib p =
+  let _mind,i = Names.Projection.Repr.inductive p in
+  match mib.mind_record with
+  | NotRecord | FakeRecord ->
+    CErrors.anomaly ~label:"relevance_of_projection" Pp.(str "not a projection")
+  | PrimRecord infos ->
+    let _,_,rs,_ = infos.(i) in
+    rs.(Names.Projection.Repr.arg p)
 
 (** {6 Hash-consing of inductive declarations } *)
 
@@ -283,9 +312,8 @@ let hcons_ind_arity =
 
 let hcons_mind_packet oib =
   let user = Array.Smart.map Constr.hcons oib.mind_user_lc in
-  let nf = Array.Smart.map Constr.hcons oib.mind_nf_lc in
-  (* Special optim : merge [mind_user_lc] and [mind_nf_lc] if possible *)
-  let nf = if Array.equal (==) user nf then user else nf in
+  let map (ctx, c) = Context.Rel.map Constr.hcons ctx, Constr.hcons c in
+  let nf = Array.Smart.map map oib.mind_nf_lc in
   { oib with
     mind_typename = Names.Id.hcons oib.mind_typename;
     mind_arity_ctxt = hcons_rel_context oib.mind_arity_ctxt;
@@ -294,17 +322,11 @@ let hcons_mind_packet oib =
     mind_user_lc = user;
     mind_nf_lc = nf }
 
-let hcons_mind_universes miu =
-  match miu with
-  | Monomorphic_ind ctx -> Monomorphic_ind (Univ.hcons_universe_context_set ctx)
-  | Polymorphic_ind ctx -> Polymorphic_ind (Univ.hcons_abstract_universe_context ctx)
-  | Cumulative_ind cui -> Cumulative_ind (Univ.hcons_abstract_cumulativity_info cui)
-
 let hcons_mind mib =
   { mib with
     mind_packets = Array.Smart.map hcons_mind_packet mib.mind_packets;
     mind_params_ctxt = hcons_rel_context mib.mind_params_ctxt;
-    mind_universes = hcons_mind_universes mib.mind_universes }
+    mind_universes = hcons_universes mib.mind_universes }
 
 (** Hashconsing of modules *)
 

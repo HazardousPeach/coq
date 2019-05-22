@@ -29,6 +29,7 @@ type printable =
   | PrintSectionContext of qualid
   | PrintInspect of int
   | PrintGrammar of string
+  | PrintCustomGrammar of string
   | PrintLoadPath of DirPath.t option
   | PrintModules
   | PrintModule of qualid
@@ -45,7 +46,7 @@ type printable =
   | PrintCoercions
   | PrintCoercionPaths of class_rawexpr * class_rawexpr
   | PrintCanonicalConversions
-  | PrintUniverses of bool * string option
+  | PrintUniverses of bool * qualid list option * string option
   | PrintHint of qualid or_by_notation
   | PrintHintGoal
   | PrintHintDbName of string
@@ -109,11 +110,11 @@ type onlyparsing_flag = Flags.compat_version option
     which this notation is trying to be compatible with *)
 type locality_flag  = bool (* true = Local *)
 
-type option_value = Goptions.option_value =
-  | BoolValue of bool
-  | IntValue of int option
-  | StringValue of string
-  | StringOptValue of string option
+type option_setting =
+  | OptionUnset
+  | OptionSetTrue
+  | OptionSetInt of int
+  | OptionSetString of string
 
 type option_ref_value =
   | StringRefValue of string
@@ -129,7 +130,7 @@ type definition_expr =
       * constr_expr option
 
 type fixpoint_expr =
-    ident_decl * (lident option * recursion_order_expr) * local_binder_expr list * constr_expr * constr_expr option
+    ident_decl * recursion_order_expr option * local_binder_expr list * constr_expr * constr_expr option
 
 type cofixpoint_expr =
     ident_decl * local_binder_expr list * constr_expr * constr_expr option
@@ -143,13 +144,17 @@ type decl_notation = lstring * constr_expr * scope_name option
 type simple_binder = lident list  * constr_expr
 type class_binder = lident * constr_expr list
 type 'a with_coercion = coercion_flag * 'a
-type 'a with_instance = instance_flag * 'a
-type 'a with_notation = 'a * decl_notation list
-type 'a with_priority = 'a * int option
+(* Attributes of a record field declaration *)
+type record_field_attr = {
+  rf_subclass: instance_flag; (* the projection is an implicit coercion or an instance *)
+  rf_priority: int option; (* priority of the instance, if relevant *)
+  rf_notation: decl_notation list;
+  rf_canonical: bool; (* use this projection in the search for canonical instances *)
+  }
 type constructor_expr = (lident * constr_expr) with_coercion
 type constructor_list_or_record_decl_expr =
   | Constructors of constructor_expr list
-  | RecordDecl of lident option * local_decl_expr with_instance with_priority with_notation list
+  | RecordDecl of lident option * (local_decl_expr * record_field_attr) list
 type inductive_expr =
   ident_decl with_coercion * local_binder_expr list * constr_expr option * inductive_kind *
     constructor_list_or_record_decl_expr
@@ -167,7 +172,7 @@ type syntax_modifier =
   | SetItemLevel of string list * Notation_term.constr_as_binder_kind option * Extend.production_level option
   | SetLevel of int
   | SetCustomEntry of string * int option
-  | SetAssoc of Extend.gram_assoc
+  | SetAssoc of Gramlib.Gramext.g_assoc
   | SetEntryType of string * Extend.simple_constr_prod_entry_key
   | SetOnlyParsing
   | SetOnlyPrinting
@@ -219,13 +224,6 @@ type section_subset_expr =
 
     {b ("ExtractionBlacklist", 0)} indicates {b Extraction Blacklist {i ident{_1}} ... {i ident{_n}}} command.
  *)
-type extend_name =
-  (** Name of the vernac entry where the tactic is defined, typically found
-      after the VERNAC EXTEND statement in the source. *)
-  string *
-  (** Index of the extension in the VERNAC EXTEND statement. Each parsing branch
-      is given an offset, starting from zero. *)
-  int
 
 (* This type allows registering the inlining of constants in native compiler.
    It will be extended with primitive inductive types and operators *)
@@ -244,14 +242,20 @@ type vernac_cumulative = VernacCumulative | VernacNonCumulative
 
 (** {6 The type of vernacular expressions} *)
 
-type vernac_implicit_status = Implicit | MaximallyImplicit | NotImplicit
-
 type vernac_argument_status = {
   name : Name.t;
   recarg_like : bool;
   notation_scope : string CAst.t option;
-  implicit_status : vernac_implicit_status;
+  implicit_status : Impargs.implicit_kind;
 }
+
+type extend_name =
+  (* Name of the vernac entry where the tactic is defined, typically found
+     after the VERNAC EXTEND statement in the source. *)
+  string *
+  (* Index of the extension in the VERNAC EXTEND statement. Each parsing branch
+     is given an offset, starting from zero. *)
+  int
 
 type nonrec vernac_expr =
 
@@ -299,18 +303,22 @@ type nonrec vernac_expr =
 
   (* Type classes *)
   | VernacInstance of
-      bool * (* abstract instance *)
       local_binder_expr list * (* super *)
         typeclass_constraint * (* instance name, class name, params *)
         (bool * constr_expr) option * (* props *)
         Hints.hint_info_expr
 
+  | VernacDeclareInstance of
+      local_binder_expr list * (* super *)
+        (ident_decl * Decl_kinds.binding_kind * constr_expr) * (* instance name, class name, params *)
+        Hints.hint_info_expr
+
   | VernacContext of local_binder_expr list
 
-  | VernacDeclareInstances of
+  | VernacExistingInstance of
     (qualid * Hints.hint_info_expr) list (* instances names, priorities and patterns *)
 
-  | VernacDeclareClass of qualid (* inductive or definition name *)
+  | VernacExistingClass of qualid (* inductive or definition name *)
 
   (* Modules and Module Types *)
   | VernacDeclareModule of bool option * lident *
@@ -350,7 +358,7 @@ type nonrec vernac_expr =
       onlyparsing_flag
   | VernacArguments of qualid or_by_notation *
       vernac_argument_status list (* Main arguments status list *) *
-        (Name.t * vernac_implicit_status) list list (* Extra implicit status lists *) *
+        (Name.t * Impargs.implicit_kind) list list (* Extra implicit status lists *) *
       int option (* Number of args to trigger reduction *) *
         [ `ReductionDontExposeCase | `ReductionNeverUnfold | `Rename |
           `ExtraScopes | `Assert | `ClearImplicits | `ClearScopes |
@@ -360,8 +368,7 @@ type nonrec vernac_expr =
   | VernacSetOpacity of (Conv_oracle.level * qualid or_by_notation list)
   | VernacSetStrategy of
       (Conv_oracle.level * qualid or_by_notation list) list
-  | VernacUnsetOption of export_flag * Goptions.option_name
-  | VernacSetOption of export_flag * Goptions.option_name * option_value
+  | VernacSetOption of export_flag * Goptions.option_name * option_setting
   | VernacAddOption of Goptions.option_name * option_ref_value list
   | VernacRemoveOption of Goptions.option_name * option_ref_value list
   | VernacMemOption of Goptions.option_name * option_ref_value list
@@ -373,6 +380,7 @@ type nonrec vernac_expr =
   | VernacSearch of searchable * Goal_select.t option * search_restriction
   | VernacLocate of locatable
   | VernacRegister of qualid * register_kind
+  | VernacPrimitive of lident * CPrimitives.op_or_type * constr_expr option
   | VernacComments of comment list
 
   (* Proof management *)
@@ -395,70 +403,12 @@ type nonrec vernac_expr =
   (* For extension *)
   | VernacExtend of extend_name * Genarg.raw_generic_argument list
 
-type vernac_flags = (string * vernac_flag_value) list
-and vernac_flag_value =
-  | VernacFlagEmpty
-  | VernacFlagLeaf of string
-  | VernacFlagList of vernac_flags
-
-type vernac_control =
-  | VernacExpr of vernac_flags * vernac_expr
+type vernac_control_r =
+  | VernacExpr of Attributes.vernac_flags * vernac_expr
   (* boolean is true when the `-time` batch-mode command line flag was set.
      the flag is used to print differently in `-time` vs `Time foo` *)
-  | VernacTime of bool * vernac_control CAst.t
-  | VernacRedirect of string * vernac_control CAst.t
+  | VernacTime of bool * vernac_control
+  | VernacRedirect of string * vernac_control
   | VernacTimeout of int * vernac_control
   | VernacFail of vernac_control
-
-(* A vernac classifier provides information about the exectuion of a
-   command:
-
-   - vernac_when: encodes if the vernac may alter the parser [thus
-     forcing immediate execution], or if indeed it is pure and parsing
-     can continue without its execution.
-
-   - vernac_type: if it is starts, ends, continues a proof or
-     alters the global state or is a control command like BackTo or is
-     a query like Check.
-
-   The classification works on the assumption that we have 3 states:
-   parsing, execution (global enviroment, etc...), and proof
-   state. For example, commands that only alter the proof state are
-   considered safe to delegate to a worker.
-
-*)
-type vernac_type =
-  (* Start of a proof *)
-  | VtStartProof of vernac_start
-  (* Command altering the global state, bad for parallel
-     processing. *)
-  | VtSideff of vernac_sideff_type
-  (* End of a proof *)
-  | VtQed of vernac_qed_type
-  (* A proof step *)
-  | VtProofStep of proof_step
-  (* To be removed *)
-  | VtProofMode of string
-  (* Queries are commands assumed to be "pure", that is to say, they
-     don't modify the interpretation state. *)
-  | VtQuery
-  (* To be removed *)
-  | VtMeta
-  | VtUnknown
-and vernac_qed_type = VtKeep | VtKeepAsAxiom | VtDrop (* Qed/Admitted, Abort *)
-and vernac_start = string * opacity_guarantee * Id.t list
-and vernac_sideff_type = Id.t list
-and opacity_guarantee =
-  | GuaranteesOpacity (** Only generates opaque terms at [Qed] *)
-  | Doesn'tGuaranteeOpacity (** May generate transparent terms even with [Qed].*)
-and proof_step = { (* TODO: inline with OCaml 4.03 *)
-  parallel : [ `Yes of solving_tac * anon_abstracting_tac | `No ];
-  proof_block_detection : proof_block_name option
-}
-and solving_tac = bool (* a terminator *)
-and anon_abstracting_tac = bool (* abstracting anonymously its result *)
-and proof_block_name = string (* open type of delimiters *)
-type vernac_when =
-  | VtNow
-  | VtLater
-type vernac_classification = vernac_type * vernac_when
+and vernac_control = vernac_control_r CAst.t

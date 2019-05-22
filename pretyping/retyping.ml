@@ -13,6 +13,7 @@ open CErrors
 open Util
 open Term
 open Constr
+open Context
 open Inductive
 open Inductiveops
 open Names
@@ -79,7 +80,8 @@ let rec subst_type env sigma typ = function
 let sort_of_atomic_type env sigma ft args =
   let rec concl_of_arity env n ar args =
     match EConstr.kind sigma (whd_all env sigma ar), args with
-    | Prod (na, t, b), h::l -> concl_of_arity (push_rel (LocalDef (na, lift n h, t)) env) (n + 1) b l
+    | Prod (na, t, b), h::l ->
+      concl_of_arity (push_rel (LocalDef (na, lift n h, t)) env) (n + 1) b l
     | Sort s, [] -> ESorts.kind sigma s
     | _ -> retype_error NotASort
   in concl_of_arity env 0 ft (Array.to_list args)
@@ -119,7 +121,7 @@ let retype ?(polyprop=true) sigma =
             Inductiveops.find_rectype env sigma t
           with Not_found -> retype_error BadRecursiveType
         in
-        let n = inductive_nrealdecls_env env (fst (fst (dest_ind_family indf))) in
+        let n = inductive_nrealdecls env (fst (fst (dest_ind_family indf))) in
         let t = betazetaevar_applist sigma n p realargs in
         (match EConstr.kind sigma (whd_all env sigma (type_of env t)) with
           | Prod _ -> whd_beta sigma (applist (t, [c]))
@@ -130,7 +132,7 @@ let retype ?(polyprop=true) sigma =
          subst1 b (type_of (push_rel (LocalDef (name,b,c1)) env) c2)
     | Fix ((_,i),(_,tys,_)) -> tys.(i)
     | CoFix (i,(_,tys,_)) -> tys.(i)
-    | App(f,args) when is_template_polymorphic env sigma f ->
+    | App(f,args) when Termops.is_template_polymorphic_ind env sigma f ->
 	let t = type_of_global_reference_knowing_parameters env f args in
         strip_outer_cast sigma (subst_type env sigma t (Array.to_list args))
     | App(f,args) ->
@@ -143,20 +145,21 @@ let retype ?(polyprop=true) sigma =
 	 with Invalid_argument _ -> retype_error BadRecursiveType)
     | Cast (c,_, t) -> t
     | Sort _ | Prod _ -> mkSort (sort_of env cstr)
+    | Int _ -> EConstr.of_constr (Typeops.type_of_int env)
 
   and sort_of env t =
     match EConstr.kind sigma t with
     | Cast (c,_, s) when isSort sigma s -> destSort sigma s
     | Sort s ->
       begin match ESorts.kind sigma s with
-      | Prop | Set -> Sorts.type1
-      | Type u -> Type (Univ.super u)
+      | SProp | Prop | Set -> Sorts.type1
+      | Type u -> Sorts.sort_of_univ (Univ.super u)
       end
     | Prod (name,t,c2) ->
       let dom = sort_of env t in
       let rang = sort_of (push_rel (LocalAssum (name,t)) env) c2 in
       Typeops.sort_of_product env dom rang
-    | App(f,args) when is_template_polymorphic env sigma f ->
+    | App(f,args) when Termops.is_template_polymorphic_ind env sigma f ->
       let t = type_of_global_reference_knowing_parameters env f args in
         sort_of_atomic_type env sigma t args
     | App(f,args) -> sort_of_atomic_type env sigma (type_of env f) args
@@ -187,17 +190,17 @@ let get_sort_family_of ?(truncation_style=false) ?(polyprop=true) env sigma t =
     | Cast (c,_, s) when isSort sigma s -> Sorts.family (destSort sigma s)
     | Sort _ -> InType
     | Prod (name,t,c2) ->
-	let s2 = sort_family_of (push_rel (LocalAssum (name,t)) env) c2 in
+        let s2 = sort_family_of (push_rel (LocalAssum (name,t)) env) c2 in
 	if not (is_impredicative_set env) &&
 	   s2 == InSet && sort_family_of env t == InType then InType else s2
-    | App(f,args) when is_template_polymorphic env sigma f ->
+    | App(f,args) when Termops.is_template_polymorphic_ind env sigma f ->
         if truncation_style then InType else
 	let t = type_of_global_reference_knowing_parameters env f args in
         Sorts.family (sort_of_atomic_type env sigma t args)
     | App(f,args) ->
 	Sorts.family (sort_of_atomic_type env sigma (type_of env f) args)
     | Lambda _ | Fix _ | Construct _ -> retype_error NotAType
-    | Ind _ when truncation_style && is_template_polymorphic env sigma t -> InType
+    | Ind _ when truncation_style && Termops.is_template_polymorphic_ind env sigma t -> InType
     | _ -> 
       Sorts.family (decomp_sort env sigma (type_of env t))
   in sort_family_of env t
@@ -255,3 +258,41 @@ let expand_projection env sigma pr c args =
   in
     mkApp (mkConstU (Projection.constant pr,u), 
 	   Array.of_list (ind_args @ (c :: args)))
+
+let relevance_of_term env sigma c =
+  if Environ.sprop_allowed env then
+    let rec aux rels c =
+      match kind sigma c with
+      | Rel n -> Retypeops.relevance_of_rel_extra env rels n
+      | Var x -> Retypeops.relevance_of_var env x
+      | Sort _ -> Sorts.Relevant
+      | Cast (c, _, _) -> aux rels c
+      | Prod ({binder_relevance=r}, _, codom) ->
+        aux (r::rels) codom
+      | Lambda ({binder_relevance=r}, _, bdy) ->
+        aux (r::rels) bdy
+      | LetIn ({binder_relevance=r}, _, _, bdy) ->
+        aux (r::rels) bdy
+      | App (c, _) -> aux rels c
+      | Const (c,_) -> Retypeops.relevance_of_constant env c
+      | Ind _ -> Sorts.Relevant
+      | Construct (c,_) -> Retypeops.relevance_of_constructor env c
+      | Case (ci, _, _, _) -> ci.ci_relevance
+      | Fix ((_,i),(lna,_,_)) -> (lna.(i)).binder_relevance
+      | CoFix (i,(lna,_,_)) -> (lna.(i)).binder_relevance
+      | Proj (p, _) -> Retypeops.relevance_of_projection env p
+      | Int _ -> Sorts.Relevant
+
+      | Meta _ | Evar _ -> Sorts.Relevant
+
+    in
+    aux [] c
+  else Sorts.Relevant
+
+let relevance_of_type env sigma t =
+  let s = get_sort_family_of env sigma t in
+  Sorts.relevance_of_sort_family s
+
+let relevance_of_sort s = Sorts.relevance_of_sort (EConstr.Unsafe.to_sorts s)
+
+let relevance_of_sort_family f =  Sorts.relevance_of_sort_family f

@@ -15,6 +15,7 @@ open Names
 open Term
 open Termops
 open Constr
+open Context
 open EConstr
 open Vars
 open Namegen
@@ -131,7 +132,7 @@ let make_inv_predicate env evd indf realargs id status concl =
         let eq_term = eqdata.Coqlib.eq in
         let eq = evd_comb1 (Evd.fresh_global env) evd eq_term in
         let eqn = applist (eq,[eqnty;lhs;rhs]) in
-        let eqns = (Anonymous, lift n eqn) :: eqns in
+        let eqns = (make_annot Anonymous Sorts.Relevant, lift n eqn) :: eqns in
         let refl_term = eqdata.Coqlib.refl in
         let refl_term = evd_comb1 (Evd.fresh_global env) evd refl_term in
         let refl = mkApp (refl_term, [|eqnty; rhs|]) in
@@ -365,7 +366,7 @@ let projectAndApply as_mode thin avoid id eqname names depids =
   let substHypIfVariable tac id =
     Proofview.Goal.enter begin fun gl ->
     let sigma = project gl in
-    (** We only look at the type of hypothesis "id" *)
+    (* We only look at the type of hypothesis "id" *)
     let hyp = pf_nf_evar gl (pf_get_hyp_typ id gl) in
     let (t,t1,t2) = dest_nf_eq (pf_env gl) sigma hyp in
     match (EConstr.kind sigma t1, EConstr.kind sigma t2) with

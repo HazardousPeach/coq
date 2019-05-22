@@ -13,7 +13,6 @@ open Constr
 open Environ
 open Pattern
 open Evd
-open Proof_type
 open Glob_term
 open Ltac_pretype
 
@@ -82,17 +81,16 @@ val pr_sort                : evar_map -> Sorts.t -> Pp.t
 
 (** Universe constraints *)
 
-val pr_polymorphic         : bool -> Pp.t
-val pr_cumulative          : bool -> bool -> Pp.t
 val pr_universe_instance   : evar_map -> Univ.Instance.t -> Pp.t
+val pr_universe_instance_constraints : evar_map -> Univ.Instance.t -> Univ.Constraint.t -> Pp.t
 val pr_universe_ctx        : evar_map -> ?variance:Univ.Variance.t array ->
   Univ.UContext.t -> Pp.t
-val pr_abstract_universe_ctx        : evar_map -> ?variance:Univ.Variance.t array ->
-  Univ.AUContext.t -> Pp.t
+val pr_abstract_universe_ctx : evar_map -> ?variance:Univ.Variance.t array ->
+  ?priv:Univ.ContextSet.t -> Univ.AUContext.t -> Pp.t
 val pr_universe_ctx_set    : evar_map -> Univ.ContextSet.t -> Pp.t
-val pr_constant_universes  : evar_map -> Declarations.constant_universes -> Pp.t
-val pr_cumulativity_info   : evar_map -> Univ.CumulativityInfo.t -> Pp.t
-val pr_abstract_cumulativity_info   : evar_map -> Univ.ACumulativityInfo.t -> Pp.t
+val pr_universes  : evar_map ->
+  ?variance:Univ.Variance.t array -> ?priv:Univ.ContextSet.t ->
+  Declarations.universes -> Pp.t
 
 (** Printing global references using names as short as possible *)
 
@@ -112,6 +110,7 @@ val pr_pconstructor : env -> evar_map -> pconstructor -> Pp.t
 
 
 (** Contexts *)
+
 (** Display compact contexts of goals (simple hyps on the same line) *)
 val set_compact_context : bool -> unit
 val get_compact_context : unit -> bool
@@ -134,7 +133,7 @@ val pr_context_of          : env -> evar_map -> Pp.t
 val pr_predicate           : ('a -> Pp.t) -> (bool * 'a list) -> Pp.t
 val pr_cpred               : Cpred.t -> Pp.t
 val pr_idpred              : Id.Pred.t -> Pp.t
-val pr_transparent_state   : transparent_state -> Pp.t
+val pr_transparent_state   : TransparentState.t -> Pp.t
 
 (** Proofs, these functions obey [Hyps Limit] and [Compact contexts]. *)
 
@@ -143,7 +142,7 @@ val pr_transparent_state   : transparent_state -> Pp.t
     records containing the goal and sigma for, respectively, the new and old proof steps,
     e.g. [{ it = g ; sigma = sigma }].
 *)
-val pr_goal                : ?diffs:bool -> ?og_s:(goal sigma) -> goal sigma -> Pp.t
+val pr_goal                : ?diffs:bool -> ?og_s:(Goal.goal sigma) -> Goal.goal sigma -> Pp.t
 
 (** [pr_subgoals ~pr_first ~diffs ~os_map close_cmd sigma ~seeds ~shelf ~stack ~unfocused ~goals]
    prints the goals in [goals] followed by the goals in [unfocused] in a compact form
@@ -160,17 +159,17 @@ val pr_goal                : ?diffs:bool -> ?og_s:(goal sigma) -> goal sigma -> 
    there are non-instantiated existential variables.  [stack] is used to print summary info on unfocused
    goals.
 *)
-val pr_subgoals            : ?pr_first:bool -> ?diffs:bool -> ?os_map:(evar_map * Evar.t Evar.Map.t) -> Pp.t option -> evar_map
-                             -> seeds:goal list -> shelf:goal list -> stack:int list
-                             -> unfocused: goal list -> goals:goal list -> Pp.t
+val pr_subgoals            : ?pr_first:bool -> ?diffs:bool -> ?os_map:(evar_map * Goal.goal Evar.Map.t) -> Pp.t option -> evar_map
+                             -> seeds:Goal.goal list -> shelf:Goal.goal list -> stack:int list
+                             -> unfocused:Goal.goal list -> goals:Goal.goal list -> Pp.t
 
-val pr_subgoal             : int -> evar_map -> goal list -> Pp.t
+val pr_subgoal             : int -> evar_map -> Goal.goal list -> Pp.t
 
 (** [pr_concl n ~diffs ~og_s sigma g] prints the conclusion of the goal [g] using [sigma].  The output
     is labelled "subgoal [n]".  If [diffs] is true, highlight the differences between the old conclusion,
     [og_s], and [g]+[sigma].  [og_s] is a record containing the old goal and sigma, e.g. [{ it = g ; sigma = sigma }].
 *)
-val pr_concl               : int -> ?diffs:bool -> ?og_s:(goal sigma) -> evar_map -> goal -> Pp.t
+val pr_concl               : int -> ?diffs:bool -> ?og_s:(Goal.goal sigma) -> evar_map -> Goal.goal -> Pp.t
 
 (** [pr_open_subgoals_diff ~quiet ~diffs ~oproof proof] shows the context for [proof] as used by, for example, coqtop.
     The first active goal is printed with all its antecedents and the conclusion.  The other active goals only show their
@@ -181,7 +180,7 @@ val pr_open_subgoals_diff  : ?quiet:bool -> ?diffs:bool -> ?oproof:Proof.t -> Pr
 val pr_open_subgoals       : proof:Proof.t -> Pp.t
 val pr_nth_open_subgoal    : proof:Proof.t -> int -> Pp.t
 val pr_evar                : evar_map -> (Evar.t * evar_info) -> Pp.t
-val pr_evars_int           : evar_map -> shelf:goal list -> givenup:goal list -> int -> evar_info Evar.Map.t -> Pp.t
+val pr_evars_int           : evar_map -> shelf:Goal.goal list -> given_up:Goal.goal list -> int -> evar_info Evar.Map.t -> Pp.t
 val pr_evars               : evar_map -> evar_info Evar.Map.t -> Pp.t
 val pr_ne_evar_set         : Pp.t -> Pp.t -> evar_map ->
   Evar.Set.t -> Pp.t

@@ -427,6 +427,8 @@ Lemma leqnSn n : n <= n.+1.             Proof. by elim: n. Qed.
 
 Lemma leq_trans n m p : m <= n -> n <= p -> m <= p.
 Admitted.
+Lemma leq_ltn_trans n m p : m <= n -> n < p -> m < p.
+Admitted.
 Lemma leqW m n : m <= n -> m <= n.+1.
 Admitted.
 Hint Resolve leqnSn.
@@ -632,9 +634,9 @@ Fixpoint mem_seq (s : seq T) :=
 
 Definition eqseq_class := seq T.
 Identity Coercion seq_of_eqseq : eqseq_class >-> seq.
-Coercion pred_of_eq_seq (s : eqseq_class) : pred_class := [eta mem_seq s].
+Coercion pred_of_eq_seq (s : eqseq_class) : {pred T} := [eta mem_seq s].
 
-Canonical seq_predType := @mkPredType T (seq T) pred_of_eq_seq.
+Canonical seq_predType := @PredType T (seq T) pred_of_eq_seq.
 
 Fixpoint uniq s := if s is x :: s' then (x \notin s') && uniq s' else true.
 

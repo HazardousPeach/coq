@@ -17,13 +17,10 @@
 
 .PHONY: devel printers
 
-DEBUGPRINTERS:=dev/top_printers.cmo dev/vm_printers.cmo dev/checker_printers.cmo
+DEBUGPRINTERS:=dev/top_printers.cmo dev/vm_printers.cmo
 
 devel: printers
-printers: $(CORECMA) $(DEBUGPRINTERS) dev/camlp5.dbg
-
-dev/camlp5.dbg:
-	echo "load_printer gramlib.cma" > $@
+printers: $(CORECMA) $(DEBUGPRINTERS)
 
 ############
 # revision
@@ -66,7 +63,7 @@ revision:
 
 coqlight: theories-light tools coqbinaries
 
-states: theories/Init/Prelude.vo
+states: theories/Init/Prelude.$(VO)
 
 miniopt: $(COQTOPEXE) pluginsopt
 minibyte: $(COQTOPBYTE) pluginsbyte

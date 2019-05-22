@@ -15,11 +15,8 @@ open Environ
 open Reductionops
 open Evd
 open Typing
-open Redexpr
 open Tacred
-open Proof_type
 open Logic
-open Refiner
 open Context.Named.Declaration
 
 module NamedDecl = Context.Named.Declaration
@@ -30,7 +27,7 @@ let re_sig it  gc = { it = it; sigma = gc; }
 (* Operations for handling terms under a local typing context *)
 (**************************************************************)
 
-type tactic     = Proof_type.tactic
+type tactic = Proofview.V82.tac
 
 let sig_it   = Refiner.sig_it
 let project  = Refiner.project
@@ -68,16 +65,8 @@ let pf_ids_set_of_hyps gls =
 let pf_get_new_id id gls =
   next_ident_away id (pf_ids_set_of_hyps gls)
 
-let pf_global gls id = EConstr.of_constr (UnivGen.constr_of_global (Constrintern.construct_reference (pf_hyps gls) id))
-
-let pf_reduction_of_red_expr gls re c =
-  let (redfun, _) = reduction_of_red_expr (pf_env gls) re in
-  let sigma = project gls in
-  redfun (pf_env gls) sigma c
-
 let pf_apply f gls = f (pf_env gls) (project gls)
-let pf_eapply f gls x = 
-  on_sig gls (fun evm -> f (pf_env gls) evm x)
+let pf_eapply f gls x = on_sig gls (fun evm -> f (pf_env gls) evm x)
 let pf_reduce = pf_apply
 let pf_e_reduce = pf_apply
 
@@ -100,20 +89,6 @@ let pf_reduce_to_atomic_ind     = pf_reduce reduce_to_atomic_ind
 
 let pf_hnf_type_of gls          = pf_get_type_of gls %> pf_whd_all gls
 
-(********************************************)
-(* Definition of the most primitive tactics *)
-(********************************************)
-
-let refiner = refiner
-
-let refine_no_check c gl =
-  let c = EConstr.Unsafe.to_constr c in
-  refiner (Refine c) gl
-
-(* Versions with consistency checks *)
-
-let refine c           = with_check (refine_no_check c)
-
 (* Pretty-printers *)
 
 open Pp
@@ -127,11 +102,7 @@ let db_pr_goal sigma g =
                    str" "  ++ pc) ++ fnl ()
 
 let pr_gls gls =
-  hov 0 (pr_evar_map (Some 2) (sig_sig gls) ++ fnl () ++ db_pr_goal (project gls) (sig_it gls))
-
-let pr_glls glls =
-  hov 0 (pr_evar_map (Some 2) (sig_sig glls) ++ fnl () ++
-         prlist_with_sep fnl (db_pr_goal (project glls)) (sig_it glls))
+  hov 0 (pr_evar_map (Some 2) (pf_env gls) (sig_sig gls) ++ fnl () ++ db_pr_goal (project gls) (sig_it gls))
 
 (* Variants of [Tacmach] functions built with the new proof engine *)
 module New = struct
@@ -145,11 +116,6 @@ module New = struct
   let of_old f gl =
     f { Evd.it = Proofview.Goal.goal gl ; sigma = project gl; }
 
-  let pf_global id gl =
-    (** We only check for the existence of an [id] in [hyps] *)
-    let hyps = Proofview.Goal.hyps gl in
-    Constrintern.construct_reference hyps id
-
   let pf_env = Proofview.Goal.env
   let pf_concl = Proofview.Goal.concl
 
@@ -162,12 +128,12 @@ module New = struct
   let pf_conv_x gl t1 t2 = pf_apply is_conv gl t1 t2
 
   let pf_ids_of_hyps gl =
-    (** We only get the identifiers in [hyps] *)
+    (* We only get the identifiers in [hyps] *)
     let hyps = Proofview.Goal.hyps gl in
     ids_of_named_context hyps
 
   let pf_ids_set_of_hyps gl =
-    (** We only get the identifiers in [hyps] *)
+    (* We only get the identifiers in [hyps] *)
     let env = Proofview.Goal.env gl in
     Environ.ids_of_named_context_val (Environ.named_context_val env)
 
@@ -191,7 +157,7 @@ module New = struct
     let env = Proofview.Goal.env gl in
     let sign = Environ.named_context env in
     List.map (function LocalAssum (id,x)
-                     | LocalDef (id,_,x) -> id, EConstr.of_constr x)
+                     | LocalDef (id,_,x) -> id.Context.binder_name, EConstr.of_constr x)
              sign
 
   let pf_last_hyp gl =
@@ -199,7 +165,7 @@ module New = struct
     List.hd hyps
 
   let pf_nf_concl (gl : Proofview.Goal.t) =
-    (** We normalize the conclusion just after *)
+    (* We normalize the conclusion just after *)
     let concl = Proofview.Goal.concl gl in
     let sigma = project gl in
     nf_evar sigma concl

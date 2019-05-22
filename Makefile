@@ -57,14 +57,16 @@ FIND_SKIP_DIRS:='(' \
   -name '_build' -o \
   -name '_build_ci' -o \
   -name '_install_ci' -o \
+  -name 'gramlib' -o \
   -name 'user-contrib' -o \
   -name 'test-suite' -o \
   -name '.opamcache' -o \
-  -name '.coq-native' \
+  -name '.coq-native' -o \
+  -name 'plugin_tutorial' \
 ')' -prune -o
 
 define find
- $(shell find . $(FIND_SKIP_DIRS) '(' -name $(1) ')' -print | sed 's|^\./||')
+ $(shell find . user-contrib/Ltac2 $(FIND_SKIP_DIRS) '(' -name $(1) ')' -print | sed 's|^\./||')
 endef
 
 define findindir
@@ -73,16 +75,22 @@ endef
 
 ## Files in the source tree
 
+# instead of using "export FOO" do "COQ_EXPORTED += FOO"
+# this makes it possible to clean up the environment in the subcall
+COQ_EXPORTED := COQ_EXPORTED
+
 LEXFILES := $(call find, '*.mll')
 YACCFILES := $(call find, '*.mly')
-export MLLIBFILES := $(call find, '*.mllib')
-export MLPACKFILES := $(call find, '*.mlpack')
-export ML4FILES := $(call find, '*.ml4')
-export MLGFILES := $(call find, '*.mlg')
-export CFILES := $(call findindir, 'kernel/byterun', '*.c')
+MLLIBFILES := $(call find, '*.mllib')
+MLPACKFILES := $(call find, '*.mlpack')
+MLGFILES := $(call find, '*.mlg')
+CFILES := $(call findindir, 'kernel/byterun', '*.c')
+COQ_EXPORTED +=MLLIBFILES MLPACKFILES MLGFILES CFILES
 
-MERLININFILES := $(call find, '.merlin.in')
-export MERLINFILES := $(MERLININFILES:.in=)
+# NB our find wrapper ignores the test suite
+MERLININFILES := $(call find, '.merlin.in') test-suite/unit-tests/.merlin.in
+MERLINFILES := $(MERLININFILES:.in=)
+COQ_EXPORTED += MERLINFILES
 
 # NB: The lists of currently existing .ml and .mli files will change
 # before and after a build or a make clean. Hence we do not export
@@ -93,20 +101,23 @@ EXISTINGMLI := $(call find, '*.mli')
 
 ## Files that will be generated
 
-GENML4FILES:= $(ML4FILES:.ml4=.ml)
 GENMLGFILES:= $(MLGFILES:.mlg=.ml)
-export GENMLFILES:=$(LEXFILES:.mll=.ml) $(YACCFILES:.mly=.ml) $(GENMLGFILES) kernel/copcodes.ml
-export GENHFILES:=kernel/byterun/coq_jumptbl.h
-export GENFILES:=$(GENMLFILES) $(GENMLIFILES) $(GENHFILES)
-
-# NB: all files in $(GENFILES) can be created initially, while
-# .ml files in $(GENML4FILES) might need some intermediate building.
-# That's why we keep $(GENML4FILES) out of $(GENFILES)
+# GRAMFILES must be in linking order
+GRAMFILES=$(addprefix gramlib/.pack/gramlib__,Ploc Plexing Gramext Grammar)
+GRAMMLFILES := $(addsuffix .ml, $(GRAMFILES)) $(addsuffix .mli, $(GRAMFILES))
+GENGRAMFILES := $(GRAMMLFILES) gramlib/.pack/gramlib.ml
+GENMLFILES:=$(LEXFILES:.mll=.ml) $(YACCFILES:.mly=.ml) $(GENMLGFILES)  ide/coqide_os_specific.ml kernel/copcodes.ml kernel/uint63.ml
+GENHFILES:=kernel/byterun/coq_instruct.h kernel/byterun/coq_jumptbl.h
+GENFILES:=$(GENMLFILES) $(GENMLIFILES) $(GENHFILES)
+COQ_EXPORTED += GRAMFILES GRAMMLFILES GENGRAMFILES GENMLFILES GENHFILES GENFILES
 
 ## More complex file lists
 
-export MLSTATICFILES := $(filter-out $(GENMLFILES) $(GENML4FILES) $(GENMLGFILES), $(EXISTINGML))
-export MLIFILES := $(sort $(GENMLIFILES) $(EXISTINGMLI))
+MLSTATICFILES := $(filter-out $(GENMLFILES), $(EXISTINGML))
+MLIFILES := $(sort $(GENMLIFILES) $(EXISTINGMLI))
+COQ_EXPORTED += MLSTATICFILES MLIFILES
+
+export $(COQ_EXPORTED)
 
 include Makefile.common
 
@@ -126,7 +137,6 @@ help:
 	@echo "   make clean"
 	@echo "or make archclean"
 	@echo "For make to be verbose, add VERBOSE=1"
-	@echo "If you want camlp5 to generate human-readable files, add READABLE_ML4=1"
 	@echo
 	@echo "Bytecode compilation is now a separate target:"
 	@echo "   make byte"
@@ -193,15 +203,19 @@ META.coq: META.coq.in
 # Cleaning
 ###########################################################################
 
-.PHONY: clean cleankeepvo objclean cruftclean indepclean docclean archclean optclean clean-ide ml4clean depclean cleanconfig distclean voclean timingclean alienclean
+.PHONY: clean cleankeepvo objclean cruftclean indepclean docclean archclean optclean plugin-tutorialclean clean-ide mlgclean depclean cleanconfig distclean voclean timingclean alienclean
 
-clean: objclean cruftclean depclean docclean camldevfilesclean
+clean: objclean cruftclean depclean docclean camldevfilesclean gramlibclean
 
 cleankeepvo: indepclean clean-ide optclean cruftclean depclean docclean
 
 objclean: archclean indepclean
 
-cruftclean: ml4clean
+.PHONY: gramlibclean
+gramlibclean:
+	rm -rf gramlib/.pack/
+
+cruftclean: mlgclean
 	find . \( -name '*~' -o -name '*.annot' \) -exec rm -f {} +
 	rm -f gmon.out core
 
@@ -235,7 +249,7 @@ docclean:
 	rm -f doc/coq.tex
 	rm -rf doc/sphinx/_build
 
-archclean: clean-ide optclean voclean
+archclean: clean-ide optclean voclean plugin-tutorialclean
 	rm -rf _build
 	rm -f $(ALLSTDLIB).*
 
@@ -249,10 +263,11 @@ clean-ide:
 	rm -f ide/input_method_lexer.ml
 	rm -f ide/highlight.ml ide/config_lexer.ml ide/config_parser.mli ide/config_parser.ml
 	rm -f ide/utf8_convert.ml
+	rm -f ide/default.bindings
 	rm -rf $(COQIDEAPP)
 
-ml4clean:
-	rm -f $(GENML4FILES) $(GENMLGFILES)
+mlgclean:
+	rm -f $(GENMLGFILES)
 
 depclean:
 	find . $(FIND_SKIP_DIRS) '(' -name '*.d' ')' -exec rm -f {} +
@@ -261,12 +276,12 @@ cacheclean:
 	find theories plugins test-suite -name '.*.aux' -exec rm -f {} +
 
 cleanconfig:
-	rm -f config/Makefile config/coq_config.ml dev/ocamldebug-coq dev/camlp5.dbg config/Info-*.plist
+	rm -f config/Makefile config/coq_config.ml dev/ocamldebug-coq config/Info-*.plist
 
 distclean: clean cleanconfig cacheclean timingclean
 
 voclean:
-	find theories plugins test-suite \( -name '*.vo' -o -name '*.glob' -o -name "*.cmxs" \
+	find theories plugins test-suite \( -name '*.vo' -o -name '*.vio' -o -name '*.glob' -o -name "*.cmxs" \
 	-o -name "*.native" -o -name "*.cmx" -o -name "*.cmi" -o -name "*.o" \) -exec rm -f {} +
 	find theories plugins test-suite -name .coq-native -empty -exec rm -rf {} +
 
@@ -275,6 +290,9 @@ timingclean:
 	  -o -name "*.v.after-timing" -o -name "*.v.timing.diff" -o -name "time-of-build.log" \
 	  -o -name "time-of-build-before.log" -o -name "time-of-build-after.log" \
 	  -o -name "time-of-build-pretty.log" -o -name "time-of-build-both.log" \) -exec rm -f {} +
+
+plugin-tutorialclean:
+	+$(MAKE) -C $(PLUGINTUTO) clean
 
 # Ensure that every compiled file around has a known source file.
 # This should help preventing weird compilation failures caused by leftover
@@ -285,11 +303,11 @@ KNOWNVO:=$(patsubst %.v,%.vo,$(call find, '*.v'))
 ALIENVO:=$(filter-out $(KNOWNVO),$(EXISTINGVO))
 
 EXISTINGOBJS:=$(call find, '*.cm[oxia]' -o -name '*.cmxa')
-KNOWNML:=$(EXISTINGML) $(GENMLFILES) $(GENML4FILES) $(MLPACKFILES:.mlpack=.ml) \
+KNOWNML:=$(EXISTINGML) $(GENMLFILES) $(MLPACKFILES:.mlpack=.ml) \
  $(patsubst %.mlp,%.ml,$(wildcard grammar/*.mlp))
 KNOWNOBJS:=$(KNOWNML:.ml=.cmo) $(KNOWNML:.ml=.cmx) $(KNOWNML:.ml=.cmi) \
  $(MLIFILES:.mli=.cmi) \
- $(MLLIBFILES:.mllib=.cma) $(MLLIBFILES:.mllib=.cmxa) grammar/grammar.cma
+ gramlib/.pack/gramlib.cma gramlib/.pack/gramlib.cmxa $(MLLIBFILES:.mllib=.cma) $(MLLIBFILES:.mllib=.cmxa) grammar/grammar.cma
 ALIENOBJS:=$(filter-out $(KNOWNOBJS),$(EXISTINGOBJS))
 
 alienclean:
@@ -307,7 +325,7 @@ include Makefile.ci
 .PHONY: tags printenv
 
 tags:
-	echo $(filter-out checker/%, $(MLIFILES)) $(filter-out checker/%, $(MLSTATICFILES)) $(ML4FILES) | sort -r | xargs \
+	echo $(filter-out checker/%, $(MLIFILES)) $(filter-out checker/%, $(MLSTATICFILES)) $(MLGFILES) | sort -r | xargs \
 	etags --language=none\
 	      "--regex=/let[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/let[ \t]+rec[ \t]+\([^ \t]+\)/\1/" \
@@ -316,12 +334,12 @@ tags:
               "--regex=/exception[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/val[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/module[ \t]+\([^ \t]+\)/\1/"
-	echo $(ML4FILES) | sort -r | xargs \
+	echo $(MLGFILES) | sort -r | xargs \
 	etags --append --language=none\
 	      "--regex=/[ \t]*\([^: \t]+\)[ \t]*:/\1/"
 
 checker-tags:
-	echo $(filter-out kernel/%, $(MLIFILES)) $(filter-out kernel/%, $(MLSTATICFILES)) $(ML4FILES) | sort -r | xargs \
+	echo $(filter-out kernel/%, $(MLIFILES)) $(filter-out kernel/%, $(MLSTATICFILES)) $(MLGFILES) | sort -r | xargs \
 	etags --language=none\
 	      "--regex=/let[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/let[ \t]+rec[ \t]+\([^ \t]+\)/\1/" \
@@ -330,7 +348,7 @@ checker-tags:
               "--regex=/exception[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/val[ \t]+\([^ \t]+\)/\1/" \
 	      "--regex=/module[ \t]+\([^ \t]+\)/\1/"
-	echo $(ML4FILES) | sort -r | xargs \
+	echo $(MLGFILES) | sort -r | xargs \
 	etags --append --language=none\
 	      "--regex=/[ \t]*\([^: \t]+\)[ \t]*:/\1/"
 

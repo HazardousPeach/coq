@@ -8,13 +8,13 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-open CErrors
 open Names
 open Nativelib
 open Reduction
 open Util
 open Nativevalues
-open Nativecode 
+open Nativecode
+open Environ
 
 (** This module implements the conversion test by compiling to OCaml code *)
 
@@ -33,6 +33,8 @@ let rec conv_val env pb lvl v1 v2 cu =
 	conv_accu env pb lvl k1 k2 cu
     | Vconst i1, Vconst i2 -> 
 	if Int.equal i1 i2 then cu else raise NotConvertible
+    | Vint64 i1, Vint64 i2 ->
+      if Int64.equal i1 i2 then cu else raise NotConvertible
     | Vblock b1, Vblock b2 ->
 	let n1 = block_size b1 in
         let n2 = block_size b2 in
@@ -46,7 +48,7 @@ let rec conv_val env pb lvl v1 v2 cu =
 	    aux lvl max b1 b2 (i+1) cu
 	in
 	aux lvl (n1-1) b1 b2 0 cu
-    | Vaccu _, _ | Vconst _, _ | Vblock _, _ -> raise NotConvertible
+    | Vaccu _, _ | Vconst _, _ | Vint64 _, _ | Vblock _, _ -> raise NotConvertible
 
 and conv_accu env pb lvl k1 k2 cu =
   let n1 = accu_nargs k1 in
@@ -142,26 +144,22 @@ let warn_no_native_compiler =
                       strbrk " falling back to VM conversion test.")
 
 let native_conv_gen pb sigma env univs t1 t2 =
-  if not Coq_config.native_compiler then begin
+  if not (typing_flags env).Declarations.enable_native_compiler then begin
     warn_no_native_compiler ();
     Vconv.vm_conv_gen pb env univs t1 t2
   end
   else
   let ml_filename, prefix = get_ml_filename () in
   let code, upds = mk_conv_code env sigma prefix t1 t2 in
-  match compile ml_filename code ~profile:false with
-  | (true, fn) ->
-      begin
-        if !Flags.debug then Feedback.msg_debug (Pp.str "Running test...");
-        let t0 = Sys.time () in
-        call_linker ~fatal:true prefix fn (Some upds);
-        let t1 = Sys.time () in
-        let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
-        if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
-        (* TODO change 0 when we can have de Bruijn *)
-        fst (conv_val env pb 0 !rt1 !rt2 univs)
-      end
-  | _ -> anomaly (Pp.str "Compilation failure.") 
+  let fn = compile ml_filename code ~profile:false in
+  if !Flags.debug then Feedback.msg_debug (Pp.str "Running test...");
+  let t0 = Sys.time () in
+  call_linker ~fatal:true prefix fn (Some upds);
+  let t1 = Sys.time () in
+  let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
+  if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
+  (* TODO change 0 when we can have de Bruijn *)
+  fst (conv_val env pb 0 !rt1 !rt2 univs)
 
 (* Wrapper for [native_conv] above *)
 let native_conv cv_pb sigma env t1 t2 =

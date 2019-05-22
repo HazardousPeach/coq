@@ -47,35 +47,54 @@ type inline = int option
     transparent body, or an opaque one *)
 
 (* Global declarations (i.e. constants) can be either: *)
-type constant_def =
+type ('a, 'opaque) constant_def =
   | Undef of inline                       (** a global assumption *)
-  | Def of constr Mod_subst.substituted   (** or a transparent global definition *)
-  | OpaqueDef of Opaqueproof.opaque       (** or an opaque global definition *)
+  | Def of 'a                             (** or a transparent global definition *)
+  | OpaqueDef of 'opaque                  (** or an opaque global definition *)
+  | Primitive of CPrimitives.t            (** or a primitive operation *)
 
-type constant_universes =
-  | Monomorphic_const of Univ.ContextSet.t
-  | Polymorphic_const of Univ.AUContext.t
+type universes =
+  | Monomorphic of Univ.ContextSet.t
+  | Polymorphic of Univ.AUContext.t
 
 (** The [typing_flags] are instructions to the type-checker which
     modify its behaviour. The typing flags used in the type-checking
     of a constant are tracked in their {!constant_body} so that they
     can be displayed to the user. *)
 type typing_flags = {
-  check_guarded : bool; (** If [false] then fixed points and co-fixed
-                            points are assumed to be total. *)
-  check_universes : bool; (** If [false] universe constraints are not checked *)
-  conv_oracle : Conv_oracle.oracle; (** Unfolding strategies for conversion *)
-  share_reduction : bool; (** Use by-need reduction algorithm *)
+  check_guarded : bool;
+  (** If [false] then fixed points and co-fixed points are assumed to
+      be total. *)
+
+  check_universes : bool;
+  (** If [false] universe constraints are not checked *)
+
+  conv_oracle : Conv_oracle.oracle;
+  (** Unfolding strategies for conversion *)
+
+  share_reduction : bool;
+  (** Use by-need reduction algorithm *)
+
+  enable_VM : bool;
+  (** If [false], all VM conversions fall back to interpreted ones *)
+
+  enable_native_compiler : bool;
+  (** If [false], all native conversions fall back to VM ones *)
+
+  indices_matter: bool;
+  (** The universe of an inductive type must be above that of its indices. *)
 }
 
 (* some contraints are in constant_constraints, some other may be in
  * the OpaqueDef *)
-type constant_body = {
+type 'opaque constant_body = {
     const_hyps : Constr.named_context; (** New: younger hyp at top *)
-    const_body : constant_def;
+    const_body : (Constr.t Mod_subst.substituted, 'opaque) constant_def;
     const_type : types;
+    const_relevance : Sorts.relevance;
     const_body_code : Cemitcodes.to_patch_substituted option;
-    const_universes : constant_universes;
+    const_universes : universes;
+    const_private_poly_univs : Univ.ContextSet.t option;
     const_inline_code : bool;
     const_typing_flags : typing_flags; (** The typing options which
                                            were used for
@@ -115,7 +134,7 @@ v}
 type record_info =
 | NotRecord
 | FakeRecord
-| PrimRecord of (Id.t * Label.t array * types array) array
+| PrimRecord of (Id.t * Label.t array * Sorts.relevance array * types array) array
 
 type regular_inductive_arity = {
   mind_user_arity : types;
@@ -148,7 +167,7 @@ type one_inductive_body = {
 
     mind_kelim : Sorts.family list; (** List of allowed elimination sorts *)
 
-    mind_nf_lc : types array; (** Head normalized constructor types so that their conclusion exposes the inductive type *)
+    mind_nf_lc : (rel_context * types) array; (** Head normalized constructor types so that their conclusion exposes the inductive type *)
 
     mind_consnrealargs : int array;
  (** Number of expected proper arguments of the constructors (w/o params) *)
@@ -158,6 +177,8 @@ type one_inductive_body = {
 
     mind_recargs : wf_paths; (** Signature of recursive arguments in the constructors *)
 
+    mind_relevance : Sorts.relevance;
+
 (** {8 Datas for bytecode compilation } *)
 
     mind_nb_constant : int; (** number of constant constructor *)
@@ -166,11 +187,6 @@ type one_inductive_body = {
 
     mind_reloc_tbl :  Vmvalues.reloc_table;
   }
-
-type abstract_inductive_universes =
-  | Monomorphic_ind of Univ.ContextSet.t
-  | Polymorphic_ind of Univ.AUContext.t
-  | Cumulative_ind of Univ.ACumulativityInfo.t
 
 type recursivity_kind =
   | Finite (** = inductive *)
@@ -195,7 +211,9 @@ type mutual_inductive_body = {
 
     mind_params_ctxt : Constr.rel_context;  (** The context of parameters (includes let-in declaration) *)
 
-    mind_universes : abstract_inductive_universes; (** Information about monomorphic/polymorphic/cumulative inductives and their universes *)
+    mind_universes : universes; (** Information about monomorphic/polymorphic/cumulative inductives and their universes *)
+
+    mind_variance : Univ.Variance.t array option; (** Variance info, [None] when non-cumulative. *)
 
     mind_private : bool option; (** allow pattern-matching: Some true ok, Some false blocked *)
 
@@ -228,7 +246,7 @@ type module_alg_expr =
 (** A component of a module structure *)
 
 type structure_field_body =
-  | SFBconst of constant_body
+  | SFBconst of Opaqueproof.opaque constant_body
   | SFBmind of mutual_inductive_body
   | SFBmodule of module_body
   | SFBmodtype of module_type_body

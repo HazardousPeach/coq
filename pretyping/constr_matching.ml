@@ -14,9 +14,9 @@ open CErrors
 open Util
 open Names
 open Constr
+open Context
 open Globnames
 open Termops
-open Term
 open EConstr
 open Vars
 open Pattern
@@ -70,7 +70,7 @@ let constrain sigma n (ids, m) ((names,seen as names_seen), terms as subst) =
     (names_seen, Id.Map.add n (ids, m) terms)
 
 let add_binders na1 na2 binding_vars ((names,seen), terms as subst) =
-  match na1, na2 with
+  match na1, na2.binder_name with
   | Name id1, Name id2 when Id.Set.mem id1 binding_vars ->
     if Id.Map.mem id1 names then
       let () = Glob_ops.warn_variable_collision id1 in
@@ -94,10 +94,10 @@ let rec build_lambda sigma vars ctx m = match vars with
   let (na, t, suf) = match suf with
   | [] -> assert false
   | (_, id, t) :: suf ->
-     (Name id, t, suf)
+     (map_annot Name.mk_name id, t, suf)
   in
-  (** Check that the abstraction is legal by generating a transitive closure of
-      its dependencies. *)
+  (* Check that the abstraction is legal by generating a transitive closure of
+     its dependencies. *)
   let is_nondep t clear = match clear with
   | [] -> true
   | _ ->
@@ -106,12 +106,12 @@ let rec build_lambda sigma vars ctx m = match vars with
     List.for_all_i check 1 clear
   in
   let fold (_, _, t) clear = is_nondep t clear :: clear in
-  (** Produce a list of booleans: true iff we keep the hypothesis *)
+  (* Produce a list of booleans: true iff we keep the hypothesis *)
   let clear = List.fold_right fold pre [false] in
   let clear = List.drop_last clear in
-  (** If the conclusion depends on a variable we cleared, failure *)
+  (* If the conclusion depends on a variable we cleared, failure *)
   let () = if not (is_nondep m clear) then raise PatternMatchingFailure in
-  (** Create the abstracted term *)
+  (* Create the abstracted term *)
   let fold (k, accu) keep =
     if keep then
       let k = succ k in
@@ -121,10 +121,10 @@ let rec build_lambda sigma vars ctx m = match vars with
   let keep, shift = List.fold_left fold (0, []) clear in
   let shift = List.rev shift in
   let map = function
-  | None -> mkProp (** dummy term *)
+  | None -> mkProp (* dummy term *)
   | Some i -> mkRel (i + 1)
   in
-  (** [x1 ... xn y z1 ... zm] -> [x1 ... xn f(z1) ... f(zm) y] *)
+  (* [x1 ... xn y z1 ... zm] -> [x1 ... xn f(z1) ... f(zm) y] *)
   let subst =
     List.map map shift @
     mkRel 1 ::
@@ -143,12 +143,12 @@ let rec build_lambda sigma vars ctx m = match vars with
     if i > n then i - n + keep
     else match List.nth shift (i - 1) with
     | None ->
-      (** We cleared a variable that we wanted to abstract! *)
+      (* We cleared a variable that we wanted to abstract! *)
       raise PatternMatchingFailure
     | Some k -> k
   in
   let vars = List.map map vars in
-  (** Create the abstraction *)
+  (* Create the abstraction *)
   let m = mkLambda (na, Vars.lift keep t, m) in
   build_lambda sigma vars (pre @ suf) m
 
@@ -178,11 +178,12 @@ let make_renaming ids = function
 | _ -> dummy_constr
 
 let push_binder na1 na2 t ctx =
-  let id2 = match na2 with
-  | Name id2 -> id2
-  | Anonymous ->
-     let avoid = Id.Set.of_list (List.map pi2 ctx) in
-     Namegen.next_ident_away Namegen.default_non_dependent_ident avoid in
+  let id2 = map_annot (function
+      | Name id2 -> id2
+      | Anonymous ->
+        let avoid = Id.Set.of_list (List.map (fun (_,id,_) -> id.binder_name) ctx) in
+        Namegen.next_ident_away Namegen.default_non_dependent_ident avoid) na2
+  in
   (na1, id2, t) :: ctx
 
 (* This is an optimization of the main pattern-matching which shares
@@ -278,14 +279,8 @@ let matches_core env sigma allow_bound_rels
       | PRel n1, Rel n2 when Int.equal n1 n2 -> subst
 
       | PSort ps, Sort s ->
-
-        let open Glob_term in
-        begin match ps, ESorts.kind sigma s with
-        | GProp, Prop -> subst
-        | GSet, Set -> subst
-        | GType _, Type _ -> subst
-        | _ -> raise PatternMatchingFailure
-        end
+        if Sorts.family_equal ps (Sorts.family (ESorts.kind sigma s))
+        then subst else raise PatternMatchingFailure
 
       | PApp (p, [||]), _ -> sorec ctx env subst p t
 
@@ -341,19 +336,19 @@ let matches_core env sigma allow_bound_rels
           sorec ctx env subst c1 c2
 
       | PProd (na1,c1,d1), Prod(na2,c2,d2) ->
-	  sorec (push_binder na1 na2 c2 ctx) (EConstr.push_rel (LocalAssum (na2,c2)) env)
+          sorec (push_binder na1 na2 c2 ctx) (EConstr.push_rel (LocalAssum (na2,c2)) env)
             (add_binders na1 na2 binding_vars (sorec ctx env subst c1 c2)) d1 d2
 
       | PLambda (na1,c1,d1), Lambda(na2,c2,d2) ->
-	  sorec (push_binder na1 na2 c2 ctx) (EConstr.push_rel (LocalAssum (na2,c2)) env)
+          sorec (push_binder na1 na2 c2 ctx) (EConstr.push_rel (LocalAssum (na2,c2)) env)
             (add_binders na1 na2 binding_vars (sorec ctx env subst c1 c2)) d1 d2
 
       | PLetIn (na1,c1,Some t1,d1), LetIn(na2,c2,t2,d2) ->
-	  sorec (push_binder na1 na2 t2 ctx) (EConstr.push_rel (LocalDef (na2,c2,t2)) env)
+          sorec (push_binder na1 na2 t2 ctx) (EConstr.push_rel (LocalDef (na2,c2,t2)) env)
             (add_binders na1 na2 binding_vars (sorec ctx env (sorec ctx env subst c1 c2) t1 t2)) d1 d2
 
       | PLetIn (na1,c1,None,d1), LetIn(na2,c2,t2,d2) ->
-	  sorec (push_binder na1 na2 t2 ctx) (EConstr.push_rel (LocalDef (na2,c2,t2)) env)
+          sorec (push_binder na1 na2 t2 ctx) (EConstr.push_rel (LocalDef (na2,c2,t2)) env)
             (add_binders na1 na2 binding_vars (sorec ctx env subst c1 c2)) d1 d2
 
       | PIf (a1,b1,b1'), Case (ci,_,a2,[|b2;b2'|]) ->
@@ -377,8 +372,8 @@ let matches_core env sigma allow_bound_rels
           let () = match ci1.cip_ind with
           | None -> ()
           | Some ind1 ->
-            (** ppedrot: Something spooky going here. The comparison used to be
-                the generic one, so I may have broken something. *)
+            (* ppedrot: Something spooky going here. The comparison used to be
+               the generic one, so I may have broken something. *)
             if not (eq_ind ind1 ci2.ci_ind) then raise PatternMatchingFailure
           in
           let () =
@@ -410,9 +405,10 @@ let matches_core env sigma allow_bound_rels
 
       | PEvar (c1,args1), Evar (c2,args2) when Evar.equal c1 c2 ->
          Array.fold_left2 (sorec ctx env) subst args1 args2
+      | PInt i1, Int i2 when Uint63.equal i1 i2 -> subst
       | (PRef _ | PVar _ | PRel _ | PApp _ | PProj _ | PLambda _
          | PProd _ | PLetIn _ | PSort _ | PIf _ | PCase _
-         | PFix _ | PCoFix _| PEvar _), _ -> raise PatternMatchingFailure
+         | PFix _ | PCoFix _| PEvar _ | PInt _), _ -> raise PatternMatchingFailure
 
   in
   sorec [] env ((Id.Map.empty,Id.Set.empty), Id.Map.empty) pat c
@@ -530,7 +526,7 @@ let sub_match ?(closed=true) env sigma pat c =
       aux env term mk_ctx next
     with Retyping.RetypeError _ -> next ()
     end
-  | Construct _| Ind _|Evar _|Const _ | Rel _|Meta _|Var _|Sort _ ->
+  | Construct _| Ind _|Evar _|Const _ | Rel _|Meta _|Var _|Sort _ | Int _ ->
     next ()
   in
   here next

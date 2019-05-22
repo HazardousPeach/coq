@@ -15,6 +15,7 @@ open Util
 open Names
 open Term
 open Constr
+open Context
 open EConstr
 open Vars
 open Pp
@@ -63,12 +64,6 @@ let observe_tac s tac g =
   then do_observe_tac (str s) tac g
   else tac g
 
-(* [nf_zeta] $\zeta$-normalization of a term *)
-let nf_zeta =
-  Reductionops.clos_norm_flags  (CClosure.RedFlags.mkflags [CClosure.RedFlags.fZETA])
-    Environ.empty_env
-    (Evd.from_env Environ.empty_env)
-
 let thin ids gl = Proofview.V82.of_tactic (Tactics.clear ids) gl
 
 (* (\* [id_to_constr id] finds the term associated to [id] in the global environment *\) *)
@@ -81,7 +76,7 @@ let thin ids gl = Proofview.V82.of_tactic (Tactics.clear ids) gl
 
 let make_eq () =
   try
-    EConstr.of_constr (UnivGen.constr_of_global (Coqlib.lib_ref "core.eq.type"))
+    EConstr.of_constr (UnivGen.constr_of_monomorphic_global (Coqlib.lib_ref "core.eq.type"))
   with _ -> assert false
 
 (* [generate_type g_to_f f graph i] build the completeness (resp. correctness) lemma type if [g_to_f = true]
@@ -148,12 +143,13 @@ let generate_type evd g_to_f f graph i =
     \[\forall (x_1:t_1)\ldots(x_n:t_n), let fv := f x_1\ldots x_n in, forall res,  \]
     i*)
   let pre_ctxt =
-    LocalAssum (Name res_id, lift 1 res_type) :: LocalDef (Name fv_id, mkApp (f,args_as_rels), res_type) :: fun_ctxt
+    LocalAssum (make_annot (Name res_id) Sorts.Relevant, lift 1 res_type) ::
+    LocalDef (make_annot (Name fv_id) Sorts.Relevant, mkApp (f,args_as_rels), res_type) :: fun_ctxt
   in
   (*i and we can return the solution depending on which lemma type we are defining i*)
   if g_to_f
-  then LocalAssum (Anonymous,graph_applied)::pre_ctxt,(lift 1 res_eq_f_of_args),graph
-  else LocalAssum (Anonymous,res_eq_f_of_args)::pre_ctxt,(lift 1 graph_applied),graph
+  then LocalAssum (make_annot Anonymous Sorts.Relevant,graph_applied)::pre_ctxt,(lift 1 res_eq_f_of_args),graph
+  else LocalAssum (make_annot Anonymous Sorts.Relevant,res_eq_f_of_args)::pre_ctxt,(lift 1 graph_applied),graph
 
 
 (*
@@ -219,7 +215,7 @@ let prove_fun_correct evd funs_constr graphs_constr schemes lemmas_types_infos i
     let mib,_ = Global.lookup_inductive graph_ind in
     (* and the principle to use in this lemma in $\zeta$ normal form *)
     let f_principle,princ_type = schemes.(i) in
-    let princ_type =  nf_zeta princ_type in
+    let princ_type = Reductionops.nf_zeta (Global.env ()) evd princ_type in
     let princ_infos = Tactics.compute_elim_sig evd princ_type in
     (* The number of args of the function is then easily computable *)
     let nb_fun_args = nb_prod (project g) (pf_concl g) - 2 in
@@ -276,10 +272,10 @@ let prove_fun_correct evd funs_constr graphs_constr schemes lemmas_types_infos i
 	     let type_of_hid = pf_unsafe_type_of g (mkVar hid) in
 	     let sigma = project g in
 	     match EConstr.kind sigma type_of_hid with
-	       | Prod(_,_,t') ->
+               | Prod(_,_,t') ->
 		   begin
 		     match EConstr.kind sigma t' with
-		       | Prod(_,t'',t''') ->
+                       | Prod(_,t'',t''') ->
 			   begin
 			     match EConstr.kind sigma t'',EConstr.kind sigma t''' with
 			       | App(eq,args), App(graph',_)
@@ -364,17 +360,16 @@ let prove_fun_correct evd funs_constr graphs_constr schemes lemmas_types_infos i
     (* end of branche proof *)
     let lemmas =
       Array.map
-	(fun ((_,(ctxt,concl))) ->
-	   match ctxt with
-	     | [] | [_] | [_;_] -> anomaly (Pp.str "bad context.")
-	     | hres::res::decl::ctxt ->
-		let res = EConstr.it_mkLambda_or_LetIn
-			    (EConstr.it_mkProd_or_LetIn concl [hres;res])
-			    (LocalAssum (RelDecl.get_name decl, RelDecl.get_type decl) :: ctxt)
-		in
-		res
-	)
-	lemmas_types_infos
+        (fun ((_,(ctxt,concl))) ->
+           match ctxt with
+           | [] | [_] | [_;_] -> anomaly (Pp.str "bad context.")
+           | hres::res::decl::ctxt ->
+             let res = EConstr.it_mkLambda_or_LetIn
+                 (EConstr.it_mkProd_or_LetIn concl [hres;res])
+                 (LocalAssum (RelDecl.get_annot decl, RelDecl.get_type decl) :: ctxt)
+             in
+             res)
+        lemmas_types_infos
     in
     let param_names = fst (List.chop princ_infos.nparams args_names) in
     let params = List.map mkVar param_names in
@@ -397,7 +392,7 @@ let prove_fun_correct evd funs_constr graphs_constr schemes lemmas_types_infos i
 	List.rev (fst  (List.fold_left2
 	  (fun (bindings,avoid) decl p ->
 	     let id = Namegen.next_ident_away (Nameops.Name.get_id (RelDecl.get_name decl)) (Id.Set.of_list avoid) in
-	     (nf_zeta p)::bindings,id::avoid)
+             (Reductionops.nf_zeta (pf_env g) (project g) p)::bindings,id::avoid)
 	  ([],avoid)
 	  princ_infos.predicates
 	  (lemmas)))
@@ -435,7 +430,7 @@ let generalize_dependent_of x hyp g =
   let open Context.Named.Declaration in
   tclMAP
     (function
-       | LocalAssum (id,t) when not (Id.equal id hyp) &&
+       | LocalAssum ({binder_name=id},t) when not (Id.equal id hyp) &&
 	   (Termops.occur_var (pf_env g) (project g) x t) -> tclTHEN (Proofview.V82.of_tactic (Tactics.generalize [mkVar id])) (thin [id])
        | _ -> tclIDTAC
     )
@@ -462,7 +457,7 @@ and intros_with_rewrite_aux : Tacmach.tactic =
     let eq_ind = make_eq () in
     let sigma = project g in
     match EConstr.kind sigma (pf_concl g) with
-	  | Prod(_,t,t') ->
+          | Prod(_,t,t') ->
 	      begin
 		match EConstr.kind sigma t with
 		  | App(eq,args) when (EConstr.eq_constr sigma eq eq_ind)  ->
@@ -511,7 +506,7 @@ and intros_with_rewrite_aux : Tacmach.tactic =
 			    intros_with_rewrite
 			  ] g
 			end
-                  | Ind _ when EConstr.eq_constr sigma t (EConstr.of_constr (UnivGen.constr_of_global @@ Coqlib.lib_ref "core.False.type")) ->
+                  | Ind _ when EConstr.eq_constr sigma t (EConstr.of_constr (UnivGen.constr_of_monomorphic_global @@ Coqlib.lib_ref "core.False.type")) ->
 		      Proofview.V82.of_tactic tauto g
 		  | Case(_,_,v,_) ->
 		      tclTHENLIST[
@@ -630,12 +625,12 @@ let prove_fun_complete funcs graphs schemes lemmas_types_infos i : Tacmach.tacti
     *)
     let lemmas =
       Array.map
-	(fun (_,(ctxt,concl)) -> nf_zeta (EConstr.it_mkLambda_or_LetIn concl ctxt))
+        (fun (_,(ctxt,concl)) -> Reductionops.nf_zeta (pf_env g) (project g) (EConstr.it_mkLambda_or_LetIn concl ctxt))
 	lemmas_types_infos
     in
     (* We get the constant and the principle corresponding to this lemma *)
     let f = funcs.(i) in
-    let graph_principle = nf_zeta (EConstr.of_constr schemes.(i))  in
+    let graph_principle = Reductionops.nf_zeta (pf_env g) (project g) (EConstr.of_constr schemes.(i))  in
     let princ_type = pf_unsafe_type_of g graph_principle in
     let princ_infos = Tactics.compute_elim_sig (project g) princ_type in
     (* Then we get the number of argument of the function
@@ -771,7 +766,7 @@ let derive_correctness make_scheme (funs: pconstant list) (graphs:inductive list
 	 let type_of_lemma = EConstr.it_mkProd_or_LetIn type_of_lemma_concl type_of_lemma_ctxt in
          let sigma, _ = Typing.type_of (Global.env ()) !evd type_of_lemma in
          evd := sigma;
-	   let type_of_lemma = nf_zeta type_of_lemma in
+           let type_of_lemma = Reductionops.nf_zeta (Global.env ()) !evd type_of_lemma in
 	   observe (str "type_of_lemma := " ++ Printer.pr_leconstr_env (Global.env ()) !evd type_of_lemma);
 	   type_of_lemma,type_info
 	)
@@ -807,17 +802,16 @@ let derive_correctness make_scheme (funs: pconstant list) (graphs:inductive list
 	     Ensures by: obvious
 	 i*)
 	 let lem_id = mk_correct_id f_id in
-	 let (typ,_) = lemmas_types_infos.(i) in 
-	 Lemmas.start_proof
+         let (typ,_) = lemmas_types_infos.(i) in
+         let pstate = Lemmas.start_proof ~ontop:None
 	   lem_id
-	   (Decl_kinds.Global,Flags.is_universe_polymorphism (),((Decl_kinds.Proof Decl_kinds.Theorem)))
+           (Decl_kinds.Global,false,((Decl_kinds.Proof Decl_kinds.Theorem)))
            !evd
-	   typ
-           (Lemmas.mk_hook (fun _ _ -> ()));
-	 ignore (Pfedit.by
+           typ in
+         let pstate = fst @@ Pfedit.by
 		   (Proofview.V82.tactic (observe_tac ("prove correctness ("^(Id.to_string f_id)^")")
-						      (proving_tac i))));
-         (Lemmas.save_proof (Vernacexpr.(Proved(Proof_global.Transparent,None))));
+                                                      (proving_tac i))) pstate in
+         let _ = Lemmas.save_proof_proved ?proof:None ~pstate ~opaque:Proof_global.Transparent ~idopt:None in
 	 let finfo = find_Function_infos (fst f_as_constant) in
 	 (* let lem_cst = fst (destConst (Constrintern.global_reference lem_id)) in *)
 	 let _,lem_cst_constr = Evd.fresh_global
@@ -838,7 +832,7 @@ let derive_correctness make_scheme (funs: pconstant list) (graphs:inductive list
 	 let type_of_lemma =
 	   EConstr.it_mkProd_or_LetIn type_of_lemma_concl type_of_lemma_ctxt
 	 in
-	 let type_of_lemma = nf_zeta type_of_lemma in
+         let type_of_lemma = Reductionops.nf_zeta env !evd type_of_lemma in
          observe (str "type_of_lemma := " ++ Printer.pr_leconstr_env env !evd type_of_lemma);
 	 type_of_lemma,type_info
 	)
@@ -871,14 +865,13 @@ let derive_correctness make_scheme (funs: pconstant list) (graphs:inductive list
 	     Ensures by: obvious
 	   i*)
 	 let lem_id = mk_complete_id f_id in
-	 Lemmas.start_proof lem_id
-	   (Decl_kinds.Global,Flags.is_universe_polymorphism (),(Decl_kinds.Proof Decl_kinds.Theorem)) sigma
-	 (fst lemmas_types_infos.(i))
-           (Lemmas.mk_hook (fun _ _ -> ()));
-	 ignore (Pfedit.by
+         let pstate = Lemmas.start_proof ~ontop:None lem_id
+           (Decl_kinds.Global,false,(Decl_kinds.Proof Decl_kinds.Theorem)) sigma
+         (fst lemmas_types_infos.(i)) in
+         let pstate = fst (Pfedit.by
 	   (Proofview.V82.tactic (observe_tac ("prove completeness ("^(Id.to_string f_id)^")")
-	      (proving_tac i)))) ;
-         (Lemmas.save_proof (Vernacexpr.(Proved(Proof_global.Transparent,None))));
+              (proving_tac i))) pstate) in
+         let _pstate = Lemmas.save_proof_proved ?proof:None ~pstate ~opaque:Proof_global.Transparent ~idopt:None in
 	 let finfo = find_Function_infos (fst f_as_constant) in
 	 let _,lem_cst_constr = Evd.fresh_global
 				  (Global.env ()) !evd (Constrintern.locate_reference (Libnames.qualid_of_ident lem_id)) in

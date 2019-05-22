@@ -181,7 +181,14 @@ presented as a notebook.
 The first section is for selecting the text font used for scripts,
 goal and message windows.
 
-The second section is devoted to file management: you may configure
+The second and third sections are for controlling colors and style.
+
+The fourth section is for customizing the editor. It includes in
+particular the ability to activate an Emacs mode named
+micro-Proof-General (use the Help menu to know more about the
+available bindings).
+
+The next section is devoted to file management: you may configure
 automatic saving of files, by periodically saving the contents into
 files named `#f#` for each opened file `f`. You may also activate the
 *revert* feature: in case a opened file is modified on the disk by a
@@ -218,11 +225,12 @@ Using Unicode symbols
 
 |CoqIDE| is based on GTK+ and inherits from it support for Unicode in
 its text windows. Consequently a large set of symbols is available for
-notations.
+notations. Furthermore, |CoqIDE| conveniently provides a simple way to
+input Unicode characters.
 
 
 Displaying Unicode symbols
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 You just need to define suitable notations as described in the chapter
 :ref:`syntaxextensionsandinterpretationscopes`. For example, to use the
@@ -230,10 +238,12 @@ mathematical symbols ∀ and ∃, you may define:
 
 .. coqtop:: in
 
-  Notation "∀ x : T, P" :=
-  (forall x : T, P) (at level 200, x ident).
-  Notation "∃ x : T, P" :=
-  (exists x : T, P) (at level 200, x ident).
+   Notation "∀ x .. y , P" := (forall x, .. (forall y, P) ..)
+     (at level 200, x binder, y binder, right associativity)
+     : type_scope.
+   Notation "∃ x .. y , P" := (exists x, .. (exists y, P) ..)
+     (at level 200, x binder, y binder, right associativity)
+     : type_scope.
 
 There exists a small set of such notations already defined, in the
 file `utf8.v` of Coq library, so you may enable them just by
@@ -249,38 +259,81 @@ use antialiased fonts or not, by setting the environment variable
 `GDK_USE_XFT` to 1 or 0 respectively.
 
 
-Defining an input method for non-ASCII symbols
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. _coqide-unicode:
 
-To input a Unicode symbol, a general method provided by GTK+ is to
-simultaneously press the Control, Shift and “u” keys, release, then
-type the hexadecimal code of the symbol required, for example `2200`
-for the ∀ symbol. A list of symbol codes is available at
-`http://www.unicode.org`.
+Bindings for input of Unicode symbols
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An alternative method which does not require to know the hexadecimal
-code of the character is to use an Input Method Editor. On POSIX
-systems (Linux distributions, BSD variants and MacOS X), you can
-use `uim` version 1.6 or later which provides a LaTeX-style input
-method.
+CoqIDE supports a builtin mechanism to input non-ASCII symbols.
+For example, to input ``π``, it suffices to type ``\pi`` then press the
+combination of key ``Shift+Space`` (default key binding). Often, it
+suffices to type a prefix of the latex token, e.g. typing ``\p``
+then ``Shift+Space`` suffices to insert a ``π``.
 
-To configure uim, execute uim-pref-gtk as your regular user. In the
-"Global Settings" group set the default Input Method to "ELatin"
-(don’t forget to tick the checkbox "Specify default IM"). In the
-"ELatin" group set the layout to "TeX", and remember the content of
-the "[ELatin] on" field (by default Control-\\). You can now execute
-|CoqIDE| with the following commands (assuming you use a Bourne-style
-shell):
+For several symbols, ASCII art is also recognized, e.g. ``\->`` for a
+right arrow, or ``\>=`` for a greater than or equal sign.
 
-::
+A larger number of latex tokens are supported by default. The full list
+is available here:
+https://github.com/coq/coq/blob/master/ide/default_bindings_src.ml
 
-    $ export GTK_IM_MODULE=uim
-    $ coqide
+Custom bindings may be added, as explained further on.
+
+.. note::
+
+    It remains possible to input non-ASCII symbols using system-wide
+    approaches independent of |CoqIDE|.
 
 
-Activate the ELatin Input Method with Control-\\, then type the
-sequence `\\Gamma`. You will see the sequence being replaced by Γ as
-soon as you type the second "a".
+Adding custom bindings
+~~~~~~~~~~~~~~~~~~~~~~
+
+To extend the default set of bindings, create a file named ``coqide.bindings``
+and place it in the same folder as ``coqide.keys``. On Linux, this would be
+the folder ``~/.config/coq``. The file `coqide.bindings` should contain one
+binding per line, in the form ``\key value``, followed by an optional priority
+integer. (The key and value should not contain any space character.)
+
+.. example::
+
+   Here is an example configuration file:
+
+   ::
+
+     \par ||
+     \pi π 1
+     \le ≤ 1
+     \lambda λ 2
+     \lambdas λs
+
+Above, the priority number 1 on ``\pi`` indicates that the prefix ``\p``
+should resolve to ``\pi``, and not to something else (e.g. ``\par``).
+Similarly, the above settings ensure than ``\l`` resolves to ``\le``,
+and that ``\la`` resolves to ``\lambda``.
+
+It can be useful to work with per-project binding files. For this purpose
+|CoqIDE| accepts a command line argument of the form
+``-unicode-bindings file1,file2,...,fileN``.
+Each of the file tokens provided may consists of one of:
+
+ -  a path to a custom bindings file,
+ -  the token ``default``, which resolves to the default bindings file,
+ -  the token ``local``, which resolves to the `coqide.bindings` file
+    stored in the user configuration directory.
+
+.. warning::
+
+   If a filename other than the first one includes a "~" to refer
+   to the home directory, it won't be expanded properly. To work around that
+   issue, one should not use comas but instead repeat the flag, in the form:
+   ``-unicode-bindings file1 .. -unicode-bindings fileN``.
+
+.. note::
+
+   If two bindings for a same token both have the same priority value
+   (or both have no priority value set), then the binding considered is
+   the one from the file that comes first on the command line.
+
 
 .. _character-encoding-saved-files:
 

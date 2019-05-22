@@ -29,6 +29,7 @@ val string : ?editable: bool -> ?expand: bool -> ?help: string ->
   ?f: (string -> unit) -> string -> string -> parameter_kind
 val bool : ?editable: bool -> ?help: string ->
   ?f: (bool -> unit) -> string -> bool -> parameter_kind
+(*
 val strings : ?editable: bool -> ?help: string ->
   ?f: (string list -> unit) ->
     ?eq: (string -> string -> bool) ->
@@ -45,6 +46,7 @@ val list : ?editable: bool -> ?help: string ->
                 ('a -> string list) ->
                   'a list ->
                     parameter_kind
+*)
 val combo : ?editable: bool -> ?expand: bool -> ?help: string ->
   ?f: (string -> unit) ->
     ?new_allowed: bool -> ?blank_allowed: bool ->
@@ -60,7 +62,17 @@ val edit :
   ?with_apply:bool ->
   ?apply:(unit -> unit) ->
   string ->
+  ?parent:GWindow.window ->
   ?width:int ->
   ?height:int ->
   configuration_structure list ->
   return_button
+
+val question_box : title:string ->
+  buttons:string list ->
+  ?default:int -> ?icon:#GObj.widget ->
+  ?parent:GWindow.window -> string -> int
+
+val message_box :
+  title:string -> ?icon:#GObj.widget ->
+  ?parent:GWindow.window -> ?ok:string -> string -> unit

@@ -13,7 +13,7 @@ open CErrors
 open Util
 open Names
 
-let chk_pp = Pp.pp_with Format.std_formatter
+let chk_pp = Feedback.msg_notice
 
 let pr_dirpath dp = str (DirPath.to_string dp)
 let default_root_prefix = DirPath.empty
@@ -48,13 +48,17 @@ let pr_path sp =
 (*s Modules loaded in memory contain the following informations. They are
     kept in the global table [libraries_table]. *)
 
+type compilation_unit_name = DirPath.t
+
+type seg_proofs = Constr.constr Future.computation array
+
 type library_t = {
-  library_name : Cic.compilation_unit_name;
+  library_name : compilation_unit_name;
   library_filename : CUnix.physical_path;
-  library_compiled : Cic.compiled_library;
-  library_opaques : Cic.opaque_table;
-  library_deps : Cic.library_deps;
-  library_digest : Cic.vodigest;
+  library_compiled : Safe_typing.compiled_library;
+  library_opaques : seg_proofs option;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  library_digest : Safe_typing.vodigest;
   library_extra_univs : Univ.ContextSet.t }
 
 module LibraryOrdered =
@@ -94,35 +98,36 @@ let access_opaque_table dp i =
     with Not_found -> assert false
   in
   assert (i < Array.length t);
-  Future.force t.(i)
+  t.(i)
 
 let access_opaque_univ_table dp i =
   try
     let t = LibraryMap.find dp !opaque_univ_tables in
     assert (i < Array.length t);
-    Future.force t.(i)
-  with Not_found -> Univ.ContextSet.empty
+    Some t.(i)
+  with Not_found -> None
 
+let () =
+  Opaqueproof.set_indirect_opaque_accessor access_opaque_table;
+  Opaqueproof.set_indirect_univ_accessor access_opaque_univ_table
 
-let _ = Declarations.indirect_opaque_access := access_opaque_table
-let _ = Declarations.indirect_opaque_univ_access := access_opaque_univ_table
-
-let check_one_lib admit (dir,m) =
-  let file = m.library_filename in
+let check_one_lib admit senv (dir,m) =
   let md = m.library_compiled in
   let dig = m.library_digest in
   (* Look up if the library is to be admitted correct. We could
      also check if it carries a validation certificate (yet to
      be implemented). *)
-  if LibrarySet.mem dir admit then
-    (Flags.if_verbose Feedback.msg_notice
-      (str "Admitting library: " ++ pr_dirpath dir);
-      Safe_typing.unsafe_import file md m.library_extra_univs dig)
-  else
-    (Flags.if_verbose Feedback.msg_notice
-      (str "Checking library: " ++ pr_dirpath dir);
-      Safe_typing.import file md m.library_extra_univs dig);
-  register_loaded_library m
+  let senv =
+    if LibrarySet.mem dir admit then
+      (Flags.if_verbose Feedback.msg_notice
+         (str "Admitting library: " ++ pr_dirpath dir);
+       Safe_checking.unsafe_import senv md m.library_extra_univs dig)
+    else
+      (Flags.if_verbose Feedback.msg_notice
+         (str "Checking library: " ++ pr_dirpath dir);
+       Safe_checking.import senv md m.library_extra_univs dig)
+  in
+    register_loaded_library m; senv
 
 (*************************************************************************)
 (*s Load path. Mapping from physical to logical paths etc.*)
@@ -131,36 +136,9 @@ type logical_path = DirPath.t
 
 let load_paths = ref ([],[] : CUnix.physical_path list * logical_path list)
 
-(* Hints to partially detects if two paths refer to the same repertory *)
-let rec remove_path_dot p =
-  let curdir = Filename.concat Filename.current_dir_name "" in (* Unix: "./" *)
-  let n = String.length curdir in
-  if String.length p > n && String.sub p 0 n = curdir then
-    remove_path_dot (String.sub p n (String.length p - n))
-  else
-    p
-
-let strip_path p =
-  let cwd = Filename.concat (Sys.getcwd ()) "" in (* Unix: "`pwd`/" *)
-  let n = String.length cwd in
-  if String.length p > n && String.sub p 0 n = cwd then
-    remove_path_dot (String.sub p n (String.length p - n))
-  else
-    remove_path_dot p
-
-let canonical_path_name p =
-  let current = Sys.getcwd () in
-  try
-    Sys.chdir p;
-    let p' = Sys.getcwd () in
-    Sys.chdir current;
-    p'
-  with Sys_error _ ->
-    (* We give up to find a canonical name and just simplify it... *)
-    strip_path p
 
 let find_logical_path phys_dir =
-  let phys_dir = canonical_path_name phys_dir in
+  let phys_dir = CUnix.canonical_path_name phys_dir in
   let physical, logical = !load_paths in
   match List.filter2 (fun p d -> p = phys_dir) physical logical with
   | _,[dir] -> dir
@@ -175,14 +153,14 @@ let add_load_path (phys_path,coq_path) =
   if !Flags.debug then
     Feedback.msg_notice (str "path: " ++ pr_dirpath coq_path ++ str " ->" ++ spc() ++
            str phys_path);
-  let phys_path = canonical_path_name phys_path in
+  let phys_path = CUnix.canonical_path_name phys_path in
   let physical, logical = !load_paths in
     match List.filter2 (fun p d -> p = phys_path) physical logical with
       | _,[dir] ->
 	  if coq_path <> dir
             (* If this is not the default -I . to coqtop *)
             && not
-            (phys_path = canonical_path_name Filename.current_dir_name
+            (phys_path = CUnix.canonical_path_name Filename.current_dir_name
 		&& coq_path = default_root_prefix)
 	  then
 	    begin
@@ -284,7 +262,21 @@ let raw_intern_library f =
 (************************************************************************)
 (* Internalise libraries *)
 
-open Cic
+type summary_disk = {
+  md_name : compilation_unit_name;
+  md_imports : compilation_unit_name array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+}
+
+module Dyn = Dyn.Make ()
+type obj = Dyn.t (* persistent dynamic objects *)
+type lib_objects = (Id.t * obj) list
+type library_objects = lib_objects * lib_objects
+
+type library_disk = {
+  md_compiled : Safe_typing.compiled_library;
+  md_objects : library_objects;
+}
 
 let mk_library sd md f table digest cst = {
   library_name = sd.md_name;
@@ -300,6 +292,8 @@ let name_clash_message dir mdir f =
   pr_dirpath mdir ++ spc () ++ str "and not library" ++ spc() ++
   pr_dirpath dir
 
+type intern_mode = Rec | Root | Dep (* Rec = standard, Root = -norec, Dep = dependency of norec *)
+
 (* Dependency graph *)
 let depgraph = ref LibraryMap.empty
 
@@ -312,18 +306,40 @@ let marshal_in_segment f ch =
   with _ ->
     user_err (str "Corrupted file " ++ quote (str f))
 
-let intern_from_file (dir, f) =
+let skip_in_segment f ch =
+  try
+    let stop = (input_binary_int ch : int) in
+    seek_in ch stop;
+    let digest = Digest.input ch in
+    stop, digest
+  with _ ->
+    user_err (str "Corrupted file " ++ quote (str f))
+
+let marshal_or_skip ~intern_mode f ch =
+  if intern_mode <> Dep then
+    let v, pos, digest = marshal_in_segment f ch in
+    Some v, pos, digest
+  else
+    let pos, digest = skip_in_segment f ch in
+    None, pos, digest
+
+let intern_from_file ~intern_mode (dir, f) =
+  let validate a b c = if intern_mode <> Dep then Validate.validate a b c in
   Flags.if_verbose chk_pp (str"[intern "++str f++str" ...");
   let (sd,md,table,opaque_csts,digest) =
     try
+      let marshal_in_segment f ch = if intern_mode <> Dep
+        then marshal_in_segment f ch
+        else System.marshal_in_segment f ch
+      in
       let ch = System.with_magic_number_check raw_intern_library f in
-      let (sd:Cic.summary_disk), _, digest = marshal_in_segment f ch in
-      let (md:Cic.library_disk), _, digest = marshal_in_segment f ch in
+      let (sd:summary_disk), _, digest = marshal_in_segment f ch in
+      let (md:library_disk), _, digest = marshal_in_segment f ch in
       let (opaque_csts:'a option), _, udg = marshal_in_segment f ch in
       let (discharging:'a option), _, _ = marshal_in_segment f ch in
       let (tasks:'a option), _, _ = marshal_in_segment f ch in
-      let (table:Cic.opaque_table), pos, checksum =
-        marshal_in_segment f ch in
+      let (table:seg_proofs option), pos, checksum =
+        marshal_or_skip ~intern_mode f ch in
       (* Verification of the final checksum *)
       let () = close_in ch in
       let ch = open_in_bin f in
@@ -337,25 +353,25 @@ let intern_from_file (dir, f) =
         user_err ~hdr:"intern_from_file"
           (str "The file "++str f++str " contains unfinished tasks");
       if opaque_csts <> None then begin
-       chk_pp (str " (was a vio file) ");
+       Flags.if_verbose chk_pp (str " (was a vio file) ");
       Option.iter (fun (_,_,b) -> if not b then
         user_err ~hdr:"intern_from_file"
           (str "The file "++str f++str " is still a .vio"))
         opaque_csts;
-      Validate.validate !Flags.debug Values.v_univopaques opaque_csts;
+      validate !Flags.debug Values.v_univopaques opaque_csts;
       end;
       (* Verification of the unmarshalled values *)
-      Validate.validate !Flags.debug Values.v_libsum sd;
-      Validate.validate !Flags.debug Values.v_lib md;
-      Validate.validate !Flags.debug Values.v_opaques table;
+      validate !Flags.debug Values.v_libsum sd;
+      validate !Flags.debug Values.v_lib md;
+      validate !Flags.debug Values.(Opt v_opaques) table;
       Flags.if_verbose chk_pp (str" done]" ++ fnl ());
       let digest =
-        if opaque_csts <> None then Cic.Dviovo (digest,udg)
-        else (Cic.Dvo digest) in
+        if opaque_csts <> None then Safe_typing.Dvivo (digest,udg)
+        else (Safe_typing.Dvo_or_vi digest) in
       sd,md,table,opaque_csts,digest
     with e -> Flags.if_verbose chk_pp (str" failed!]" ++ fnl ()); raise e in
   depgraph := LibraryMap.add sd.md_name sd.md_deps !depgraph;
-  opaque_tables := LibraryMap.add sd.md_name table !opaque_tables;
+  Option.iter (fun table -> opaque_tables := LibraryMap.add sd.md_name table !opaque_tables) table;
   Option.iter (fun (opaque_csts,_,_) ->
     opaque_univ_tables :=
       LibraryMap.add sd.md_name opaque_csts !opaque_univ_tables)
@@ -373,7 +389,7 @@ let get_deps (dir, f) =
 
 (* Read a compiled library and all dependencies, in reverse order.
    Do not include files that are already in the context. *)
-let rec intern_library seen (dir, f) needed =
+let rec intern_library ~intern_mode seen (dir, f) needed =
   if LibrarySet.mem dir seen then failwith "Recursive dependencies!";
   (* Look if in the current logical environment *)
   try let _ = find_library dir in needed
@@ -382,12 +398,13 @@ let rec intern_library seen (dir, f) needed =
   if List.mem_assoc_f DirPath.equal dir needed then needed
   else
     (* [dir] is an absolute name which matches [f] which must be in loadpath *)
-    let m = intern_from_file (dir,f) in
+    let m = intern_from_file ~intern_mode (dir,f) in
     let seen' = LibrarySet.add dir seen in
     let deps =
       Array.map (fun (d,_) -> try_locate_absolute_library d) m.library_deps
     in
-    (dir,m) :: Array.fold_right (intern_library seen') deps needed
+    let intern_mode = match intern_mode with Rec -> Rec | Root | Dep -> Dep in
+    (dir,m) :: Array.fold_right (intern_library ~intern_mode seen') deps needed
 
 (* Compute the reflexive transitive dependency closure *)
 let rec fold_deps seen ff (dir,f) (s,acc) =
@@ -406,12 +423,13 @@ and fold_deps_list seen ff modl needed =
 let fold_deps_list ff modl acc =
   snd (fold_deps_list LibrarySet.empty ff modl (LibrarySet.empty,acc))
 
-let recheck_library ~norec ~admit ~check =
+let recheck_library senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
   let al =  List.map try_locate_qualified_library admit in
-  let needed = List.rev
-    (List.fold_right (intern_library LibrarySet.empty) (ml@nrl) []) in
+  let needed = List.fold_right (intern_library ~intern_mode:Rec LibrarySet.empty) ml [] in
+  let needed = List.fold_right (intern_library ~intern_mode:Root LibrarySet.empty) nrl needed in
+  let needed = List.rev needed in
   (* first compute the closure of norec, remove closure of check,
      add closure of admit, and finally remove norec and check *)
   let nochk = fold_deps_list LibrarySet.add nrl LibrarySet.empty in
@@ -424,5 +442,6 @@ let recheck_library ~norec ~admit ~check =
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
-  List.iter (check_one_lib nochk) needed;
-  Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked")
+  let senv = List.fold_left (check_one_lib nochk) senv needed in
+  Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
+  senv

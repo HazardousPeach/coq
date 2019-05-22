@@ -31,7 +31,13 @@ DVIPS:=dvips
 HTMLSTYLE:=coqremote
 
 # Sphinx-related variables
-SPHINXENV:=COQBIN="$(CURDIR)/bin/"
+OSNAME:=$(shell uname -s)
+ifeq ($(findstring CYGWIN,$(OSNAME)),CYGWIN)
+WIN_CURDIR:=$(shell cygpath -w $(CURDIR))
+SPHINXENV:=COQBIN="$(CURDIR)/bin/" COQLIB="$(WIN_CURDIR)"
+else
+SPHINXENV:=COQBIN="$(CURDIR)/bin/" COQLIB="$(CURDIR)"
+endif
 SPHINXOPTS= -j4
 SPHINXWARNERROR ?= 1
 ifeq ($(SPHINXWARNERROR),1)
@@ -54,12 +60,13 @@ DOCCOMMON:=doc/common/version.tex doc/common/title.tex doc/common/macros.tex
 
 doc: refman stdlib
 
+SPHINX_DEPS ?=
 ifndef QUICK
 SPHINX_DEPS := coq
 endif
 
 # refman-html and refman-latex
-refman-%: $(SPHINX_DEPS)
+refman-%: $(SPHINX_DEPS) doc/unreleased.rst
 	$(SHOW)'SPHINXBUILD doc/sphinx ($*)'
 	$(HIDE)$(SPHINXENV) $(SPHINXBUILD) -b $* \
 		$(ALLSPHINXOPTS) doc/sphinx $(SPHINXBUILDDIR)/$*
@@ -89,6 +96,10 @@ stdlib: \
 full-stdlib: \
   doc/stdlib/html/index.html doc/stdlib/FullLibrary.ps doc/stdlib/FullLibrary.pdf
 
+.PHONY: plugin-tutorial
+plugin-tutorial: states tools
+	+$(MAKE) COQBIN=$(PWD)/bin/ -C $(PLUGINTUTO)
+
 ######################################################################
 ### Implicit rules
 ######################################################################
@@ -104,6 +115,12 @@ full-stdlib: \
 
 doc/common/version.tex: config/Makefile
 	printf '\\newcommand{\\coqversion}{$(VERSION)}' > doc/common/version.tex
+
+### Changelog
+
+doc/unreleased.rst: $(wildcard doc/changelog/00-title.rst doc/changelog/*/*.rst)
+	$(SHOW)'AGGREGATE $@'
+	$(HIDE)cat doc/changelog/00-title.rst doc/changelog/*/*.rst > $@
 
 ######################################################################
 # Standard library
@@ -137,7 +154,7 @@ else
 doc/stdlib/Library.coqdoc.tex: | $(COQDOC) $(THEORIESLIGHTVO)
 endif
 	$(COQDOC) -q -boot --gallina --body-only --latex --stdout \
-            -R theories Coq $(THEORIESLIGHTVO:.vo=.v) >> $@
+            -R theories Coq $(THEORIESLIGHTVO:.$(VO)=.v) >> $@
 
 doc/stdlib/Library.dvi: $(DOCCOMMON) doc/stdlib/Library.coqdoc.tex doc/stdlib/Library.tex
 	(cd doc/stdlib;\
@@ -204,10 +221,11 @@ install-doc-printable:
 
 install-doc-sphinx:
 	$(MKDIR) $(FULLDOCDIR)/sphinx
-	(for f in `cd doc/sphinx/_build; find . -type f`; do \
-		$(MKDIR) $$(dirname $(FULLDOCDIR)/sphinx/$$f);\
-		$(INSTALLLIB) doc/sphinx/_build/$$f $(FULLDOCDIR)/sphinx/$$f;\
-	done)
+	(for d in html latex; do \
+	for f in `cd doc/sphinx/_build/$$d && find . -type f`; do \
+		$(MKDIR) $$(dirname $(FULLDOCDIR)/sphinx/$$d/$$f);\
+		$(INSTALLLIB) doc/sphinx/_build/$$d/$$f $(FULLDOCDIR)/sphinx/$$d/$$f;\
+	done; done)
 
 # For emacs:
 # Local Variables:

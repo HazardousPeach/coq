@@ -157,14 +157,24 @@ compatible with the rest of |Coq|, up to a few discrepancies:
   (see :ref:`pattern_conditional_ssr`).  To use the
   generalized form, turn off the |SSR| Boolean ``if`` notation using the command:
   ``Close Scope boolean_if_scope``.
-+ The following two options can be unset to disable the incompatible
-  rewrite syntax and allow reserved identifiers to appear in scripts.
++ The following flags can be unset to make |SSR| more compatible with
+  parts of Coq:
 
-  .. coqtop:: in
+.. flag:: SsrRewrite
 
-     Unset SsrRewrite.
-     Unset SsrIdents.
+   Controls whether the incompatible rewrite syntax is enabled (the default).
+   Disabling the flag makes the syntax compatible with other parts of Coq.
 
+.. flag:: SsrIdents
+
+   Controls whether tactics can refer to |SSR|-generated variables that are
+   in the form _xxx_.  Scripts with explicit references to such variables
+   are fragile; they are prone to failure if the proof is later modified or
+   if the details of variable name generation change in future releases of Coq.
+
+   The default is on, which gives an error message when the user tries to
+   create such identifiers.  Disabling the flag generates a warning instead,
+   increasing compatibility with other parts of Coq.
 
 |Gallina| extensions
 --------------------
@@ -205,7 +215,7 @@ construct differs from the latter in that
 
   .. example::
 
-    .. coqtop:: reset
+    .. coqtop:: reset none
 
        From Coq Require Import ssreflect.
        Set Implicit Arguments.
@@ -223,7 +233,7 @@ construct differs from the latter in that
 
     .. coqtop:: reset all
 
-       Definition f u := let (m, n) := u in m + n.
+       Fail Definition f u := let (m, n) := u in m + n.
 
 
 The ``let:`` construct is just (more legible) notation for the primitive
@@ -265,7 +275,7 @@ example, the null and all list function(al)s can be defined as follows:
 
 .. example::
 
-    .. coqtop:: reset
+    .. coqtop:: reset none
 
        From Coq Require Import ssreflect.
        Set Implicit Arguments.
@@ -366,7 +376,7 @@ expressions such as
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -391,7 +401,7 @@ each point of use, e.g., the above definition can be written:
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -403,35 +413,34 @@ each point of use, e.g., the above definition can be written:
      Variable all : (T -> bool) -> list T -> bool.
 
 
-  .. coqtop:: all undo
+  .. coqtop:: all
 
      Prenex Implicits null.
      Definition all_null (s : list T) := all null s.
 
-Better yet, it can be omitted entirely, since ``all_null s`` isn’t much of
-an improvement over ``all null s``.
+Better yet, it can be omitted entirely, since :g:`all_null s` isn’t much of
+an improvement over :g:`all null s`.
 
 The syntax of the new declaration is
 
-.. cmd:: Prenex Implicits {+ @ident}
+.. cmd:: Prenex Implicits {+ @ident__i}
 
-Let us denote :math:`c_1` … :math:`c_n` the list of identifiers given to a
-``Prenex Implicits`` command.  The command checks that each ci is the name of
-a functional constant, whose implicit arguments are prenex, i.e., the first
-:math:`n_i > 0` arguments of :math:`c_i` are implicit; then it assigns
-``Maximal Implicit`` status to these arguments.
+   This command checks that each :n:`@ident__i` is the name of a functional
+   constant, whose implicit arguments are prenex, i.e., the first
+   :math:`n_i > 0` arguments of :n:`@ident__i` are implicit; then it assigns
+   ``Maximal Implicit`` status to these arguments.
 
-As these prenex implicit arguments are ubiquitous and have often large
-display strings, it is strongly recommended to change the default
-display settings of |Coq| so that they are not printed (except after
-a ``Set Printing All`` command). All |SSR| library files thus start
-with the incantation
+   As these prenex implicit arguments are ubiquitous and have often large
+   display strings, it is strongly recommended to change the default
+   display settings of |Coq| so that they are not printed (except after
+   a ``Set Printing All`` command). All |SSR| library files thus start
+   with the incantation
 
-.. coqtop:: all undo
+   .. coqdoc::
 
-   Set Implicit Arguments.
-   Unset Strict Implicit.
-   Unset Printing Implicit Defensive.
+      Set Implicit Arguments.
+      Unset Strict Implicit.
+      Unset Printing Implicit Defensive.
 
 
 Anonymous arguments
@@ -455,7 +464,7 @@ defined by the following declaration:
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -496,7 +505,7 @@ Definitions
    |SSR| pose tactic supports *open syntax*: the body of the
    definition does not need surrounding parentheses. For instance:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose t := x + y.
 
@@ -509,7 +518,7 @@ For example, the tactic :tacn:`pose <pose (ssreflect)>` supoprts parameters:
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -525,7 +534,7 @@ The |SSR| pose tactic also supports (co)fixpoints, by providing
 the local counterpart of the ``Fixpoint f := …`` and ``CoFixpoint f := …``
 constructs. For instance, the following tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose fix f (x y : nat) {struct x} : nat :=
      if x is S p then S (f p y) else 0.
@@ -535,7 +544,7 @@ on natural numbers.
 
 Similarly, local cofixpoints can be defined by a tactic of the form:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose cofix f (arg : T) := … .
 
@@ -544,26 +553,26 @@ offers a smooth way of defining local abstractions. The type of
 “holes” is guessed by type inference, and the holes are abstracted.
 For instance the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f := _ + 1.
 
 is shorthand for:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f n := n + 1.
 
 When the local definition of a function involves both arguments and
 holes, hole abstractions appear first. For instance, the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f x := x + _.
 
 is shorthand for:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f n x := x + n.
 
@@ -571,13 +580,13 @@ The interaction of the pose tactic with the interpretation of implicit
 arguments results in a powerful and concise syntax for local
 definitions involving dependent types. For instance, the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f x y := (x, y).
 
 adds to the context the local definition:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose f (Tx Ty : Type) (x : Tx) (y : Ty) := (x, y).
 
@@ -591,28 +600,24 @@ resemble ML-like definitions of polymorphic functions.
 Abbreviations
 ~~~~~~~~~~~~~
 
-The |SSR| set tactic performs abbreviations: it introduces a
-defined constant for a subterm appearing in the goal and/or in the
-context.
-
-|SSR| extends the set tactic by supplying:
-
-
-+ an open syntax, similarly to the pose tactic;
-+ a more aggressive matching algorithm;
-+ an improved interpretation of wildcards, taking advantage of the
-  matching algorithm;
-+ an improved occurrence selection mechanism allowing to abstract only
-  selected occurrences of a term.
-
-
-The general syntax of this tactic is
-
 .. tacn:: set @ident {? : @term } := {? @occ_switch } @term
    :name: set (ssreflect)
 
+   The |SSR| ``set`` tactic performs abbreviations: it introduces a
+   defined constant for a subterm appearing in the goal and/or in the
+   context.
+
+   |SSR| extends the :tacn:`set` tactic by supplying:
+
+   + an open syntax, similarly to the :tacn:`pose (ssreflect)` tactic;
+   + a more aggressive matching algorithm;
+   + an improved interpretation of wildcards, taking advantage of the
+     matching algorithm;
+   + an improved occurrence selection mechanism allowing to abstract only
+     selected occurrences of a term.
+
 .. prodn::
-   occ_switch ::= { {? + %| - } {* @num } }
+   occ_switch ::= { {? {| + | - } } {* @num } }
 
 where:
 
@@ -634,7 +639,7 @@ The tactic:
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -647,11 +652,7 @@ The tactic:
       Lemma test x :  f x + f x = f x.
       set t := f _.
 
-   .. coqtop:: none
-
-      Undo.
-
-   .. coqtop:: all
+   .. coqtop:: all restart
 
       set t := {2}(f _).
 
@@ -689,7 +690,7 @@ conditions:
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -710,7 +711,7 @@ conditions:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -731,7 +732,7 @@ Moreover:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -751,7 +752,7 @@ Moreover:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -761,7 +762,7 @@ Moreover:
      .. coqtop:: all
 
         Lemma test : forall x : nat, x + 1 = 0.
-        set t := _ + 1.
+        Fail set t := _ + 1.
 
 + Typeclass inference should fill in any residual hole, but matching
   should never assign a value to a global existential variable.
@@ -784,7 +785,7 @@ An *occurrence switch* can be:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -805,7 +806,7 @@ An *occurrence switch* can be:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -826,7 +827,7 @@ An *occurrence switch* can be:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -857,7 +858,7 @@ selection.
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -874,7 +875,7 @@ only one occurrence of the selected term.
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
@@ -884,7 +885,7 @@ only one occurrence of the selected term.
      .. coqtop:: all
 
         Lemma test x y z : (x + y) + (z + z) = z + z.
-        set a := {2}(_ + _).
+        Fail set a := {2}(_ + _).
 
 
 .. _basic_localization_ssr:
@@ -893,48 +894,44 @@ Basic localization
 ~~~~~~~~~~~~~~~~~~
 
 It is possible to define an abbreviation for a term appearing in the
-context of a goal thanks to the in tactical.
-
-A tactic of the form:
+context of a goal thanks to the ``in`` tactical.
 
 .. tacv:: set @ident := @term in {+ @ident}
 
-introduces a defined constant called ``x`` in the context, and folds it in
-the context entries mentioned on the right hand side of ``in``.
-The body of ``x`` is the first subterm matching these context entries
-(taken in the given order).
-
-A tactic of the form:
-
-.. tacv:: set @ident := @term in {+ @ident} *
-
-matches term and then folds ``x`` similarly in all the given context entries
-but also folds ``x`` in the goal.
+   This variant of :tacn:`set (ssreflect)` introduces a defined constant
+   called :token:`ident` in the context, and folds it in
+   the context entries mentioned on the right hand side of ``in``.
+   The body of :token:`ident` is the first subterm matching these context
+   entries (taken in the given order).
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
-        Set Implicit Arguments.
-        Unset Strict Implicit.
-        Unset Printing Implicit Defensive.
 
-     .. coqtop:: all undo
+     .. coqtop:: all
 
         Lemma test x t (Hx : x = 3) : x + t = 4.
         set z := 3 in Hx.
 
-If the localization also mentions the goal, then the result is the following one:
+.. tacv:: set @ident := @term in {+ @ident} *
+
+   This variant matches :token:`term` and then folds :token:`ident` similarly
+   in all the given context entries but also folds :token:`ident` in the goal.
 
   .. example::
+
+     .. coqtop:: reset none
+
+        From Coq Require Import ssreflect.
 
      .. coqtop:: all
 
         Lemma test x t (Hx : x = 3) : x + t = 4.
         set z := 3 in Hx * .
 
-Indeed, remember that 4 is just a notation for (S 3).
+     Indeed, remember that 4 is just a notation for (S 3).
 
 The use of the ``in`` tactical is not limited to the localization of
 abbreviations: for a complete description of the in tactical, see
@@ -1041,7 +1038,7 @@ constants to the goal.
 
    For example, the proof of [#3]_
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -1078,7 +1075,7 @@ constants to the goal.
 
 Because they are tacticals, ``:`` and ``=>`` can be combined, as in
 
-.. coqtop:: in
+.. coqdoc::
 
    move: m le_n_m => p le_n_p.
 
@@ -1103,7 +1100,7 @@ The ``:`` tactical is used to operate on an element in the context.
    to encapsulate the inductive step in a single
    command:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -1138,7 +1135,7 @@ Basic tactics like apply and elim can also be used without the ’:’
 tactical: for example we can directly start a proof of ``subnK`` by
 induction on the top variable ``m`` with
 
-.. coqtop:: in
+.. coqdoc::
 
    elim=> [|m IHm] n le_n.
 
@@ -1149,7 +1146,7 @@ explained in terms of the goal stack::
 
 is basically equivalent to
 
-.. coqtop:: in
+.. coqdoc::
 
    move: a H1 H2; tactic => a H1 H2.
 
@@ -1162,13 +1159,13 @@ temporary abbreviation to hide the statement of the goal from
 The general form of the in tactical can be used directly with the
 ``move``, ``case`` and ``elim`` tactics, so that one can write
 
-.. coqtop:: in
+.. coqdoc::
 
    elim: n => [|n IHn] in m le_n_m *.
 
 instead of
 
-.. coqtop:: in
+.. coqdoc::
 
    elim: n m le_n_m => [|n IHn] m le_n_m.
 
@@ -1191,77 +1188,82 @@ context manipulations and the main backward chaining tool.
 The move tactic.
 ````````````````
 
-The move tactic, in its defective form, behaves like the primitive ``hnf``
-|Coq| tactic. For example, such a defective:
-
 .. tacn:: move
    :name: move
 
-exposes the first assumption in the goal, i.e. its changes the
-goal ``not False`` into ``False -> False``.
+   This tactic, in its defective form, behaves like the :tacn:`hnf` tactic.
 
-More precisely, the ``move`` tactic inspects the goal and does nothing
-(``idtac``) if an introduction step is possible, i.e. if the goal is a
-product or a ``let…in``, and performs ``hnf`` otherwise.
+   .. example::
 
-Of course this tactic is most often used in combination with the
-bookkeeping tacticals (see section :ref:`introduction_ssr` and :ref:`discharge_ssr`). These
-combinations mostly subsume the :tacn:`intros`, :tacn:`generalize`, :tacn:`revert`, :tacn:`rename`,
-:tacn:`clear` and :tacn:`pattern` tactics.
+      .. coqtop:: reset all
+
+         Require Import ssreflect.
+         Goal not False.
+         move.
+
+   More precisely, the :tacn:`move` tactic inspects the goal and does nothing
+   (:tacn:`idtac`) if an introduction step is possible, i.e. if the goal is a
+   product or a ``let … in``, and performs :tacn:`hnf` otherwise.
+
+   Of course this tactic is most often used in combination with the bookkeeping
+   tacticals (see section :ref:`introduction_ssr` and :ref:`discharge_ssr`).
+   These combinations mostly subsume the :tacn:`intros`, :tacn:`generalize`,
+   :tacn:`revert`, :tacn:`rename`, :tacn:`clear` and :tacn:`pattern` tactics.
 
 
 The case tactic
 ```````````````
 
-The ``case`` tactic performs *primitive case analysis* on (co)inductive
-types; specifically, it destructs the top variable or assumption of
-the goal, exposing its constructor(s) and its arguments, as well as
-setting the value of its type family indices if it belongs to a type
-family (see section :ref:`type_families_ssr`).
+.. tacn:: case
+   :name: case (ssreflect)
 
-The |SSR| case tactic has a special behavior on equalities. If the
-top assumption of the goal is an equality, the case tactic “destructs”
-it as a set of equalities between the constructor arguments of its
-left and right hand sides, as per the tactic injection. For example,
-``case`` changes the goal::
+   This tactic performs *primitive case analysis* on (co)inductive
+   types; specifically, it destructs the top variable or assumption of
+   the goal, exposing its constructor(s) and its arguments, as well as
+   setting the value of its type family indices if it belongs to a type
+   family (see section :ref:`type_families_ssr`).
 
-   (x, y) = (1, 2) -> G.
+   The |SSR| case tactic has a special behavior on equalities. If the
+   top assumption of the goal is an equality, the case tactic “destructs”
+   it as a set of equalities between the constructor arguments of its
+   left and right hand sides, as per the tactic injection. For example,
+   ``case`` changes the goal::
 
-into::
+     (x, y) = (1, 2) -> G.
 
-   x = 1 -> y = 2 -> G.
+   into::
 
-Note also that the case of |SSR| performs ``False`` elimination, even
-if no branch is generated by this case operation. Hence the command:
-``case.`` on a goal of the form ``False -> G`` will succeed and
-prove the goal.
+     x = 1 -> y = 2 -> G.
+
+   Note also that the case of |SSR| performs :g:`False` elimination, even
+   if no branch is generated by this case operation. Hence the tactic
+   :tacn:`case` on a goal of the form :g:`False -> G` will succeed and
+   prove the goal.
 
 
 The elim tactic
 ```````````````
 
-The ``elim`` tactic performs inductive elimination on inductive types. The
-defective:
-
 .. tacn:: elim
    :name: elim (ssreflect)
 
-tactic performs inductive elimination on a goal whose top assumption
-has an inductive type.
+   This tactic performs inductive elimination on inductive types. In its
+   defective form, the tactic performs inductive elimination on a goal whose
+   top assumption has an inductive type.
 
-.. example::
+   .. example::
 
-  .. coqtop:: reset
+      .. coqtop:: reset none
 
-     From Coq Require Import ssreflect.
-     Set Implicit Arguments.
-     Unset Strict Implicit.
-     Unset Printing Implicit Defensive.
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
 
-  .. coqtop:: all
+      .. coqtop:: all
 
-     Lemma test m : forall n : nat, m <= n.
-     elim.
+         Lemma test m : forall n : nat, m <= n.
+         elim.
 
 
 .. _apply_ssr:
@@ -1269,31 +1271,29 @@ has an inductive type.
 The apply tactic
 ````````````````
 
-The ``apply`` tactic is the main backward chaining tactic of the proof
-system. It takes as argument any :token:`term` and applies it to the goal.
-Assumptions in the type of :token:`term` that don’t directly match the goal
-may generate one or more subgoals.
-
-In fact the |SSR| tactic:
-
-.. tacn:: apply
+.. tacn:: apply {? @term }
    :name: apply (ssreflect)
 
-is a synonym for::
+   This is the main backward chaining tactic of the proof system.
+   It takes as argument any :token:`term` and applies it to the goal.
+   Assumptions in the type of :token:`term` that don’t directly match the goal
+   may generate one or more subgoals.
 
-   intro top; first [refine top | refine (top _) | refine (top _ _) | …]; clear top.
+   In its defective form, this tactic is a synonym for::
 
-where ``top`` is a fresh name, and the sequence of refine tactics tries to
-catch the appropriate number of wildcards to be inserted. Note that
-this use of the refine tactic implies that the tactic tries to match
-the goal up to expansion of constants and evaluation of subterms.
+     intro top; first [refine top | refine (top _) | refine (top _ _) | …]; clear top.
 
-|SSR|’s apply has a special behavior on goals containing
-existential metavariables of sort Prop.
+   where :g:`top` is a fresh name, and the sequence of :tacn:`refine` tactics
+   tries to catch the appropriate number of wildcards to be inserted. Note that
+   this use of the :tacn:`refine` tactic implies that the tactic tries to match
+   the goal up to expansion of constants and evaluation of subterms.
+
+:tacn:`apply (ssreflect)` has a special behavior on goals containing
+existential metavariables of sort :g:`Prop`.
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -1337,6 +1337,7 @@ The general syntax of the discharging tactical ``:`` is:
 
 .. tacn:: @tactic {? @ident } : {+ @d_item } {? @clear_switch }
    :name: ... : ... (ssreflect)
+   :undocumented:
 
 .. prodn::
    d_item ::= {? @occ_switch %| @clear_switch } @term
@@ -1393,7 +1394,7 @@ Switches affect the discharging of a :token:`d_item` as follows:
 
 For example, the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    move: n {2}n (refl_equal n).
 
@@ -1404,7 +1405,7 @@ For example, the tactic:
 
 Therefore this tactic changes any goal ``G`` into
 
-.. coqtop::
+.. coqdoc::
 
    forall n n0 : nat, n = n0 -> G.
 
@@ -1440,6 +1441,16 @@ section constant.
 If tactic is ``move`` or ``case`` and an equation :token:`ident` is given, then clear
 (step 3) for :token:`d_item` is suppressed (see section :ref:`generation_of_equations_ssr`).
 
+Intro patterns (see section :ref:`introduction_ssr`)
+and the ``rewrite`` tactic (see section :ref:`rewriting_ssr`)
+let one place a :token:`clear_switch` in the middle of other items
+(namely identifiers, views and rewrite rules).  This can trigger the
+addition of proof context items to the ones being explicitly
+cleared, and in turn this can result in clear errors (e.g. if the
+context item automatically added occurs in the goal).  The
+relevant sections describe ways to avoid the unintended clear of
+context items.
+
 
 Matching for apply and exact
 ````````````````````````````
@@ -1462,7 +1473,7 @@ context to interpret wildcards; in particular it can accommodate the
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -1491,8 +1502,8 @@ The abstract tactic
 .. tacn:: abstract: {+ d_item}
    :name: abstract (ssreflect)
 
-This tactic assigns an abstract constant previously introduced with the ``[:
-name ]`` intro pattern (see section :ref:`introduction_ssr`).
+   This tactic assigns an abstract constant previously introduced with the
+   :n:`[: @ident ]` intro pattern (see section :ref:`introduction_ssr`).
 
 In a goal like the following::
 
@@ -1542,23 +1553,33 @@ whose general syntax is
 
 .. tacn:: @tactic => {+ @i_item }
    :name: =>
+   :undocumented:
 
 .. prodn::
-   i_item ::= @i_pattern %| @s_item %| @clear_switch %| {? %{%} } /@term
+   i_item ::= @i_pattern %| @s_item %| @clear_switch %| @i_view %| @i_block
 
 .. prodn::
    s_item ::= /= %| // %| //=
 
 .. prodn::
-   i_pattern ::= @ident %| _ %| ? %| * %| {? @occ_switch } -> %| {? @occ_switch }<- %| [ {?| @i_item } ] %| - %| [: {+ @ident } ]
+   i_view ::= {? %{%} } /@term %| /ltac:( @tactic )
 
-The ``=>`` tactical first executes tactic, then the :token:`i_item` s,
+.. prodn::
+   i_pattern ::= @ident %| > %| _ %| ? %| * %| + %| {? @occ_switch } -> %| {? @occ_switch }<- %| [ {?| @i_item } ] %| - %| [: {+ @ident } ]
+
+.. prodn::
+   i_block ::= [^ @ident ] %| [^~ @ident ] %| [^~ @num ]
+
+The ``=>`` tactical first executes :token:`tactic`, then the :token:`i_item`\s,
 left to right. An :token:`s_item` specifies a
 simplification operation; a :token:`clear_switch`
-h specifies context pruning as in :ref:`discharge_ssr`.
-The :token:`i_pattern` s can be seen as a variant of *intro patterns*
-:ref:`tactics`: each performs an introduction operation, i.e., pops some
+specifies context pruning as in :ref:`discharge_ssr`.
+The :token:`i_pattern`\s can be seen as a variant of *intro patterns*
+(see :tacn:`intros`:) each performs an introduction operation, i.e., pops some
 variables or assumptions from the goal.
+
+Simplification items
+`````````````````````
 
 An :token:`s_item` can simplify the set of subgoals or the subgoals themselves:
 
@@ -1566,32 +1587,78 @@ An :token:`s_item` can simplify the set of subgoals or the subgoals themselves:
   |SSR| tactic :tacn:`done` described in :ref:`terminators_ssr`, i.e.,
   it executes ``try done``.
 + ``/=`` simplifies the goal by performing partial evaluation, as per the
-  tactic ``simpl`` [#5]_.
+  tactic :tacn:`simpl` [#5]_.
 + ``//=`` combines both kinds of simplification; it is equivalent to
   ``/= //``, i.e., ``simpl; try done``.
 
 
-When an :token:`s_item` bears a :token:`clear_switch`, then the
+When an :token:`s_item` immediately precedes a :token:`clear_switch`, then the
 :token:`clear_switch` is executed
 *after* the :token:`s_item`, e.g., ``{IHn}//`` will solve some subgoals,
 possibly using the fact ``IHn``, and will erase ``IHn`` from the context
 of the remaining subgoals.
 
-The last entry in the :token:`i_item` grammar rule, ``/``:token:`term`,
+Views
+`````
+
+The first entry in the :token:`i_view` grammar rule, :n:`/@term`,
 represents a view (see section :ref:`views_and_reflection_ssr`).
+It interprets the top of the stack with the view :token:`term`.
+It is equivalent to :n:`move/@term`.
+
+A :token:`clear_switch` that immediately precedes an :token:`i_view`
+is complemented with the name of the view if an only if the :token:`i_view`
+is a simple proof context entry [#10]_.
+E.g. ``{}/v`` is equivalent to ``/v{v}``.
+This behavior can be avoided by separating the :token:`clear_switch`
+from the :token:`i_view` with the ``-`` intro pattern or by putting
+parentheses around the view.
+
+A :token:`clear_switch` that immediately precedes an :token:`i_view`
+is executed after the view application.
+
+
 If the next :token:`i_item` is a view, then the view is
 applied to the assumption in top position once all the
 previous :token:`i_item` have been performed.
 
-The view is applied to the top assumption.
+The second entry in the :token:`i_view` grammar rule,
+``/ltac:(`` :token:`tactic` ``)``, executes :token:`tactic`.
+Notations can be used to name tactics,  for example::
 
-|SSR| supports the following :token:`i_pattern` s:
+    Notation myop := (ltac:(some ltac code)) : ssripat_scope.
+
+lets one write just ``/myop`` in the intro pattern. Note the scope
+annotation: views are interpreted opening the ``ssripat`` scope.
+
+Intro patterns
+``````````````
+
+|SSR| supports the following :token:`i_pattern`\s:
 
 :token:`ident`
   pops the top variable, assumption, or local definition into
   a new constant, fact, or defined constant :token:`ident`, respectively.
   Note that defined constants cannot be introduced when δ-expansion is
   required to expose the top variable or assumption.
+  A :token:`clear_switch` (even an empty one) immediately preceding an
+  :token:`ident` is complemented with that :token:`ident` if and only if
+  the identifier is a simple proof context entry [#10]_.
+  As a consequence  by prefixing the
+  :token:`ident` with ``{}`` one can *replace* a context entry.
+  This behavior can be avoided by separating the :token:`clear_switch`
+  from the :token:`ident` with the ``-`` intro pattern.
+``>``
+  pops every variable occurring in the rest of the stack.
+  Type class instances are popped even if they don't occur
+  in the rest of the stack.
+  The tactic ``move=> >`` is equivalent to
+  ``move=> ? ?`` on a goal such as::
+
+    forall x y, x < y -> G
+
+  A typical use if ``move=>> H`` to name ``H`` the first assumption,
+  in the example above ``x < y``.
 ``?``
   pops the top variable into an anonymous constant or fact, whose name
   is picked by the tactic interpreter. |SSR| only generates names that cannot
@@ -1614,7 +1681,17 @@ The view is applied to the top assumption.
 
   a first ``move=> *`` adds only ``_a_ : bool`` and ``_b_ : bool``
   to the context; it takes a second ``move=> *`` to add ``_Hyp_ : _a_ = _b_``.
-:token:`occ_switch` ``->``
+``+``
+  temporarily introduces the top variable. It is discharged at the end
+  of the intro pattern. For example ``move=> + y`` on a goal::
+
+    forall x y, P
+
+  is equivalent to ``move=> _x_ y; move: _x_`` that results in the goal::
+
+    forall x, P
+
+:n:`{? occ_switch } ->`
   (resp. :token:`occ_switch` ``<-``)
   pops the top assumption (which should be a rewritable proposition) into an
   anonymous fact, rewrites (resp. rewrites right to left) the goal with this
@@ -1639,18 +1716,13 @@ The view is applied to the top assumption.
   variable, using the |SSR| ``case`` tactic described in
   :ref:`the_defective_tactics_ssr`. It then behaves as the corresponding
   branching :token:`i_pattern`, executing the
-  sequence:token:`i_item`:math:`_i`  in the i-th subgoal generated by the
+  sequence :n:`@i_item__i`  in the i-th subgoal generated by the
   case analysis; unless we have the trivial destructing :token:`i_pattern`
   ``[]``, the latter should generate exactly m subgoals, i.e., the top
   variable should have an inductive type with exactly m constructors [#7]_.
   While it is good style to use the :token:`i_item` i * to pop the variables
   and assumptions corresponding to each constructor, this is not enforced by
   |SSR|.
-``/`` :token:`term`
-  Interprets the top of the stack with the view :token:`term`.
-  It is equivalent to ``move/term``. The optional flag ``{}`` can
-  be used to signal that the :token:`term`, when it is a context entry,
-  has to be cleared.
 ``-``
   does nothing, but counts as an intro pattern. It can also be used to
   force the interpretation of ``[`` :token:`i_item` * ``| … |``
@@ -1665,15 +1737,17 @@ The view is applied to the top assumption.
   for each :token:`ident`.  Its type has to be fixed later on by using the
   ``abstract`` tactic.  Before then the type displayed is ``<hidden>``.
 
-
 Note that |SSR| does not support the syntax ``(ipat, …, ipat)`` for
-destructing intro-patterns.
+destructing intro patterns.
+
+Clear switch
+````````````
 
 Clears are deferred until the end of the intro pattern.
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect ssrbool.
       Set Implicit Arguments.
@@ -1690,6 +1764,9 @@ is performed behind the scenes.
 
 Facts mentioned in a clear switch must be valid names in the proof
 context (excluding the section context).
+
+Branching and destructuring
+```````````````````````````
 
 The rules for interpreting branching and destructing :token:`i_pattern` are
 motivated by the fact that it would be pointless to have a branching
@@ -1715,6 +1792,43 @@ interpretation, e.g.:
 
 are all equivalent.
 
+Block introduction
+``````````````````
+
+|SSR| supports the following :token:`i_block`\s:
+
+:n:`[^ @ident ]`
+  *block destructing* :token:`i_pattern`. It performs a case analysis
+  on the top variable and introduces, in one go, all the variables coming
+  from the case analysis. The names of these variables are obtained by
+  taking the names used in the inductive type declaration and prefixing them
+  with :token:`ident`. If the intro pattern immediately follows a call
+  to ``elim`` with a custom eliminator (see :ref:`custom_elim_ssr`) then
+  the names are taken from the ones used in the type of the eliminator.
+
+  .. example::
+
+     .. coqtop:: reset none
+
+        From Coq Require Import ssreflect.
+        Set Implicit Arguments.
+        Unset Strict Implicit.
+        Unset Printing Implicit Defensive.
+
+     .. coqtop:: all
+
+        Record r := { a : nat; b := (a, 3); _ : bool; }.
+
+        Lemma test : r -> True.
+        Proof. move => [^ x ].
+
+:n:`[^~ @ident ]`
+  *block destructing* using :token:`ident` as a suffix.
+:n:`[^~ @num ]`
+  *block destructing* using :token:`num` as a suffix.
+
+  Only a :token:`s_item` is allowed between the elimination tactic and
+  the block destructing.
 
 .. _generation_of_equations_ssr:
 
@@ -1724,7 +1838,7 @@ Generation of equations
 The generation of named equations option stores the definition of a
 new constant as an equation. The tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    move En: (size l) => n.
 
@@ -1732,7 +1846,7 @@ where ``l`` is a list, replaces ``size l`` by ``n`` in the goal and
 adds the fact ``En : size l = n`` to the context.
 This is quite different from:
 
-.. coqtop:: in
+.. coqdoc::
 
    pose n := (size l).
 
@@ -1747,7 +1861,7 @@ deal with the possible parameters of the constants introduced.
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -1766,7 +1880,7 @@ under fresh |SSR| names.
 
 .. example::
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
@@ -1792,136 +1906,126 @@ Type families
 ~~~~~~~~~~~~~
 
 When the top assumption of a goal has an inductive type, two specific
-operations are possible: the case analysis performed by the ``case``
+operations are possible: the case analysis performed by the :tacn:`case`
 tactic, and the application of an induction principle, performed by
-the ``elim`` tactic. When this top assumption has an inductive type, which
+the :tacn:`elim` tactic. When this top assumption has an inductive type, which
 is moreover an instance of a type family, |Coq| may need help from the
 user to specify which occurrences of the parameters of the type should
 be substituted.
 
-A specific ``/`` switch indicates the type family parameters of the type
-of a :token:`d_item` immediately following this ``/`` switch,
-using the syntax:
-
 .. tacv:: case: {+ @d_item } / {+ @d_item }
-   :name: case (ssreflect)
+          elim: {+ @d_item } / {+ @d_item }
 
-.. tacv:: elim: {+ @d_item } / {+ @d_item }
+   A specific ``/`` switch indicates the type family parameters of the type
+   of a :token:`d_item` immediately following this ``/`` switch.
+   The :token:`d_item` on the right side of the ``/`` switch are discharged as
+   described in section :ref:`discharge_ssr`. The case analysis or elimination
+   will be done on the type of the top assumption after these discharge
+   operations.
 
-The :token:`d_item` on the right side of the ``/`` switch are discharged as
-described in section :ref:`discharge_ssr`. The case analysis or elimination
-will be done on the type of the top assumption after these discharge
-operations.
+   Every :token:`d_item` preceding the ``/`` is interpreted as arguments of this
+   type, which should be an instance of an inductive type family. These terms
+   are not actually generalized, but rather selected for substitution.
+   Occurrence switches can be used to restrict the substitution. If a term is
+   left completely implicit (e.g. writing just ``_``), then a pattern is
+   inferred looking at the type of the top assumption. This allows for the
+   compact syntax:
 
-Every :token:`d_item` preceding the ``/`` is interpreted as arguments of this
-type, which should be an instance of an inductive type family. These terms
-are not actually generalized, but rather selected for substitution.
-Occurrence switches can be used to restrict the substitution. If a term is
-left completely implicit (e.g. writing just ``_``), then a pattern is
-inferred looking at the type of the top assumption. This allows for the
-compact syntax:
+   .. coqdoc::
 
-.. coqtop:: in
+      case: {2}_ / eqP.
 
-   case: {2}_ / eqP.
+   where ``_`` is interpreted as ``(_ == _)`` since
+   ``eqP T a b : reflect (a = b) (a == b)`` and reflect is a type family with
+   one index.
 
-where ``_`` is interpreted as ``(_ == _)`` since
-``eqP T a b : reflect (a = b) (a == b)`` and reflect is a type family with
-one index.
+   Moreover if the :token:`d_item` list is too short, it is padded with an
+   initial sequence of ``_`` of the right length.
 
-Moreover if the :token:`d_item` list is too short, it is padded with an
-initial sequence of ``_`` of the right length.
+   .. example::
 
-.. example::
+      Here is a small example on lists. We define first a function which
+      adds an element at the end of a given list.
 
-   Here is a small example on lists. We define first a function which
-   adds an element at the end of a given list.
+      .. coqtop:: reset none
 
-   .. coqtop:: reset
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
 
-      From Coq Require Import ssreflect.
-      Set Implicit Arguments.
-      Unset Strict Implicit.
-      Unset Printing Implicit Defensive.
+      .. coqtop:: all
 
-   .. coqtop:: all
+         Require Import List.
+         Section LastCases.
+         Variable A : Type.
+         Implicit Type l : list A.
+         Fixpoint add_last a l : list A :=
+           match l with
+          | nil => a :: nil
+          | hd :: tl => hd :: (add_last a tl) end.
 
-      Require Import List.
-      Section LastCases.
-      Variable A : Type.
-      Implicit Type l : list A.
-      Fixpoint add_last a l : list A :=
-        match l with
-        | nil => a :: nil
-        | hd :: tl => hd :: (add_last a tl) end.
+      Then we define an inductive predicate for case analysis on lists
+      according to their last element:
 
-   Then we define an inductive predicate for case analysis on lists
-   according to their last element:
+      .. coqtop:: all
 
-   .. coqtop:: all
+         Inductive last_spec : list A -> Type :=
+         | LastSeq0 : last_spec nil
+         | LastAdd s x : last_spec (add_last x s).
 
-      Inductive last_spec : list A -> Type :=
-      | LastSeq0 : last_spec nil
-      | LastAdd s x : last_spec (add_last x s).
+         Theorem lastP : forall l : list A, last_spec l.
+         Admitted.
 
-      Theorem lastP : forall l : list A, last_spec l.
-      Admitted.
+      We are now ready to use ``lastP`` in conjunction with ``case``.
 
-   We are now ready to use ``lastP`` in conjunction with ``case``.
+      .. coqtop:: all
 
-   .. coqtop:: all
+         Lemma test l : (length l) * 2 = length (l ++ l).
+         case: (lastP l).
 
-      Lemma test l : (length l) * 2 = length (l ++ l).
-      case: (lastP l).
+      Applied to the same goal, the tactc ``case: l / (lastP l)``
+      generates the same subgoals but ``l`` has been cleared from both contexts:
 
-   Applied to the same goal, the command:
-   ``case: l / (lastP l).``
-   generates the same subgoals but ``l`` has been cleared from both contexts.
+      .. coqtop:: all restart
 
-   Again applied to the same goal, the command.
+         case: l / (lastP l).
 
-   .. coqtop:: none
+      Again applied to the same goal:
 
-      Abort.
+      .. coqtop:: all restart abort
 
-   .. coqtop:: all
+         case: {1 3}l / (lastP l).
 
-      Lemma test l : (length l) * 2 = length (l ++ l).
-      case: {1 3}l / (lastP l).
+      Note that selected occurrences on the left of the ``/``
+      switch have been substituted with l instead of being affected by
+      the case analysis.
 
-   Note that selected occurrences on the left of the ``/``
-   switch have been substituted with l instead of being affected by
-   the case analysis.
+   The equation name generation feature combined with a type family ``/``
+   switch generates an equation for the *first* dependent :token:`d_item`
+   specified by the user. Again starting with the above goal, the
+   command:
 
-The equation name generation feature combined with a type family /
-switch generates an equation for the *first* dependent :token:`d_item`
-specified by the user. Again starting with the above goal, the
-command:
+   .. example::
 
-.. example::
+      .. coqtop:: all
 
-   .. coqtop:: none
-
-      Abort.
-
-   .. coqtop:: all
-
-      Lemma test l : (length l) * 2 = length (l ++ l).
-      case E: {1 3}l / (lastP l) => [|s x].
-      Show 2.
+         Lemma test l : (length l) * 2 = length (l ++ l).
+         case E: {1 3}l / (lastP l) => [|s x].
+         Show 2.
 
 
-There must be at least one :token:`d_item` to the left of the / switch; this
-prevents any confusion with the view feature. However, the :token:`d_item`
-to the right of the ``/`` are optional, and if they are omitted the first
-assumption provides the instance of the type family.
+   There must be at least one :token:`d_item` to the left of the ``/`` switch; this
+   prevents any confusion with the view feature. However, the :token:`d_item`
+   to the right of the ``/`` are optional, and if they are omitted the first
+   assumption provides the instance of the type family.
 
-The equation always refers to the first :token:`d_item` in the actual tactic
-call, before any padding with initial ``_``. Thus, if an inductive type
-has two family parameters, it is possible to have|SSR| generate an
-equation for the second one by omitting the pattern for the first;
-note however that this will fail if the type of the second parameter
-depends on the value of the first parameter.
+   The equation always refers to the first :token:`d_item` in the actual tactic
+   call, before any padding with initial ``_``. Thus, if an inductive type
+   has two family parameters, it is possible to have|SSR| generate an
+   equation for the second one by omitting the pattern for the first;
+   note however that this will fail if the type of the second parameter
+   depends on the value of the first parameter.
 
 
 Control flow
@@ -1980,88 +2084,79 @@ closed tactic fails to prove its subgoal.
 
 It is hence recommended practice that the proof of any subgoal should
 end with a tactic which *fails if it does not solve the current goal*,
-like discriminate, contradiction or assumption.
+like :tacn:`discriminate`, :tacn:`contradiction` or :tacn:`assumption`.
 
 In fact, |SSR| provides a generic tactical which turns any tactic
-into a closing one (similar to now). Its general syntax is:
+into a closing one (similar to :tacn:`now`). Its general syntax is:
 
 .. tacn:: by @tactic
    :name: by
+   :undocumented:
 
-The Ltac expression :n:`by [@tactic | [@tactic | …]` is equivalent to
-:n:`[by @tactic | by @tactic | ...]` and this form should be preferred
-to the former.
+The Ltac expression :n:`by [@tactic | @tactic | …]` is equivalent to
+:n:`do [done | by @tactic | by @tactic | …]`, which corresponds to the
+standard Ltac expression :n:`first [done | @tactic; done | @tactic; done | …]`.
 
 In the script provided as example in section :ref:`indentation_ssr`, the
 paragraph corresponding to each sub-case ends with a tactic line prefixed
 with a ``by``, like in:
 
-.. coqtop:: in
+.. coqdoc::
 
    by apply/eqP; rewrite -dvdn1.
 
 .. tacn:: done
    :name: done
 
-The :tacn:`by` tactical is implemented using the user-defined, and extensible
-:tacn:`done` tactic. This :tacn:`done` tactic tries to solve the current goal by some
-trivial means and fails if it doesn’t succeed. Indeed, the tactic
-expression :n:`by @tactic` is equivalent to :n:`@tactic; done`.
+   The :tacn:`by` tactical is implemented using the user-defined, and extensible
+   :tacn:`done` tactic. This :tacn:`done` tactic tries to solve the current goal by some
+   trivial means and fails if it doesn’t succeed. Indeed, the tactic
+   expression :n:`by @tactic` is equivalent to :n:`@tactic; done`.
 
-Conversely, the tactic
+   Conversely, the tactic ``by [ ]`` is equivalent to :tacn:`done`.
 
-.. coqtop::
+   The default implementation of the done tactic, in the ``ssreflect.v``
+   file, is:
 
-   by [ ].
+   .. coqdoc::
 
-is equivalent to:
+      Ltac done :=
+        trivial; hnf; intros; solve
+         [ do ![solve [trivial | apply: sym_equal; trivial]
+               | discriminate | contradiction | split]
+         | case not_locked_false_eq_true; assumption
+         | match goal with H : ~ _ |- _ => solve [case H; trivial] end ].
 
-.. coqtop::
-
-   done.
-
-The default implementation of the done tactic, in the ``ssreflect.v``
-file, is:
-
-.. coqtop:: in
-
-   Ltac done :=
-     trivial; hnf; intros; solve
-      [ do ![solve [trivial | apply: sym_equal; trivial]
-            | discriminate | contradiction | split]
-      | case not_locked_false_eq_true; assumption
-      | match goal with H : ~ _ |- _ => solve [case H; trivial] end ].
-
-The lemma ``not_locked_false_eq_true`` is needed to discriminate
-*locked* boolean predicates (see section :ref:`locking_ssr`). The iterator
-tactical do is presented in section :ref:`iteration_ssr`. This tactic can be
-customized by the user, for instance to include an ``auto`` tactic.
+   The lemma :g:`not_locked_false_eq_true` is needed to discriminate
+   *locked* boolean predicates (see section :ref:`locking_ssr`). The iterator
+   tactical do is presented in section :ref:`iteration_ssr`. This tactic can be
+   customized by the user, for instance to include an :tacn:`auto` tactic.
 
 A natural and common way of closing a goal is to apply a lemma which
 is the exact one needed for the goal to be solved. The defective form
 of the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    exact.
 
 is equivalent to:
 
-.. coqtop:: in
+.. coqdoc::
 
    do [done | by move=> top; apply top].
 
 where ``top`` is a fresh name assigned to the top assumption of the goal.
-This applied form is supported by the : discharge tactical, and the
+This applied form is supported by the ``:`` discharge tactical, and the
 tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    exact: MyLemma.
 
 is equivalent to:
 
-.. coqtop:: in
+.. coqdoc::
 
    by apply: MyLemma.
 
@@ -2073,19 +2168,19 @@ is equivalent to:
    follows the ``by`` keyword is considered to be a parenthesized block applied to
    the current goal. Hence for example if the tactic:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       by rewrite my_lemma1.
 
    succeeds, then the tactic:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       by rewrite my_lemma1; apply my_lemma2.
 
    usually fails since it is equivalent to:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       by (rewrite my_lemma1; apply my_lemma2).
 
@@ -2095,63 +2190,53 @@ is equivalent to:
 Selectors
 ~~~~~~~~~
 
-When composing tactics, the two tacticals ``first`` and ``last`` let the user
-restrict the application of a tactic to only one of the subgoals
-generated by the previous tactic. This covers the frequent cases where
-a tactic generates two subgoals one of which can be easily disposed
-of.
+.. tacn:: last
+          first
+   :name: last; first (ssreflect)
 
-This is another powerful way of linearization of scripts, since it
-happens very often that a trivial subgoal can be solved in a less than
-one line tactic. For instance, the tactic:
+   When composing tactics, the two tacticals ``first`` and ``last`` let the user
+   restrict the application of a tactic to only one of the subgoals
+   generated by the previous tactic. This covers the frequent cases where
+   a tactic generates two subgoals one of which can be easily disposed
+   of.
 
-.. tacn:: @tactic ; last by @tactic
-   :name: last
-
-tries to solve the last subgoal generated by the first
-tactic using the given second tactic, and fails if it does not succeed.
-Its analogue
-
-.. tacn:: @tactic ; first by @tactic
-   :name: first (ssreflect)
-
-tries to solve the first subgoal generated by the first tactic using the
-second given tactic, and fails if it does not succeed.
+   This is another powerful way of linearization of scripts, since it
+   happens very often that a trivial subgoal can be solved in a less than
+   one line tactic. For instance, :n:`@tactic ; last by @tactic`
+   tries to solve the last subgoal generated by the first
+   tactic using the given second tactic, and fails if it does not succeed.
+   Its analogue :n:`@tactic ; first by @tactic`
+   tries to solve the first subgoal generated by the first tactic using the
+   second given tactic, and fails if it does not succeed.
 
 |SSR| also offers an extension of this facility, by supplying
-tactics to *permute* the subgoals generated by a tactic. The tactic:
+tactics to *permute* the subgoals generated by a tactic.
 
-.. tacv:: @tactic; last first
+.. tacv:: last first
+          first last
+   :name: last first; first last
 
-inverts the order of the subgoals generated by tactic. It is
-equivalent to:
+   These two equivalent tactics invert the order of the subgoals in focus.
 
-.. tacv:: @tactic; first last
+   .. tacv:: last @num first
 
-More generally, the tactic:
+      If :token:`num`\'s value is :math:`k`,
+      this tactic rotates the :math:`n` subgoals :math:`G_1` , …, :math:`G_n`
+      in focus. The first subgoal becomes :math:`G_{n + 1 − k}` and the
+      circular order of subgoals remains unchanged.
 
-.. tacn:: @tactic; last @num first
-   :name: last first
+   .. tacn:: first @num last
 
-where :token:`num` is a |Coq| numeral, or an Ltac variable
-denoting a |Coq|
-numeral, having the value k. It rotates the n subgoals G1 , …, Gn
-generated by tactic. The first subgoal becomes Gn + 1 − k and the
-circular order of subgoals remains unchanged.
-
-Conversely, the tactic:
-
-.. tacn:: @tactic; first @num last
-   :name: first last
-
-rotates the n subgoals G1 , …, Gn generated by tactic in order that
-the first subgoal becomes Gk .
+      If :token:`num`\'s value is :math:`k`,
+      this tactic rotates the :math:`n` subgoals :math:`G_1` , …, :math:`G_n`
+      in focus. The first subgoal becomes :math:`G_k` and the circular order
+      of subgoals remains unchanged.
 
 Finally, the tactics ``last`` and ``first`` combine with the branching syntax
 of Ltac: if the tactic generates n subgoals on a given goal,
 then the tactic
 
-.. coqtop:: in
+.. coqdoc::
 
    tactic ; last k [ tactic1 |…| tacticm ] || tacticn.
 
@@ -2164,9 +2249,8 @@ to the others.
    Here is a small example on lists. We define first a function which
    adds an element at the end of a given list.
 
-   .. coqtop:: reset
+   .. coqtop:: reset none
 
-      Abort.
       From Coq Require Import ssreflect.
       Set Implicit Arguments.
       Unset Strict Implicit.
@@ -2189,26 +2273,24 @@ to the others.
 Iteration
 ~~~~~~~~~
 
-|SSR| offers an accurate control on the repetition of tactics,
-thanks to the do tactical, whose general syntax is:
-
-.. tacn:: do {? @mult } ( @tactic | [ {+| @tactic } ] )
+.. tacn:: do {? @num } {| @tactic | [ {+| @tactic } ] }
    :name: do (ssreflect)
 
-where :token:`mult` is a *multiplier*.
+   This tactical offers an accurate control on the repetition of tactics.
+   :token:`mult` is a *multiplier*.
 
-Brackets can only be omitted if a single tactic is given *and* a
-multiplier is present.
+   Brackets can only be omitted if a single tactic is given *and* a
+   multiplier is present.
 
 A tactic of the form:
 
-.. coqtop:: in
+.. coqdoc::
 
    do [ tactic 1 | … | tactic n ].
 
 is equivalent to the standard Ltac expression:
 
-.. coqtop:: in
+.. coqdoc::
 
    first [ tactic 1 | … | tactic n ].
 
@@ -2218,7 +2300,7 @@ tactic should be repeated on the current subgoal.
 There are four kinds of multipliers:
 
 .. prodn::
-   mult ::= @num ! %| ! %| @num ? %| ?
+   mult ::= {| @num ! | ! | @num ? | ? }
 
 Their meaning is:
 
@@ -2233,14 +2315,14 @@ Their meaning is:
 
 For instance, the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    tactic; do 1? rewrite mult_comm.
 
 rewrites at most one time the lemma ``mult_comm`` in all the subgoals
 generated by tactic , whereas the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    tactic; do 2! rewrite mult_comm.
 
@@ -2263,6 +2345,7 @@ already presented the *localization* tactical in, whose general syntax is:
 
 .. tacn:: @tactic in {+ @ident} {? * }
    :name: in
+   :undocumented:
 
 where :token:`ident` is a name in the
 context. On the left side of ``in``,
@@ -2285,7 +2368,7 @@ between standard Ltac in and the |SSR| tactical in.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2307,17 +2390,15 @@ of a local definition during the generalization phase, the name of the
 local definition must be written between parentheses, like in
 ``rewrite H in H1 (def_n) H2.``
 
-From |SSR| 1.5 the grammar for the in tactical has been extended
-to the following one:
-
 .. tacv:: @tactic in {+ @clear_switch | {? @  } @ident | ( @ident ) | ( {? @  } @ident := @c_pattern ) } {? * }
 
-In its simplest form the last option lets one rename hypotheses that
-can’t be cleared (like section variables). For example, ``(y := x)``
-generalizes over ``x`` and reintroduces the generalized variable under the
-name ``y`` (and does not clear ``x``).
-For a more precise description of this form of localization refer
-to :ref:`advanced_generalization_ssr`.
+   This is the most general form of the ``in`` tactical.
+   In its simplest form the last option lets one rename hypotheses that
+   can’t be cleared (like section variables). For example, ``(y := x)``
+   generalizes over ``x`` and reintroduces the generalized variable under the
+   name ``y`` (and does not clear ``x``).
+   For a more precise description of this form of localization refer
+   to :ref:`advanced_generalization_ssr`.
 
 
 .. _structure_ssr:
@@ -2341,30 +2422,28 @@ intermediate statement.
 The have tactic.
 ````````````````
 
-The main |SSR| forward reasoning tactic is the ``have`` tactic. It can
-be use in two modes: one starts a new (sub)proof for an intermediate
-result in the main proof, and the other provides explicitly a proof
-term for this intermediate step.
-
-In the first mode, the syntax of have in its defective form is:
-
 .. tacn:: have : @term
    :name: have
 
-This tactic supports open syntax for :token:`term`. Applied to a goal ``G``, it
-generates a first subgoal requiring a proof of ``term`` in the context of
-``G``. The second generated subgoal is of the form ``term -> G``, where term
-becomes the new top assumption, instead of being introduced with a
-fresh name. At the proof-term level, the have tactic creates a β
-redex, and introduces the lemma under a fresh name, automatically
-chosen.
+   This is the main |SSR| forward reasoning tactic. It can
+   be used in two modes: one starts a new (sub)proof for an intermediate
+   result in the main proof, and the other provides explicitly a proof
+   term for this intermediate step.
 
-Like in the case of the ``pose`` tactic (see section :ref:`definitions_ssr`), the types of
+   This tactic supports open syntax for :token:`term`. Applied to a goal ``G``, it
+   generates a first subgoal requiring a proof of :token:`term` in the context of
+   ``G``. The second generated subgoal is of the form :n:`term -> G`, where term
+   becomes the new top assumption, instead of being introduced with a
+   fresh name. At the proof-term level, the have tactic creates a β
+   redex, and introduces the lemma under a fresh name, automatically
+   chosen.
+
+Like in the case of the :n:`pose (ssreflect)` tactic (see section :ref:`definitions_ssr`), the types of
 the holes are abstracted in term.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2378,7 +2457,7 @@ the holes are abstracted in term.
 
   The invokation of ``have`` is equivalent to:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2396,7 +2475,7 @@ tactic:
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2414,6 +2493,7 @@ The behavior of the defective have tactic makes it possible to
 generalize it in the following general construction:
 
 .. tacn:: have {* @i_item } {? @i_pattern } {? @s_item | {+ @ssr_binder } } {? : @term } {? := @term | by @tactic }
+   :undocumented:
 
 Open syntax is supported for both :token:`term`. For the description
 of :token:`i_item` and :token:`s_item` see section
@@ -2422,10 +2502,11 @@ have tactic, which opens a sub-proof for an intermediate result, uses
 tactics of the form:
 
 .. tacv:: have @clear_switch @i_item : @term by @tactic
+   :undocumented:
 
 which behave like:
 
-.. coqtop:: in
+.. coqdoc::
 
    have: term ; first by tactic.
    move=> clear_switch i_item.
@@ -2435,10 +2516,10 @@ allows to reuse
 a name of the context, possibly used by the proof of the assumption,
 to introduce the new assumption itself.
 
-The``by`` feature is especially convenient when the proof script of the
+The ``by`` feature is especially convenient when the proof script of the
 statement is very short, basically when it fits in one line like in:
 
-.. coqtop:: in
+.. coqdoc::
 
    have H23 : 3 + 2 = 2 + 3 by rewrite addnC.
 
@@ -2447,7 +2528,7 @@ the further use of the intermediate step. For instance,
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2466,7 +2547,7 @@ the further use of the intermediate step. For instance,
 Thanks to the deferred execution of clears, the following idiom is
 also supported (assuming x occurs in the goal only):
 
-.. coqtop:: in
+.. coqdoc::
 
    have {x} -> : x = y.
 
@@ -2475,7 +2556,7 @@ destruction of existential assumptions like in the tactic:
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2485,25 +2566,24 @@ destruction of existential assumptions like in the tactic:
   .. coqtop:: all
 
      Lemma test : True.
-     have [x Px]: exists x : nat, x > 0.
-     Focus 2.
+     have [x Px]: exists x : nat, x > 0; last first.
 
 An alternative use of the ``have`` tactic is to provide the explicit proof
 term for the intermediate lemma, using tactics of the form:
 
-.. tacv:: have {? @ident } := term
+.. tacv:: have {? @ident } := @term
 
-This tactic creates a new assumption of type the type of :token:`term`.
-If the
-optional :token:`ident` is present, this assumption is introduced under the
-name :token:`ident`. Note that the body of the constant is lost for the user.
+   This tactic creates a new assumption of type the type of :token:`term`.
+   If the
+   optional :token:`ident` is present, this assumption is introduced under the
+   name :token:`ident`. Note that the body of the constant is lost for the user.
 
-Again, non inferred implicit arguments and explicit holes are
-abstracted.
+   Again, non inferred implicit arguments and explicit holes are
+   abstracted.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2524,7 +2604,7 @@ After the :token:`i_pattern`, a list of binders is allowed.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      From Coq Require Import Omega.
@@ -2543,7 +2623,7 @@ Since the :token:`i_pattern` can be omitted, to avoid ambiguity,
 bound variables can be surrounded
 with parentheses even if no type is specified:
 
-.. coqtop:: in
+.. coqtop:: all restart
 
    have (x) : 2 * x = x + x by omega.
 
@@ -2557,15 +2637,9 @@ copying the goal itself.
 
 .. example::
 
-  .. coqtop:: none
+  .. coqtop:: all restart abort
 
-     Abort All.
-
-  .. coqtop:: all
-
-     Lemma test : True.
-     have suff H : 2 + 2 = 3.
-     Focus 2.
+     have suff H : 2 + 2 = 3; last first.
 
   Note that H is introduced in the second goal.
 
@@ -2585,10 +2659,9 @@ context entry name.
 
   .. coqtop:: none
 
-     Abort All.
      Set Printing Depth 15.
 
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Inductive Ord n := Sub x of x < n.
      Notation "'I_ n" := (Ord n) (at level 8, n at level 2, format "''I_' n").
@@ -2604,11 +2677,7 @@ For this purpose the ``[: name ]`` intro pattern and the tactic
 
 .. example::
 
-  .. coqtop:: none
-
-     Abort All.
-
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test n m (H : m + 1 < n) : True.
      have [:pm] @i : 'I_n by apply: (Sub m); abstract: pm; omega.
@@ -2621,11 +2690,7 @@ with have and an explicit term, they must be used as follows:
 
 .. example::
 
-  .. coqtop:: none
-
-     Abort All.
-
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test n m (H : m + 1 < n) : True.
      have [:pm] @i : 'I_n := Sub m pm.
@@ -2644,11 +2709,7 @@ makes use of it).
 
 .. example::
 
-  .. coqtop:: none
-
-     Abort All.
-
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test n m (H : m + 1 < n) : True.
      have [:pm] @i k : 'I_(n+k) by apply: (Sub m); abstract: pm k; omega.
@@ -2665,21 +2726,21 @@ typeclass inference.
 
   .. coqtop:: none
 
-     Abort All.
-
      Axiom ty : Type.
      Axiom t : ty.
 
      Goal True.
 
-+ .. coqtop:: in undo
+  .. coqtop:: all
 
      have foo : ty.
 
   Full inference for ``ty``. The first subgoal demands a
   proof of such instantiated statement.
 
-+ .. coqdoc::
+  .. A strange bug prevents using the coqtop directive here
+
+  .. coqdoc::
 
      have foo : ty := .
 
@@ -2688,13 +2749,13 @@ typeclass inference.
   statement. Note that no proof term follows ``:=``, hence two subgoals are
   generated.
 
-+ .. coqtop:: in undo
+  .. coqtop:: all restart
 
      have foo : ty := t.
 
   No inference for ``ty`` and ``t``.
 
-+ .. coqtop:: in undo
+  .. coqtop:: all restart abort
 
      have foo := t.
 
@@ -2725,7 +2786,7 @@ The
 + but the optional clear item is still performed in the *second*
   branch. This means that the tactic:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      suff {H} H : forall x : nat, x >= 0.
 
@@ -2743,10 +2804,9 @@ The ``have`` modifier can follow the ``suff`` tactic.
 
   .. coqtop:: none
 
-     Abort All.
      Axioms G P : Prop.
 
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test : G.
      suff have H : P.
@@ -2772,9 +2832,9 @@ hypothesis and by pointing at the elements of the initial goals which
 should be generalized. The general syntax of without loss is:
 
 .. tacn:: wlog {? suff } {? @clear_switch } {? @i_item } : {* @ident } / @term
-   :name: wlog
-.. tacv:: without loss {? suff } {? @clear_switch } {? @i_item } : {* @ident } / @term
-   :name: without loss
+          without loss {? suff } {? @clear_switch } {? @i_item } : {* @ident } / @term
+   :name: wlog; without loss
+   :undocumented:
 
 where each :token:`ident` is a constant in the context
 of the goal. Open syntax is supported for :token:`term`.
@@ -2782,8 +2842,8 @@ of the goal. Open syntax is supported for :token:`term`.
 In its defective form:
 
 .. tacv:: wlog: / @term
-.. tacv:: without loss: / @term
-
+          without loss: / @term
+   :undocumented:
 
 on a goal G, it creates two subgoals: a first one to prove the
 formula (term -> G) -> G and a second one to prove the formula
@@ -2797,7 +2857,7 @@ name of the local definition with the ``@`` character.
 
 In the second subgoal, the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    move=> clear_switch i_item.
 
@@ -2810,10 +2870,6 @@ proof that quotient and reminder of natural number euclidean division
 are unique.
 
 .. example::
-
-  .. coqtop:: none
-
-     Abort All.
 
   .. coqtop:: all
 
@@ -2836,7 +2892,7 @@ pattern will be used to process its instance.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrfun ssrbool.
      Set Implicit Arguments.
@@ -2845,6 +2901,7 @@ pattern will be used to process its instance.
 
      Axiom P : nat -> Prop.
      Axioms eqn leqn : nat -> nat -> bool.
+     Declare Scope this_scope.
      Notation "a != b" := (eqn a b) (at level 70) : this_scope.
      Notation "a <= b" := (leqn a b) (at level 70) : this_scope.
      Open Scope this_scope.
@@ -2852,8 +2909,7 @@ pattern will be used to process its instance.
   .. coqtop:: all
 
      Lemma simple n (ngt0 : 0 < n ) : P n.
-     gen have ltnV, /andP[nge0 neq0] : n ngt0 / (0 <= n) && (n != 0).
-     Focus 2.
+     gen have ltnV, /andP[nge0 neq0] : n ngt0 / (0 <= n) && (n != 0); last first.
 
 
 .. _advanced_generalization_ssr:
@@ -2865,6 +2921,7 @@ The complete syntax for the items on the left hand side of the ``/``
 separator is the following one:
 
 .. tacv:: wlog … : {? @clear_switch | {? @  } @ident | ( {? @  } @ident := @c_pattern) } / @term
+   :undocumented:
 
 Clear operations are intertwined with generalization operations. This
 helps in particular avoiding dependency issues while generalizing some
@@ -2885,7 +2942,7 @@ illustrated in the following example.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -2904,10 +2961,13 @@ illustrated in the following example.
   the pattern ``id (addx x)``, that would produce the following first
   subgoal
 
-  .. coqtop:: none
+  .. coqtop:: reset none
 
-     Abort All.
-     From Coq Require Import Omega.
+     From Coq Require Import ssreflect Omega.
+     Set Implicit Arguments.
+     Unset Strict Implicit.
+     Unset Printing Implicit Defensive.
+
      Section Test.
      Variable x : nat.
      Definition addx z := z + x.
@@ -2949,8 +3009,9 @@ The general form of an |SSR| rewrite tactic is:
 
 .. tacn:: rewrite {+ @rstep }
    :name: rewrite (ssreflect)
+   :undocumented:
 
-The combination of a rewrite tactic with the in tactical (see section
+The combination of a rewrite tactic with the ``in`` tactical (see section
 :ref:`localization_ssr`) performs rewriting in both the context and the goal.
 
 A rewrite step :token:`rstep` has the general form:
@@ -2984,13 +3045,22 @@ operation should be performed:
   pattern. In its simplest form, it is a regular term. If no explicit
   redex switch is present the rewrite pattern to be matched is inferred
   from the :token:`r_item`.
-+ This optional term, or the :token:`r_item`, may be preceded by an occurrence
-  switch (see section :ref:`selectors_ssr`) or a clear item
-  (see section :ref:`discharge_ssr`),
-  these two possibilities being exclusive. An occurrence switch selects
++ This optional term, or the :token:`r_item`, may be preceded by an
+  :token:`occ_switch` (see section :ref:`selectors_ssr`) or a
+  :token:`clear_switch` (see section :ref:`discharge_ssr`),
+  these two possibilities being exclusive.
+
+  An occurrence switch selects
   the occurrences of the rewrite pattern which should be affected by the
   rewrite operation.
 
+  A clear switch, even an empty one, is performed *after* the
+  :token:`r_item` is actually processed and is complemented with the name of
+  the rewrite rule if an only if it is a simple proof context entry [#10]_.
+  As a consequence one can
+  write ``rewrite {}H`` to rewrite with ``H`` and dispose ``H`` immediately
+  afterwards.
+  This behavior can be avoided by putting parentheses around the rewrite rule.
 
 An :token:`r_item` can be:
 
@@ -3025,14 +3095,14 @@ An :token:`r_item` can be:
 
   .. example::
 
-     .. coqtop:: reset
+     .. coqtop:: reset none
 
         From Coq Require Import ssreflect.
         Set Implicit Arguments.
         Unset Strict Implicit.
         Unset Printing Implicit Defensive.
 
-     .. coqtop:: all
+     .. coqtop:: all abort
 
         Definition double x := x + x.
         Definition ddouble x := double (double x).
@@ -3044,26 +3114,32 @@ An :token:`r_item` can be:
      The |SSR| terms containing holes are *not* typed as
      abstractions in this context. Hence the following script fails.
 
-     .. coqtop:: none
-
-        Abort.
-
      .. coqtop:: all
 
         Definition f := fun x y => x + y.
         Lemma test x y : x + y = f y x.
+
+     .. coqtop:: all fail
+
         rewrite -[f y]/(y + _).
 
      but the following script succeeds
-
-     .. coqtop:: none
-
-        Restart.
 
      .. coqtop:: all
 
         rewrite -[f y x]/(y + _).
 
+
+.. flag:: SsrOldRewriteGoalsOrder
+
+   Controls the order in which generated subgoals (side conditions)
+   are added to the
+   proof context.  The flag is off by default, which puts subgoals generated
+   by conditional rules first, followed by the main goal.  When it is on,
+   the main goal appears first.  If your proofs are organized to complete
+   proving the main goal before side conditions, turning the flag on will save you
+   from having to add :tacn:`last first` tactics that would be needed
+   to keep the main goal as the currently focused goal.
 
 Remarks and examples
 ~~~~~~~~~~~~~~~~~~~~
@@ -3080,7 +3156,7 @@ tactics.
 
 In a rewrite tactic of the form:
 
-.. coqtop:: in
+.. coqdoc::
 
    rewrite occ_switch [term1]term2.
 
@@ -3123,7 +3199,7 @@ Performing rewrite and simplification operations in a single tactic
 enhances significantly the concision of scripts. For instance the
 tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    rewrite /my_def {2}[f _]/= my_eq //=.
 
@@ -3138,7 +3214,7 @@ proof of basic results on natural numbers arithmetic.
 .. example::
 
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3174,7 +3250,7 @@ side of the equality the user wants to rewrite.
 .. example::
 
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3194,7 +3270,7 @@ the equality.
 .. example::
 
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3204,7 +3280,7 @@ the equality.
   .. coqtop:: all
 
      Lemma test (H : forall t u, t + u * 0 = t) x y : x + y * 4 + 2 * 0 = x + 2 * 0.
-     rewrite [x + _]H.
+     Fail rewrite [x + _]H.
 
   Indeed the left hand side of ``H`` does not match
   the redex identified by the pattern ``x + y * 4``.
@@ -3217,7 +3293,7 @@ Occurrence switches and redex switches
 .. example::
 
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3234,10 +3310,6 @@ the rewrite tactic. The effect of the tactic on the initial goal is to
 rewrite this lemma at the second occurrence of the first matching
 ``x + y + 0`` of the explicit rewrite redex ``_ + y + 0``.
 
-An empty occurrence switch ``{}`` is not interpreted as a valid occurrence
-switch. It has the effect of clearing the :token:`r_item` (when it is the name
-of a context entry).
-
 Occurrence selection and repetition
 ```````````````````````````````````
 
@@ -3250,7 +3322,7 @@ repetition.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3280,7 +3352,7 @@ rewrite operations prescribed by the rules on the current goal.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3289,7 +3361,7 @@ rewrite operations prescribed by the rules on the current goal.
 
      Section Test.
 
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Variables (a b c : nat).
      Hypothesis eqab : a = b.
@@ -3302,10 +3374,6 @@ rewrite operations prescribed by the rules on the current goal.
   gathered in the tuple passed to the rewrite tactic. This multirule
   ``(eqab, eqac)`` is actually a |Coq| term and we can name it with a
   definition:
-
-  .. coqtop:: none
-
-     Abort.
 
   .. coqtop:: all
 
@@ -3323,7 +3391,7 @@ literal matches have priority.
 
 .. example::
 
-   .. coqtop:: all
+   .. coqtop:: all abort
 
       Definition d := a.
       Hypotheses eqd0 : d = 0.
@@ -3340,11 +3408,7 @@ repeated anew.
 
 .. example::
 
-  .. coqtop:: none
-
-     Abort.
-
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Hypothesis eq_adda_b : forall x, x + a = b.
      Hypothesis eq_adda_c : forall x, x + a = c.
@@ -3367,10 +3431,6 @@ tactic rewrite ``(=~ multi1)`` is equivalent to ``rewrite multi1_rev``.
 
 .. example::
 
-  .. coqtop:: none
-
-     Abort.
-
   .. coqtop:: all
 
      Hypothesis eqba : b = a.
@@ -3390,7 +3450,7 @@ reasoning purposes. The library also provides one lemma per such
 operation, stating that both versions return the same values when
 applied to the same arguments:
 
-.. coqtop:: in
+.. coqdoc::
 
      Lemma addE : add =2 addn.
      Lemma doubleE : double =1 doublen.
@@ -3406,7 +3466,7 @@ hand side. In order to reason conveniently on expressions involving
 the efficient operations, we gather all these rules in the definition
 ``trecE``:
 
-.. coqtop:: in
+.. coqdoc::
 
    Definition trecE := (addE, (doubleE, oddE), (mulE, add_mulE, (expE, mul_expE))).
 
@@ -3426,7 +3486,7 @@ Anyway this tactic is *not* equivalent to
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3442,11 +3502,7 @@ Anyway this tactic is *not* equivalent to
 
   while the other tactic results in
 
-  .. coqtop:: none
-
-     Undo.
-
-  .. coqtop:: all
+  .. coqtop:: all restart abort
 
      rewrite (_ : forall x, x * 0 = 0).
 
@@ -3464,14 +3520,14 @@ cases:
 
 + |SSR| never accepts to rewrite indeterminate patterns like:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      Lemma foo (x : unit) : x = tt.
 
   |SSR| will however accept the
   ηζ expansion of this rule:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      Lemma fubar (x : unit) : (let u := x in u) = tt.
 
@@ -3480,7 +3536,7 @@ cases:
 
   .. example::
 
-    .. coqtop:: reset
+    .. coqtop:: reset none
 
        From Coq Require Import ssreflect.
        Set Implicit Arguments.
@@ -3503,11 +3559,7 @@ cases:
     there is no occurrence of the head symbol ``f`` of the rewrite rule in the
     goal.
 
-    .. coqtop:: none
-
-       Undo.
-
-    .. coqtop:: all
+    .. coqtop:: all restart fail
 
        rewrite H.
 
@@ -3517,21 +3569,13 @@ cases:
     occurrence), using tactic ``rewrite /f`` (for a global replacement of
     f by g) or ``rewrite pattern/f``, for a finer selection.
 
-    .. coqtop:: none
-
-       Undo.
-
-    .. coqtop:: all
+    .. coqtop:: all restart
 
        rewrite /f H.
 
     alternatively one can override the pattern inferred from ``H``
 
-    .. coqtop:: none
-
-       Undo.
-
-    .. coqtop:: all
+    .. coqtop:: all restart
 
        rewrite [f _]H.
 
@@ -3550,14 +3594,15 @@ corresponding new goals will be generated.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrfun ssrbool.
      Set Implicit Arguments.
      Unset Strict Implicit.
      Unset Printing Implicit Defensive.
+     Set Warnings "-notation-overridden".
 
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Axiom leq : nat -> nat -> bool.
      Notation "m <= n" := (leq m n) : nat_scope.
@@ -3580,11 +3625,7 @@ corresponding new goals will be generated.
   As in :ref:`apply_ssr`, the ``ssrautoprop`` tactic is used to try to
   solve the existential variable.
 
-  .. coqtop:: none
-
-     Abort.
-
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test (x : 'I_2) y (H : y < 2) : Some x = insub 2 y.
      rewrite insubT.
@@ -3595,6 +3636,272 @@ rewriting rule is stated using Leibniz equality (as opposed to setoid
 relations). It will be extended to other rewriting relations in the
 future.
 
+.. _under_ssr:
+
+Rewriting under binders
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Goals involving objects defined with higher-order functions often
+require "rewriting under binders". While setoid rewriting is a
+possible approach in this case, it is common to use regular rewriting
+along with dedicated extensionality lemmas. This may cause some
+practical issues during the development of the corresponding scripts,
+notably as we might be forced to provide the rewrite tactic with
+complete terms, as shown by the simple example below.
+
+.. example::
+
+   .. coqtop:: reset none
+
+      From Coq Require Import ssreflect.
+      Set Implicit Arguments.
+      Unset Strict Implicit.
+      Unset Printing Implicit Defensive.
+
+   .. coqtop:: in
+
+      Axiom subnn : forall n : nat, n - n = 0.
+      Parameter map : (nat -> nat) -> list nat -> list nat.
+      Parameter sumlist : list nat -> nat.
+      Axiom eq_map :
+        forall F1 F2 : nat -> nat,
+        (forall n : nat, F1 n = F2 n) ->
+        forall l : list nat, map F1 l = map F2 l.
+
+   .. coqtop:: all
+
+      Lemma example_map l : sumlist (map (fun m => m - m) l) = 0.
+
+   In this context, one cannot directly use ``eq_map``:
+
+   .. coqtop:: all fail
+
+      rewrite eq_map.
+
+   as we need to explicitly provide the non-inferable argument ``F2``,
+   which corresponds here to the term we want to obtain *after* the
+   rewriting step. In order to perform the rewrite step one has to
+   provide the term by hand as follows:
+
+   .. coqtop:: all abort
+
+      rewrite (@eq_map _ (fun _ : nat => 0)).
+        by move=> m; rewrite subnn.
+
+   The :tacn:`under` tactic lets one perform the same operation in a more
+   convenient way:
+
+   .. coqtop:: all abort
+
+      Lemma example_map l : sumlist (map (fun m => m - m) l) = 0.
+      under eq_map => m do rewrite subnn.
+
+
+The under tactic
+````````````````
+
+The convenience :tacn:`under` tactic supports the following syntax:
+
+.. tacn:: under {? @r_prefix } @term {? => {+ @i_item}} {? do ( @tactic | [ {*| @tactic } ] ) }
+   :name: under
+
+   Operate under the context proved to be extensional by
+   lemma :token:`term`.
+
+   .. exn:: Incorrect number of tactics (expected N tactics, was given M).
+
+      This error can occur when using the version with a ``do`` clause.
+
+   The multiplier part of :token:`r_prefix` is not supported.
+
+We distinguish two modes,
+:ref:`interactive mode <under_interactive>` without a ``do`` clause, and
+:ref:`one-liner mode <under_one_liner>` with a ``do`` clause,
+which are explained in more detail below.
+
+.. _under_interactive:
+
+Interactive mode
+````````````````
+
+Let us redo the running example in interactive mode.
+
+.. example::
+
+   .. coqtop:: all abort
+
+      Lemma example_map l : sumlist (map (fun m => m - m) l) = 0.
+      under eq_map => m.
+        rewrite subnn.
+        over.
+
+The execution of the Ltac expression:
+
+:n:`under @term => [ @i_item__1 | … | @i_item__n ].`
+
+involves the following steps:
+
+1. It performs a :n:`rewrite @term`
+   without failing like in the first example with ``rewrite eq_map.``,
+   but creating evars (see :tacn:`evar`). If :n:`term` is prefixed by
+   a pattern or an occurrence selector, then the modifiers are honoured.
+
+2. As a n-branches intro pattern is provided :tacn:`under` checks that
+   n+1 subgoals have been created. The last one is the main subgoal,
+   while the other ones correspond to premises of the rewrite rule (such as
+   ``forall n, F1 n = F2 n`` for ``eq_map``).
+
+3. If so :tacn:`under` puts these n goals in head normal form (using
+   the defective form of the tactic :tacn:`move`), then executes
+   the corresponding intro pattern :n:`@ipat__i` in each goal.
+
+4. Then :tacn:`under` checks that the first n subgoals
+   are (quantified) equalities or double implications between a
+   term and an evar (e.g. ``m - m = ?F2 m`` in the running example).
+
+5. If so :tacn:`under` protects these n goals against an
+   accidental instantiation of the evar.
+   These protected goals are displayed using the ``Under[ … ]``
+   notation (e.g. ``Under[ m - m ]`` in the running example).
+
+6. The expression inside the ``Under[ … ]`` notation can be
+   proved equivalent to the desired expression
+   by using a regular :tacn:`rewrite` tactic.
+
+7. Interactive editing of the first n goals has to be signalled by
+   using the :tacn:`over` tactic or rewrite rule (see below).
+
+8. Finally, a post-processing step is performed in the main goal
+   to keep the name(s) for the bound variables chosen by the user in
+   the intro pattern for the first branch.
+
+.. _over_ssr:
+
+The over tactic
++++++++++++++++
+
+Two equivalent facilities (a terminator and a lemma) are provided to
+close intermediate subgoals generated by :tacn:`under` (i.e. goals
+displayed as ``Under[ … ]``):
+
+.. tacn:: over
+   :name: over
+
+   This terminator tactic allows one to close goals of the form
+   ``'Under[ … ]``.
+
+.. tacv:: by rewrite over
+
+   This is a variant of :tacn:`over` in order to close ``Under[ … ]``
+   goals, relying on the ``over`` rewrite rule.
+
+.. _under_one_liner:
+
+One-liner mode
+``````````````
+
+The Ltac expression:
+
+:n:`under @term => [ @i_item__1 | … | @i_item__n ] do [ @tac__1 | … | @tac__n ].`
+
+can be seen as a shorter form for the following expression:
+
+:n:`(under @term) => [ @i_item__1 | … | @i_item__n | ]; [ @tac__1; over | … | @tac__n; over | cbv beta iota ].`
+
+Notes:
+
++ The ``beta-iota`` reduction here is useful to get rid of the beta
+  redexes that could be introduced after the substitution of the evars
+  by the :tacn:`under` tactic.
+
++ Note that the provided tactics can as well
+  involve other :tacn:`under` tactics. See below for a typical example
+  involving the `bigop` theory from the Mathematical Components library.
+
++ If there is only one tactic, the brackets can be omitted, e.g.:
+  :n:`under @term => i do @tac.` and that shorter form should be
+  preferred.
+
++ If the ``do`` clause is provided and the intro pattern is omitted,
+  then the default :token:`i_item` ``*`` is applied to each branch.
+  E.g., the Ltac expression:
+  :n:`under @term do [ @tac__1 | … | @tac__n ]` is equivalent to:
+  :n:`under @term => [ * | … | * ] do [ @tac__1 | … | @tac__n ]`
+  (and it can be noted here that the :tacn:`under` tactic performs a
+  ``move.`` before processing the intro patterns ``=> [ * | … | * ]``).
+
+.. example::
+
+   .. coqtop:: reset none
+
+      From Coq Require Import ssreflect.
+      Set Implicit Arguments.
+      Unset Strict Implicit.
+      Unset Printing Implicit Defensive.
+
+      Coercion is_true : bool >-> Sortclass.
+
+      Reserved Notation "\big [ op / idx ]_ ( m <= i < n | P ) F"
+        (at level 36, F at level 36, op, idx at level 10, m, i, n at level 50,
+                 format "'[' \big [ op / idx ]_ ( m  <=  i  <  n  |  P )  F ']'").
+      Variant bigbody (R I : Type) : Type :=
+        BigBody : forall (_ : I) (_ : forall (_ : R) (_ : R), R) (_ : bool) (_ : R), bigbody R I.
+
+      Parameter bigop :
+        forall (R I : Type) (_ : R) (_ : list I) (_ : forall _ : I, bigbody R I), R.
+
+      Axiom eq_bigr_ :
+        forall (R : Type) (idx : R) (op : forall (_ : R) (_ : R), R) (I : Type)
+               (r : list I) (P : I -> bool) (F1 F2 : I -> R),
+          (forall x : I, is_true (P x) -> F1 x = F2 x) ->
+          bigop idx r (fun i : I => BigBody i op (P i) (F1 i)) =
+          bigop idx r (fun i : I => BigBody i op (P i) (F2 i)).
+
+      Axiom eq_big_ :
+        forall (R : Type) (idx : R) (op : R -> R -> R) (I : Type) (r : list I)
+               (P1 P2 : I -> bool) (F1 F2 : I -> R),
+          (forall x : I, P1 x = P2 x) ->
+          (forall i : I, is_true (P1 i) -> F1 i = F2 i) ->
+          bigop idx r (fun i : I => BigBody i op (P1 i) (F1 i)) =
+          bigop idx r (fun i : I => BigBody i op (P2 i) (F2 i)).
+
+      Reserved Notation "\sum_ ( m <= i < n | P ) F"
+        (at level 41, F at level 41, i, m, n at level 50,
+                 format "'[' \sum_ ( m  <=  i  <  n  |  P ) '/  '  F ']'").
+
+      Parameter index_iota : nat -> nat -> list nat.
+
+      Notation "\big [ op / idx ]_ ( m <= i < n | P ) F" :=
+        (bigop idx (index_iota m n) (fun i : nat => BigBody i op P%bool F)).
+
+      Notation "\sum_ ( m <= i < n | P ) F" :=
+        (\big[plus/O]_(m <= i < n | P%bool) F%nat).
+
+      Notation eq_bigr := (fun n m => eq_bigr_ 0 plus (index_iota n m)).
+      Notation eq_big := (fun n m => eq_big_ 0 plus (index_iota n m)).
+
+      Parameter odd : nat -> bool.
+      Parameter prime : nat -> bool.
+
+   .. coqtop:: in
+
+      Parameter addnC : forall m n : nat, m + n = n + m.
+      Parameter muln1 : forall n : nat, n * 1 = n.
+
+   .. coqtop:: all
+
+      Check eq_bigr.
+      Check eq_big.
+
+      Lemma test_big_nested (m n : nat) :
+        \sum_(0 <= a < m | prime a) \sum_(0 <= j < n | odd (j * 1)) (a + j) =
+        \sum_(0 <= i < m | prime i) \sum_(0 <= j < n | odd j) (j + i).
+      under eq_bigr => i prime_i do
+        under eq_big => [ j | j odd_j ] do
+          [ rewrite (muln1 j) | rewrite (addnC i j) ].
+
+   Remark how the final goal uses the name ``i`` (the name given in the
+   intro pattern) rather than ``a`` in the binder of the first summation.
 
 .. _locking_ssr:
 
@@ -3620,7 +3927,7 @@ copy of any term t. However this copy is (on purpose) *not
 convertible* to t in the |Coq| system [#8]_. The job is done by the
 following construction:
 
-.. coqtop:: in
+.. coqdoc::
 
    Lemma master_key : unit. Proof. exact tt. Qed.
    Definition locked A := let: tt := master_key in fun x : A => x.
@@ -3632,7 +3939,7 @@ selective rewriting, blocking on the fly the reduction in the term ``t``.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrfun ssrbool.
      From Coq Require Import List.
@@ -3656,7 +3963,7 @@ definition.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -3672,28 +3979,26 @@ definition.
       rewrite /=.
       unlock lid.
 
-We provide a special tactic unlock for unfolding such definitions
-while removing “locks”, e.g., the tactic:
-
 .. tacn:: unlock {? @occ_switch } @ident
    :name: unlock
 
-replaces the occurrence(s) of :token:`ident` coded by the
-:token:`occ_switch` with the corresponding body.
+   This tactic unfolds such definitions while removing “locks”, i.e. it
+   replaces the occurrence(s) of :token:`ident` coded by the
+   :token:`occ_switch` with the corresponding body.
 
 We found that it was usually preferable to prevent the expansion of
 some functions by the partial evaluation switch ``/=``, unless this
 allowed the evaluation of a condition. This is possible thanks to another
 mechanism of term tagging, resting on the following *Notation*:
 
-.. coqtop:: in
+.. coqdoc::
 
    Notation "'nosimpl' t" := (let: tt := tt in t).
 
 The term ``(nosimpl t)`` simplifies to ``t`` *except* in a definition.
 More precisely, given:
 
-.. coqtop:: in
+.. coqdoc::
 
    Definition foo := (nosimpl bar).
 
@@ -3709,7 +4014,7 @@ Note that ``nosimpl bar`` is simply notation for a term that reduces to
    The ``nosimpl`` trick only works if no reduction is apparent in
    ``t``; in particular, the declaration:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Definition foo x := nosimpl (bar x).
 
@@ -3717,14 +4022,14 @@ Note that ``nosimpl bar`` is simply notation for a term that reduces to
    function, and to use the following definition, which blocks the
    reduction as expected:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Definition foo x := nosimpl bar x.
 
 A standard example making this technique shine is the case of
 arithmetic operations. We define for instance:
 
-.. coqtop:: in
+.. coqdoc::
 
    Definition addn := nosimpl plus.
 
@@ -3744,7 +4049,7 @@ Congruence
 Because of the way matching interferes with parameters of type families,
 the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    apply: my_congr_property.
 
@@ -3755,102 +4060,102 @@ which the function is supplied:
 .. tacn:: congr {? @num } @term
    :name: congr
 
-This tactic:
-+ checks that the goal is a Leibniz equality
-+ matches both sides of this equality with “term applied to some arguments”, inferring the right number of arguments from the goal and the type of term. This may expand some definitions or fixpoints.
-+ generates the subgoals corresponding to pairwise equalities of the arguments present in the goal.
+   This tactic:
+   + checks that the goal is a Leibniz equality;
+   + matches both sides of this equality with “term applied to some arguments”, inferring the right number of arguments from the goal and the type of term. This may expand some definitions or fixpoints;
+   + generates the subgoals corresponding to pairwise equalities of the arguments present in the goal.
 
-The goal can be a non dependent product ``P -> Q``. In that case, the
-system asserts the equation ``P = Q``, uses it to solve the goal, and
-calls the ``congr`` tactic on the remaining goal ``P = Q``. This can be useful
-for instance to perform a transitivity step, like in the following
-situation.
+   The goal can be a non dependent product ``P -> Q``. In that case, the
+   system asserts the equation ``P = Q``, uses it to solve the goal, and
+   calls the ``congr`` tactic on the remaining goal ``P = Q``. This can be useful
+   for instance to perform a transitivity step, like in the following
+   situation.
 
-.. example::
+   .. example::
 
-  .. coqtop:: reset
+      .. coqtop:: reset none
 
-     From Coq Require Import ssreflect.
-     Set Implicit Arguments.
-     Unset Strict Implicit.
-     Unset Printing Implicit Defensive.
-     Section Test.
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
+         Section Test.
 
-  .. coqtop:: all
+      .. coqtop:: all
 
-     Lemma test (x y z : nat) (H : x = y) : x = z.
-     congr (_ = _) : H.
-     Abort.
+         Lemma test (x y z : nat) (H : x = y) : x = z.
+         congr (_ = _) : H.
+         Abort.
 
-     Lemma test (x y z : nat) : x = y -> x = z.
-     congr (_ = _).
+         Lemma test (x y z : nat) : x = y -> x = z.
+         congr (_ = _).
 
-The optional :token:`num` forces the number of arguments for which the
-tactic should generate equality proof obligations.
+   The optional :token:`num` forces the number of arguments for which the
+   tactic should generate equality proof obligations.
 
-This tactic supports equalities between applications with dependent
-arguments. Yet dependent arguments should have exactly the same
-parameters on both sides, and these parameters should appear as first
-arguments.
+   This tactic supports equalities between applications with dependent
+   arguments. Yet dependent arguments should have exactly the same
+   parameters on both sides, and these parameters should appear as first
+   arguments.
 
-.. example::
+   .. example::
 
-  .. coqtop:: reset
+      .. coqtop:: reset none
 
-     From Coq Require Import ssreflect.
-     Set Implicit Arguments.
-     Unset Strict Implicit.
-     Unset Printing Implicit Defensive.
-     Section Test.
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
+         Section Test.
 
-  .. coqtop:: all
+      .. coqtop:: all
 
-     Definition f n :=
-       if n is 0 then plus else mult.
-     Definition g (n m : nat) := plus.
+         Definition f n :=
+           if n is 0 then plus else mult.
+         Definition g (n m : nat) := plus.
 
-     Lemma test x y : f 0 x y = g 1 1 x y.
-     congr plus.
+         Lemma test x y : f 0 x y = g 1 1 x y.
+         congr plus.
 
-  This script shows that the ``congr`` tactic matches ``plus``
-  with ``f 0`` on the left hand side and ``g 1 1`` on the right hand
-  side, and solves the goal.
+      This script shows that the ``congr`` tactic matches ``plus``
+      with ``f 0`` on the left hand side and ``g 1 1`` on the right hand
+      side, and solves the goal.
 
-.. example::
+   .. example::
 
-  .. coqtop:: reset
+      .. coqtop:: reset none
 
-     From Coq Require Import ssreflect.
-     Set Implicit Arguments.
-     Unset Strict Implicit.
-     Unset Printing Implicit Defensive.
-     Section Test.
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
+         Section Test.
 
-  .. coqtop:: all
+      .. coqtop:: all
 
-     Lemma test n m (Hnm : m <= n) : S m + (S n - S m) = S n.
-     congr S; rewrite -/plus.
+         Lemma test n m (Hnm : m <= n) : S m + (S n - S m) = S n.
+         congr S; rewrite -/plus.
 
-  The tactic ``rewrite -/plus`` folds back the expansion of plus
-  which was necessary for matching both sides of the equality with
-  an application of ``S``.
+      The tactic ``rewrite -/plus`` folds back the expansion of plus
+      which was necessary for matching both sides of the equality with
+      an application of ``S``.
 
-Like most |SSR| arguments, term can contain wildcards.
+   Like most |SSR| arguments, :token:`term` can contain wildcards.
 
-.. example::
+   .. example::
 
-  .. coqtop:: reset
+      .. coqtop:: reset none
 
-     From Coq Require Import ssreflect.
-     Set Implicit Arguments.
-     Unset Strict Implicit.
-     Unset Printing Implicit Defensive.
-     Section Test.
+         From Coq Require Import ssreflect.
+         Set Implicit Arguments.
+         Unset Strict Implicit.
+         Unset Printing Implicit Defensive.
+         Section Test.
 
-  .. coqtop:: all
+      .. coqtop:: all
 
-     Lemma test x y : x + (y * (y + x - x)) = x * 1 + (y + 0) * y.
-     congr ( _ + (_ * _)).
+         Lemma test x y : x + (y * (y + x - x)) = x * 1 + (y + 0) * y.
+         congr ( _ + (_ * _)).
 
 .. _contextual_patterns_ssr:
 
@@ -3940,7 +4245,7 @@ For a quick glance at what can be expressed with the last
 :token:`r_pattern`
 consider the goal ``a = b`` and the tactic
 
-.. coqtop:: in
+.. coqdoc::
 
    rewrite [in X in _ = X]rule.
 
@@ -4019,7 +4324,7 @@ parentheses are required around more complex patterns.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4041,14 +4346,14 @@ patterns over simple terms, but to interpret a pattern with double
 parentheses as a simple term. For example, the following tactic would
 capture any occurrence of the term ``a in A``.
 
-.. coqtop:: in
+.. coqdoc::
 
    set t := ((a in A)).
 
 Contextual patterns can also be used as arguments of the ``:`` tactical.
 For example:
 
-.. coqtop:: in
+.. coqdoc::
 
    elim: n (n in _ = n) (refl_equal n).
 
@@ -4058,7 +4363,7 @@ Contextual patterns in rewrite
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4139,7 +4444,7 @@ context shortcuts.
 The following example is taken from ``ssreflect.v`` where the
 ``LHS`` and ``RHS`` shortcuts are defined.
 
-.. coqtop:: in
+.. coqdoc::
 
    Notation RHS := (X in _ = X)%pattern.
    Notation LHS := (X in X = _)%pattern.
@@ -4147,7 +4452,7 @@ The following example is taken from ``ssreflect.v`` where the
 Shortcuts defined this way can be freely used in place of the trailing
 ``ident in term`` part of any contextual pattern. Some examples follow:
 
-.. coqtop:: in
+.. coqdoc::
 
    set rhs := RHS.
    rewrite [in RHS]rule.
@@ -4171,6 +4476,7 @@ interpretation operations with the proof stack operations. This *view
 mechanism* relies on the combination of the ``/`` view switch with
 bookkeeping tactics and tacticals.
 
+.. _custom_elim_ssr:
 
 Interpreting eliminations
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -4179,13 +4485,13 @@ The view syntax combined with the ``elim`` tactic specifies an elimination
 scheme to be used instead of the default, generated, one. Hence the
 |SSR| tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    elim/V.
 
 is a synonym for:
 
-.. coqtop:: in
+.. coqdoc::
 
    intro top; elim top using V; clear top.
 
@@ -4195,13 +4501,13 @@ Since an elimination view supports the two bookkeeping tacticals of
 discharge and introduction (see section :ref:`basic_tactics_ssr`),
 the |SSR| tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    elim/V: x => y.
 
 is a synonym for:
 
-.. coqtop:: in
+.. coqdoc::
 
    elim x using V; clear x; intro y.
 
@@ -4221,7 +4527,7 @@ generation (see section :ref:`generation_of_equations_ssr`).
    The following script illustrates a toy example of this feature. Let us
    define a function adding an element at the end of a list:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect List.
      Set Implicit Arguments.
@@ -4259,13 +4565,13 @@ command) can be combined with the type family switches described
 in section :ref:`type_families_ssr`.
 Consider an eliminator ``foo_ind`` of type:
 
-.. coqtop:: in
+.. coqdoc::
 
    foo_ind : forall …, forall x : T, P p1 … pm.
 
 and consider the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    elim/foo_ind: e1 … / en.
 
@@ -4296,7 +4602,7 @@ Here is an example of a regular, but nontrivial, eliminator.
 
   Here is a toy example illustrating this feature.
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect FunInd.
      Set Implicit Arguments.
@@ -4316,14 +4622,14 @@ Here is an example of a regular, but nontrivial, eliminator.
   The following tactics are all valid and perform the same elimination
   on this goal.
 
-  .. coqtop:: in
+  .. coqdoc::
 
      elim/plus_ind: z / (plus _ z).
      elim/plus_ind: {z}(plus _ z).
      elim/plus_ind: {z}_.
      elim/plus_ind: z / _.
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect FunInd.
      Set Implicit Arguments.
@@ -4348,7 +4654,7 @@ Here is an example of a regular, but nontrivial, eliminator.
   ``plus (plus x y) z`` thus instantiating the last ``_`` with ``z``.
   Note that the tactic:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect FunInd.
      Set Implicit Arguments.
@@ -4365,7 +4671,7 @@ Here is an example of a regular, but nontrivial, eliminator.
 
   .. coqtop:: all
 
-     elim/plus_ind: y / _.
+     Fail elim/plus_ind: y / _.
 
   triggers an error: in the conclusion
   of the ``plus_ind`` eliminator, the first argument of the predicate
@@ -4378,7 +4684,7 @@ Here is an example of a truncated eliminator:
 
   Consider the goal:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect FunInd.
      Set Implicit Arguments.
@@ -4386,7 +4692,7 @@ Here is an example of a truncated eliminator:
      Unset Printing Implicit Defensive.
      Section Test.
 
-  .. coqtop:: in
+  .. coqdoc::
 
      Lemma test p n (n_gt0 : 0 < n) (pr_p : prime p) :
        p %| \prod_(i <- prime_decomp n | i \in prime_decomp n) i.1 ^ i.2 ->
@@ -4397,7 +4703,7 @@ Here is an example of a truncated eliminator:
 
   where the type of the ``big_prop`` eliminator is
 
-  .. coqtop:: in
+  .. coqdoc::
 
      big_prop: forall (R : Type) (Pb : R -> Type)
        (idx : R) (op1 : R -> R -> R), Pb idx ->
@@ -4410,7 +4716,7 @@ Here is an example of a truncated eliminator:
   inferred one is used instead: ``big[_/_]_(i <- _ | _ i) _ i``,
   and after the introductions, the following goals are generated:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      subgoal 1 is:
        p %| 1 -> exists2 x : nat * nat, x \in prime_decomp n & p = x.1
@@ -4442,7 +4748,7 @@ disjunction.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4463,7 +4769,7 @@ disjunction.
   This operation is so common that the tactic shell has specific
   syntax for it. The following scripts:
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4476,13 +4782,13 @@ disjunction.
 
      Lemma test a : P (a || a) -> True.
 
-  .. coqtop:: all undo
+  .. coqtop:: all
 
      move=> HPa; move/P2Q: HPa => HQa.
 
   or more directly:
 
-  .. coqtop:: all undo
+  .. coqtop:: all restart
 
      move/P2Q=> HQa.
 
@@ -4498,7 +4804,7 @@ equation name generation mechanism (see section :ref:`generation_of_equations_ss
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4516,7 +4822,7 @@ equation name generation mechanism (see section :ref:`generation_of_equations_ss
 
   This view tactic performs:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      move=> HQ; case: {HQ}(Q2P HQ) => [HPa | HPb].
 
@@ -4531,7 +4837,7 @@ relevant for the current goal.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4553,14 +4859,14 @@ relevant for the current goal.
   the double implication into the expected simple implication. The last
   script is in fact equivalent to:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      Lemma test a b : P (a || b) -> True.
      move/(iffLR (PQequiv _ _)).
 
   where:
 
-  .. coqtop:: in
+  .. coqdoc::
 
      Lemma iffLR P Q : (P <-> Q) -> P -> Q.
 
@@ -4575,7 +4881,7 @@ assumption to some given arguments.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4604,7 +4910,7 @@ bookkeeping steps.
    The following example use the ``~~`` prenex notation for boolean negation:
 
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4660,7 +4966,7 @@ analysis:
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect.
      Set Implicit Arguments.
@@ -4677,7 +4983,7 @@ analysis
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4702,7 +5008,7 @@ decidable predicate to its boolean version.
 First, booleans are injected into propositions using the coercion
 mechanism:
 
-.. coqtop:: in
+.. coqdoc::
 
    Coercion is_true (b : bool) := b = true.
 
@@ -4719,7 +5025,7 @@ To get all the benefits of the boolean reflection, it is in fact
 convenient to introduce the following inductive predicate ``reflect`` to
 relate propositions and booleans:
 
-.. coqtop:: in
+.. coqdoc::
 
    Inductive reflect (P: Prop): bool -> Type :=
    | Reflect_true : P -> reflect P true
@@ -4730,9 +5036,9 @@ logically equivalent propositions.
 
 For instance, the following lemma:
 
-.. coqtop:: in
+.. coqdoc::
 
-     Lemma andP: forall b1 b2, reflect (b1 /\ b2) (b1 && b2).
+   Lemma andP: forall b1 b2, reflect (b1 /\ b2) (b1 && b2).
 
 relates the boolean conjunction to the logical one ``/\``. Note that in
 ``andP``, ``b1`` and ``b2`` are two boolean variables and the
@@ -4745,20 +5051,20 @@ to the case analysis of |Coq|’s inductive types.
 
 Since the equivalence predicate is defined in |Coq| as:
 
-.. coqtop:: in
+.. coqdoc::
 
    Definition iff (A B:Prop) := (A -> B) /\ (B -> A).
 
 where ``/\`` is a notation for ``and``:
 
-.. coqtop:: in
+.. coqdoc::
 
    Inductive and (A B:Prop) : Prop := conj : A -> B -> and A B.
 
 This make case analysis very different according to the way an
 equivalence property has been defined.
 
-.. coqtop:: in
+.. coqdoc::
 
    Lemma andE (b1 b2 : bool) : (b1 /\ b2) <-> (b1 && b2).
 
@@ -4767,7 +5073,7 @@ Let us compare the respective behaviors of ``andE`` and ``andP``.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4780,11 +5086,15 @@ Let us compare the respective behaviors of ``andE`` and ``andP``.
 
      Lemma test (b1 b2 : bool) : if (b1 && b2) then b1 else ~~(b1||b2).
 
-  .. coqtop:: all undo
+  .. coqtop:: all
 
      case: (@andE b1 b2).
 
-  .. coqtop:: all undo
+  .. coqtop:: none
+
+     Restart.
+
+  .. coqtop:: all
 
      case: (@andP b1 b2).
 
@@ -4804,7 +5114,7 @@ The view mechanism is compatible with reflect predicates.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4812,16 +5122,12 @@ The view mechanism is compatible with reflect predicates.
      Unset Printing Implicit Defensive.
      Section Test.
 
-  .. coqtop:: all
+  .. coqtop:: all abort
 
      Lemma test (a b : bool) (Ha : a) (Hb : b) : a /\ b.
      apply/andP.
 
   Conversely
-
-  .. coqtop:: none
-
-     Abort.
 
   .. coqtop:: all
 
@@ -4842,13 +5148,13 @@ Specializing assumptions
 
 The |SSR| tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    move/(_ term1 … termn).
 
 is equivalent to the tactic:
 
-.. coqtop:: in
+.. coqdoc::
 
    intro top; generalize (top term1 … termn); clear top.
 
@@ -4862,6 +5168,7 @@ Interpreting assumptions
 The general form of an assumption view tactic is:
 
 .. tacv:: [move | case] / @term
+   :undocumented:
 
 The term , called the *view lemma* can be:
 
@@ -4904,13 +5211,13 @@ If ``term`` is a double implication, then the view hint will be one of
 the defined view hints for implication. These hints are by default the
 ones present in the file ``ssreflect.v``:
 
-.. coqtop:: in
+.. coqdoc::
 
    Lemma iffLR : forall P Q, (P <-> Q) -> P -> Q.
 
 which transforms a double implication into the left-to-right one, or:
 
-.. coqtop:: in
+.. coqdoc::
 
    Lemma iffRL : forall P Q, (P <-> Q) -> Q -> P.
 
@@ -4918,14 +5225,14 @@ which produces the converse implication. In both cases, the two
 first Prop arguments are implicit.
 
 If ``term`` is an instance of the ``reflect`` predicate, then ``A`` will be one
-of the defined view hints for the ``reflec``t predicate, which are by
+of the defined view hints for the ``reflect`` predicate, which are by
 default the ones present in the file ``ssrbool.v``. These hints are not
 only used for choosing the appropriate direction of the translation,
 but they also allow complex transformation, involving negations.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4933,9 +5240,9 @@ but they also allow complex transformation, involving negations.
      Unset Printing Implicit Defensive.
      Section Test.
 
-  .. coqtop:: in
+  .. coqtop:: all
 
-     Lemma introN : forall (P : Prop) (b : bool), reflect P b -> ~ P -> ~~b.
+     Check introN.
 
   .. coqtop:: all
 
@@ -4945,12 +5252,11 @@ but they also allow complex transformation, involving negations.
   In fact this last script does not
   exactly use the hint ``introN``, but the more general hint:
 
-  .. coqtop:: in
+  .. coqtop:: all
 
-     Lemma introNTF : forall (P : Prop) (b c : bool),
-       reflect P b -> (if c then ~ P else P) -> ~~ b = c.
+     Check introNTF.
 
-  The lemma ` `introN`` is an instantiation of introNF using c := true.
+  The lemma ``introN`` is an instantiation of ``introNF`` using ``c := true``.
 
 Note that views, being part of :token:`i_pattern`, can be used to interpret
 assertions too. For example the following script asserts ``a && b`` but
@@ -4959,7 +5265,7 @@ actually uses its propositional interpretation.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -4977,6 +5283,7 @@ Interpreting goals
 A goal interpretation view tactic of the form:
 
 .. tacv:: apply/@term
+   :undocumented:
 
 applied to a goal ``top`` is interpreted in the following way:
 
@@ -5007,19 +5314,20 @@ both sides.
 The syntax of double views is:
 
 .. tacv:: apply/@term/@term
+   :undocumented:
 
 The first term is the view lemma applied to the left hand side of the
 equality, while the second term is the one applied to the right hand side.
 
 In this context, the identity view can be used when no view has to be applied:
 
-.. coqtop:: in
+.. coqdoc::
 
    Lemma idP : reflect b1 b1.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -5035,7 +5343,7 @@ In this context, the identity view can be used when no view has to be applied:
   The same goal can be decomposed in several ways, and the user may
   choose the most convenient interpretation.
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -5054,31 +5362,30 @@ In this context, the identity view can be used when no view has to be applied:
 Declaring new Hint Views
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-The database of hints for the view mechanism is extensible via a
-dedicated vernacular command. As library ``ssrbool.v`` already declares a
-corpus of hints, this feature is probably useful only for users who
-define their own logical connectives. Users can declare their own
-hints following the syntax used in ``ssrbool.v``:
-
 .. cmd:: Hint View for move / @ident {? | @num }
-.. cmd:: Hint View for apply / @ident {? | @num }
+         Hint View for apply / @ident {? | @num }
 
-The :token:`ident` is the name of the lemma to be
-declared as a hint. If `move` is used as
-tactic, the hint is declared for assumption interpretation tactics,
-`apply` declares hints for goal interpretations. Goal interpretation
-view hints are declared for both simple views and left hand side
-views. The optional natural number is the number of implicit
-arguments to be considered for the declared hint view lemma.
+   This command can be used to extend the database of hints for the view
+   mechanism.
 
-The command:
+   As library ``ssrbool.v`` already declares a
+   corpus of hints, this feature is probably useful only for users who
+   define their own logical connectives.
 
-.. cmd:: Hint View for apply//@ident {? | @num }
+   The :token:`ident` is the name of the lemma to be
+   declared as a hint. If ``move`` is used as
+   tactic, the hint is declared for assumption interpretation tactics,
+   ``apply`` declares hints for goal interpretations. Goal interpretation
+   view hints are declared for both simple views and left hand side
+   views. The optional natural number is the number of implicit
+   arguments to be considered for the declared hint view lemma.
 
-with a double slash ``//``, declares hint views for right hand sides of
-double views.
+   .. cmdv:: Hint View for apply//@ident {? | @num }
 
-See the files ``ssreflect.v`` and ``ssrbool.v`` for examples.
+      This variant with a double slash ``//``, declares hint views for right
+      hand sides of double views.
+
+      See the files ``ssreflect.v`` and ``ssrbool.v`` for examples.
 
 
 Multiple views
@@ -5089,7 +5396,7 @@ in sequence. Both move and apply can be followed by an arbitrary
 number of ``/term``. The main difference between the following two
 tactics
 
-.. coqtop:: in
+.. coqdoc::
 
    apply/v1/v2/v3.
    apply/v1; apply/v2; apply/v3.
@@ -5101,7 +5408,7 @@ line would apply the view ``v2`` to all the goals generated by ``apply/v1``.
 Note that the NO-OP intro pattern ``-`` can be used to separate two views,
 making the two following examples equivalent:
 
-.. coqtop:: in
+.. coqdoc::
 
    move=> /v1; move=> /v2.
    move=> /v1 - /v2.
@@ -5112,7 +5419,7 @@ pass a given hypothesis to a lemma.
 
 .. example::
 
-  .. coqtop:: reset
+  .. coqtop:: reset none
 
      From Coq Require Import ssreflect ssrbool.
      Set Implicit Arguments.
@@ -5137,73 +5444,66 @@ equivalences are indeed taken into account, otherwise only single
 |SSR| searching tool
 --------------------
 
-|SSR| proposes an extension of the Search command. Its syntax is:
-
-.. cmd:: Search {? @pattern }  {* {? - } %( @string %| @pattern %) {? % @ident} } {? in {+ {? - } @qualid } }
+.. cmd:: Search {? @pattern }  {* {? - } {| @string | @pattern } {? % @ident} } {? in {+ {? - } @qualid } }
    :name: Search (ssreflect)
 
-where :token:`qualid` is the name of an open module. This command returns
-the list of lemmas:
+   This is the |SSR| extension of the Search command. :token:`qualid` is the
+   name of an open module. This command returns the list of lemmas:
 
+   + whose *conclusion* contains a subterm matching the optional first
+     pattern. A - reverses the test, producing the list of lemmas whose
+     conclusion does not contain any subterm matching the pattern;
+   + whose name contains the given string. A ``-`` prefix reverses the test,
+     producing the list of lemmas whose name does not contain the string. A
+     string that contains symbols or is followed by a scope key, is
+     interpreted as the constant whose notation involves that string (e.g.,
+     :g:`+` for :g:`addn`), if this is unambiguous; otherwise the diagnostic
+     includes the output of the :cmd:`Locate` vernacular command.
+   + whose statement, including assumptions and types, contains a subterm
+     matching the next patterns. If a pattern is prefixed by ``-``, the test is
+     reversed;
+   + contained in the given list of modules, except the ones in the
+     modules prefixed by a ``-``.
 
-+ whose *conclusion* contains a subterm matching the optional first
-  pattern. A - reverses the test, producing the list of lemmas whose
-  conclusion does not contain any subterm matching the pattern;
-+ whose name contains the given string. A ``-`` prefix reverses the test,
-  producing the list of lemmas whose name does not contain the string. A
-  string that contains symbols or is followed by a scope key, is
-  interpreted as the constant whose notation involves that string (e.g.,
-  `+` for `addn`), if this is unambiguous; otherwise the diagnostic
-  includes the output of the ``Locate`` vernacular command.
-+ whose statement, including assumptions and types, contains a subterm
-  matching the next patterns. If a pattern is prefixed by ``-``, the test is
-  reversed;
-+ contained in the given list of modules, except the ones in the
-  modules prefixed by a ``-``.
+.. note::
 
+   + As for regular terms, patterns can feature scope indications. For
+     instance, the command: ``Search _ (_ + _)%N.`` lists all the lemmas whose
+     statement (conclusion or hypotheses) involves an application of the
+     binary operation denoted by the infix ``+`` symbol in the ``N`` scope (which is
+     |SSR| scope for natural numbers).
+   + Patterns with holes should be surrounded by parentheses.
+   + Search always volunteers the expansion of the notation, avoiding the
+     need to execute Locate independently. Moreover, a string fragment
+     looks for any notation that contains fragment as a substring. If the
+     ``ssrbool.v`` library is imported, the command: ``Search "~~".`` answers :
 
-Note that:
+     .. coqtop:: reset none
 
+        From Coq Require Import ssreflect ssrbool.
+        Set Implicit Arguments.
+        Unset Strict Implicit.
+        Unset Printing Implicit Defensive.
 
-+ As for regular terms, patterns can feature scope indications. For
-  instance, the command: ``Search _ (_ + _)%N.`` lists all the lemmas whose
-  statement (conclusion or hypotheses) involves an application of the
-  binary operation denoted by the infix ``+`` symbol in the ``N`` scope (which is
-  |SSR| scope for natural numbers).
-+ Patterns with holes should be surrounded by parentheses.
-+ Search always volunteers the expansion of the notation, avoiding the
-  need to execute Locate independently. Moreover, a string fragment
-  looks for any notation that contains fragment as a substring. If the
-  ``ssrbool.v`` library is imported, the command: ``Search "~~".`` answers :
+     .. coqtop:: all
 
-  .. example::
+        Search "~~".
 
-    .. coqtop:: reset
+   + A diagnostic is issued if there are different matching notations; it
+     is an error if all matches are partial.
+   + Similarly, a diagnostic warns about multiple interpretations, and
+     signals an error if there is no default one.
+   + The command ``Search in M.`` is a way of obtaining the complete
+     signature of the module ``M``.
+   + Strings and pattern indications can be interleaved, but the first
+     indication has a special status if it is a pattern, and only filters
+     the conclusion of lemmas:
 
-       From Coq Require Import ssreflect ssrbool.
-       Set Implicit Arguments.
-       Unset Strict Implicit.
-       Unset Printing Implicit Defensive.
-
-    .. coqtop:: all
-
-       Search "~~".
-
-+ A diagnostic is issued if there are different matching notations; it
-  is an error if all matches are partial.
-+ Similarly, a diagnostic warns about multiple interpretations, and
-  signals an error if there is no default one.
-+ The command ``Search in M.`` is a way of obtaining the complete
-  signature of the module ``M``.
-+ Strings and pattern indications can be interleaved, but the first
-  indication has a special status if it is a pattern, and only filters
-  the conclusion of lemmas:
-
-    + The command : ``Search (_ =1 _) "bij".`` lists all the lemmas whose
-      conclusion features a ``=1`` and whose name contains the string ``bij``.
-    + The command : ``Search "bij" (_ =1 _).`` lists all the lemmas whose
-      statement, including hypotheses, features a ``=1`` and whose name
-      contains the string ``bij``.
+     + The command : ``Search (_ =1 _) "bij".`` lists all the lemmas whose
+       conclusion features a ``=1`` and whose name contains the string ``bij``.
+     + The command : ``Search "bij" (_ =1 _).`` lists all the lemmas whose
+       statement, including hypotheses, features a ``=1`` and whose name
+       contains the string ``bij``.
 
 Synopsis and Index
 ------------------
@@ -5255,11 +5555,21 @@ discharge item see :ref:`discharge_ssr`
 
 generalization item see :ref:`structure_ssr`
 
-.. prodn:: i_pattern ::= @ident %| _ %| ? %| * %| {? @occ_switch } -> %| {? @occ_switch } <- %| [ {*| {* @i_item } } %| - %| [: {+ @ident } ]
+.. prodn:: i_pattern ::= @ident %| > %| _ %| ? %| * %| + %| {? @occ_switch } -> %| {? @occ_switch } <- %| [ {?|  @i_item } ] %| - %| [: {+ @ident } ]
 
 intro pattern :ref:`introduction_ssr`
 
-.. prodn:: i_item ::= @clear_switch %| @s_item %| @i_pattern %| {? %{%} } / @term
+.. prodn:: i_item ::= @clear_switch %| @s_item %| @i_pattern %| @i_view %| @i_block
+
+view :ref:`introduction_ssr`
+
+.. prodn::
+   i_view ::= {? %{%} } /@term %| /ltac:( @tactic )
+
+intro block :ref:`introduction_ssr`
+
+.. prodn::
+   i_block ::= [^ @ident ] %| [^~ @ident ] %| [^~ @num ]
 
 intro item  see :ref:`introduction_ssr`
 
@@ -5307,80 +5617,86 @@ respectively.
 
 .. tacn:: move
 
-idtac or hnf see  :ref:`bookkeeping_ssr`
+   :tacn:`idtac` or :tacn:`hnf` (see  :ref:`bookkeeping_ssr`)
 
 .. tacn:: apply
-.. tacn:: exact
+          exact
 
-application see :ref:`the_defective_tactics_ssr`
+   application (see :ref:`the_defective_tactics_ssr`)
 
 .. tacn:: abstract
 
- see :ref:`abstract_ssr` and :ref:`generating_let_ssr`
+   see :ref:`abstract_ssr` and :ref:`generating_let_ssr`
 
 .. tacn:: elim
 
-induction see :ref:`the_defective_tactics_ssr`
+   induction (see :ref:`the_defective_tactics_ssr`)
 
 .. tacn:: case
 
-case analysis see :ref:`the_defective_tactics_ssr`
+   case analysis (see :ref:`the_defective_tactics_ssr`)
 
 .. tacn:: rewrite {+ @r_step }
 
-rewrite  see :ref:`rewriting_ssr`
+   rewrite (see :ref:`rewriting_ssr`)
+
+.. tacn:: under {? @r_prefix } @term {? => {+ @i_item}} {? do ( @tactic | [ {*| @tactic } ] )}
+
+   under (see :ref:`under_ssr`)
+
+.. tacn:: over
+
+   over (see :ref:`over_ssr`)
 
 .. tacn:: have {* @i_item } {? @i_pattern } {? @s_item %| {+ @ssr_binder } } {? : @term } := @term
-.. tacv:: have {* @i_item } {? @i_pattern } {? @s_item %| {+ @ssr_binder } } : @term {? by @tactic }
-.. tacn:: have suff {? @clear_switch } {? @i_pattern } {? : @term } := @term
-.. tacv:: have suff {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
-.. tacv:: gen have {? @ident , } {? @i_pattern } : {+ @gen_item } / @term {? by @tactic }
-.. tacv:: generally have {? @ident , } {? @i_pattern } : {+ @gen_item } / @term {? by @tactic }
-   :name: generally have
+          have {* @i_item } {? @i_pattern } {? @s_item %| {+ @ssr_binder } } : @term {? by @tactic }
+          have suff {? @clear_switch } {? @i_pattern } {? : @term } := @term
+          have suff {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
+          gen have {? @ident , } {? @i_pattern } : {+ @gen_item } / @term {? by @tactic }
+          generally have {? @ident , } {? @i_pattern } : {+ @gen_item } / @term {? by @tactic }
+   :name: _; _; _; _; _; generally have
 
-forward  chaining see :ref:`structure_ssr`
-
+   forward chaining (see :ref:`structure_ssr`)
 
 .. tacn:: wlog {? suff } {? @i_item } : {* @gen_item %| @clear_switch } / @term
 
-specializing see :ref:`structure_ssr`
+   specializing (see :ref:`structure_ssr`)
 
 .. tacn:: suff {* @i_item } {? @i_pattern } {+ @ssr_binder } : @term {? by @tactic }
-   :name: suff
-.. tacv:: suffices {* @i_item } {? @i_pattern } {+ @ssr_binder } : @term {? by @tactic }
-   :name: suffices
-.. tacv:: suff {? have } {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
-.. tacv:: suffices {? have } {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
+          suffices {* @i_item } {? @i_pattern } {+ @ssr_binder } : @term {? by @tactic }
+          suff {? have } {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
+          suffices {? have } {? @clear_switch } {? @i_pattern } : @term {? by @tactic }
+   :name: suff; suffices; _; _
 
-backchaining see :ref:`structure_ssr`
+   backchaining (see :ref:`structure_ssr`)
 
 .. tacn:: pose @ident := @term
 
-local definition :ref:`definitions_ssr`
+   local definition (see :ref:`definitions_ssr`)
 
 .. tacv:: pose @ident {+ @ssr_binder } := @term
 
-local function definition
+   local function definition
 
 .. tacv:: pose fix @fix_body
 
-local fix definition
+   local fix definition
 
 .. tacv:: pose cofix @fix_body
 
-local cofix definition
+   local cofix definition
 
-.. tacn:: set @ident {? : @term } := {? @occ_switch } %( @term %| ( @c_pattern) %)
+.. tacn:: set @ident {? : @term } := {? @occ_switch } {| @term | ( @c_pattern) }
 
-abbreviation see :ref:`abbreviations_ssr`
+   abbreviation (see :ref:`abbreviations_ssr`)
 
 .. tacn:: unlock {* {? @r_prefix } @ident }
 
-unlock see :ref:`locking_ssr`
+   unlock (see :ref:`locking_ssr`)
 
 .. tacn:: congr {? @num } @term
 
-congruence :ref:`congruence_ssr`
+   congruence (see :ref:`congruence_ssr`)
 
 
 Tacticals
@@ -5398,36 +5714,47 @@ introduction see :ref:`introduction_ssr`
 
 localization see :ref:`localization_ssr`
 
-.. prodn:: tactic += do {? @mult } %( @tactic %| [ {+| @tactic } ] %)
+.. prodn:: tactic += do {? @mult } {| @tactic | [ {+| @tactic } ] }
 
 iteration  see :ref:`iteration_ssr`
 
-.. prodn:: tactic += @tactic ; %( first %| last %) {? @num } %( @tactic %| [ {+| @tactic } ] %)
+.. prodn:: tactic += @tactic ; {| first | last } {? @num } {| @tactic | [ {+| @tactic } ] }
 
 selector  see :ref:`selectors_ssr`
 
-.. prodn:: tactic += @tactic ; %( first %| last %) {? @num }
+.. prodn:: tactic += @tactic ; {| first | last } {? @num }
 
 rotation see :ref:`selectors_ssr`
 
-.. prodn:: tactic += by %( @tactic %| [ {*| @tactic } ] %)
+.. prodn:: tactic += by {| @tactic | [ {*| @tactic } ] }
 
 closing see :ref:`terminators_ssr`
 
 Commands
 ~~~~~~~~
 
-.. cmd:: Hint View for %( move %| apply %) / @ident {? | @num }
+.. cmd:: Hint View for {| move | apply } / @ident {? | @num }
 
-view hint declaration see :ref:`declaring_new_hints_ssr`
+   view hint declaration (see :ref:`declaring_new_hints_ssr`)
 
 .. cmd:: Hint View for apply // @ident {? @num }
 
-right hand side double , view hint declaration see :ref:`declaring_new_hints_ssr`
+   right hand side double , view hint declaration (see :ref:`declaring_new_hints_ssr`)
 
 .. cmd:: Prenex Implicits {+ @ident }
 
-prenex implicits declaration see :ref:`parametric_polymorphism_ssr`
+   prenex implicits declaration (see :ref:`parametric_polymorphism_ssr`)
+
+Settings
+~~~~~~~~
+
+.. flag:: Debug Ssreflect
+
+   *Developer only.* Print debug information on reflect.
+
+.. flag:: Debug SsrMatching
+
+   *Developer only.* Print debug information on SSR matching.
 
 .. rubric:: Footnotes
 
@@ -5450,3 +5777,5 @@ prenex implicits declaration see :ref:`parametric_polymorphism_ssr`
   in the metatheory
 .. [#9] The current state of the proof shall be displayed by the Show
   Proof command of |Coq| proof mode.
+.. [#10] A simple proof context entry is a naked identifier (i.e. not between
+  parentheses) designating a context entry that is not a section variable.

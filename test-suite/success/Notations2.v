@@ -151,6 +151,17 @@ Module M16.
   Local Notation "##" := 0 (in custom foo2).
 
   (* Test Print Grammar *)
-  Print Grammar foo.
-  Print Grammar foo2.
+  Print Custom Grammar foo.
+  Print Custom Grammar foo2.
 End M16.
+
+(* Example showing the need for strong evaluation of
+   cases_pattern_of_glob_constr (this used to raise Not_found at some
+   time) *)
+
+Module M17.
+
+Notation "# x ## t & u" := ((fun x => (x,t)),(fun x => (x,u))) (at level 0, x pattern).
+Check fun y : nat => # (x,z) ## y & y.
+
+End M17.

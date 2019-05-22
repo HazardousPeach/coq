@@ -92,7 +92,7 @@ and use the ``==`` notation on terms of this type.
 Derived Canonical Structures
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-We know how to use ``== `` on base types, like ``nat``, ``bool``, ``Z``. Here we show
+We know how to use ``==`` on base types, like ``nat``, ``bool``, ``Z``. Here we show
 how to deal with type constructors, i.e. how to make the following
 example work:
 
@@ -209,7 +209,7 @@ We need to define a new class that inherits from both ``EQ`` and ``LE``.
                         LE_class : LE.class T;
                         extra : mixin (EQ.Pack T EQ_class) (LE.cmp T LE_class) }.
 
-    Structure type := _Pack { obj : Type; class_of : class obj }.
+    Structure type := _Pack { obj : Type; #[canonical(false)] class_of : class obj }.
 
     Arguments Mixin {e le} _.
 
@@ -218,6 +218,9 @@ We need to define a new class that inherits from both ``EQ`` and ``LE``.
 The mixin component of the ``LEQ`` class contains all the extra content we
 are adding to ``EQ`` and ``LE``. In particular it contains the requirement
 that the two relations we are combining are compatible.
+
+The `class_of` projection of the `type` structure is annotated as *not canonical*;
+it plays no role in the search for instances.
 
 Unfortunately there is still an obstacle to developing the algebraic
 theory of this new class.

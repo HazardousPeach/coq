@@ -11,6 +11,9 @@
 # This makefile is normally called by the main Makefile after setting
 # some variables.
 
+# Cleanup environment (avoids filling it up)
+unexport $(COQ_EXPORTED)
+
 ###########################################################################
 # User-customizable variables
 ###########################################################################
@@ -21,10 +24,6 @@
 # To see the actual commands launched by make instead of shortened versions,
 # set this variable to 1 (or any non-empty value):
 VERBOSE ?=
-
-# If set to 1 (or non-empty) then *.ml files corresponding to *.ml4 files
-# will be generated in a human-readable format rather than in a binary format.
-READABLE_ML4 ?=
 
 # When non-empty, a time command is performed at each .v compilation.
 # To collect compilation timings of .v and import them in a spreadsheet,
@@ -48,6 +47,9 @@ NO_RECALC_DEPS ?=
 # Non-empty runs the checker on all produced .vo files:
 VALIDATE ?=
 
+# When non-empty, passed as extra arguments to coqtop/coqc:
+COQUSERFLAGS ?=
+
 # Output file names for timed builds
 TIME_OF_BUILD_FILE               ?= time-of-build.log
 TIME_OF_BUILD_BEFORE_FILE        ?= time-of-build-before.log
@@ -57,6 +59,9 @@ TIME_OF_PRETTY_BOTH_BUILD_FILE   ?= time-of-build-both.log
 TIME_OF_PRETTY_BUILD_EXTRA_FILES ?= - # also output to the command line
 BEFORE ?=
 AFTER ?=
+
+# Number of parallel jobs for -schedule-vio2vo
+NJOBS ?= 2
 
 ###########################################################################
 # Default starting rule
@@ -86,7 +91,7 @@ byte: coqbyte coqide-byte pluginsbyte printers
 
 # This list of ml files used to be in the main Makefile, we moved it here
 # to avoid exhausting the variable env in Win32
-MLFILES := $(MLSTATICFILES) $(GENMLFILES) $(ML4FILES:.ml4=.ml)
+MLFILES := $(MLSTATICFILES) $(GENMLFILES)
 
 include Makefile.common
 include Makefile.vofiles
@@ -148,16 +153,19 @@ endif
 # This include below will lauch the build of all .d.
 # The - at front is for disabling warnings about currently missing ones.
 # For creating the missing .d, make will recursively build things like
-# coqdep_boot (for the .v.d files) or grammar.cma (for .ml4 -> .ml -> .ml.d).
+# coqdep_boot (for the .v.d files) or coqpp (for .mlg -> .ml -> .ml.d).
 
 VDFILE := .vfiles
 MLDFILE := .mlfiles
 PLUGMLDFILE := plugins/.mlfiles
+USERCONTRIBMLDFILE := user-contrib/.mlfiles
 MLLIBDFILE := .mllibfiles
 PLUGMLLIBDFILE := plugins/.mllibfiles
+USERCONTRIBMLLIBDFILE := user-contrib/.mllibfiles
 
 DEPENDENCIES := \
- $(addsuffix .d, $(MLDFILE) $(MLLIBDFILE) $(PLUGMLDFILE) $(PLUGMLLIBDFILE) $(CFILES) $(VDFILE))
+ $(addsuffix .d, $(MLDFILE) $(MLLIBDFILE) $(PLUGMLDFILE) $(PLUGMLLIBDFILE) \
+ $(USERCONTRIBMLDFILE) $(USERCONTRIBMLLIBDFILE) $(CFILES) $(VDFILE))
 
 -include $(DEPENDENCIES)
 
@@ -166,7 +174,7 @@ DEPENDENCIES := \
 # of include, and they will then be automatically deleted, leading to an
 # infinite loop.
 
-.SECONDARY: $(DEPENDENCIES) $(GENFILES) $(ML4FILES:.ml4=.ml)
+.SECONDARY: $(DEPENDENCIES) $(GENFILES) $(MLGFILES:.mlg=.ml)
 
 ###########################################################################
 # Compilation options
@@ -195,18 +203,23 @@ TIMER=$(if $(TIMED), $(STDTIME), $(TIMECMD))
 # the output format of the unix command time. For instance:
 #   TIME="%C (%U user, %S sys, %e total, %M maxres)"
 
-COQOPTS=$(NATIVECOMPUTE) $(COQWARNERROR)
-BOOTCOQC=$(TIMER) $(COQTOPBEST) -boot $(COQOPTS) -compile
+COQOPTS=$(NATIVECOMPUTE) $(COQWARNERROR) $(COQUSERFLAGS) -allow-sprop
+# Beware this depends on the makefile being in a particular dir, we
+# should pass an absolute path here but windows is tricky
+# c.f. https://github.com/coq/coq/pull/9560
+BOOTCOQC=$(TIMER) $(COQC) -coqlib . -q $(COQOPTS)
 
 LOCALINCLUDES=$(addprefix -I ,$(SRCDIRS))
-MLINCLUDES=$(LOCALINCLUDES) -I $(MYCAMLP5LIB)
+MLINCLUDES=$(LOCALINCLUDES)
+
+USERCONTRIBINCLUDES=$(addprefix -I user-contrib/,$(USERCONTRIBDIRS))
 
 OCAMLC := $(OCAMLFIND) ocamlc $(CAMLFLAGS)
 OCAMLOPT := $(OCAMLFIND) opt $(CAMLFLAGS)
 
 BYTEFLAGS=$(CAMLDEBUG) $(USERFLAGS)
 OPTFLAGS=$(CAMLDEBUGOPT) $(CAMLTIMEPROF) $(USERFLAGS) $(FLAMBDA_FLAGS)
-DEPFLAGS=$(LOCALINCLUDES)$(if $(filter plugins/%,$@),, -I ide -I ide/protocol)
+DEPFLAGS=$(LOCALINCLUDES) -map gramlib/.pack/gramlib.ml $(if $(filter plugins/% user-contrib/%,$@),, -I ide -I ide/protocol)
 
 # On MacOS, the binaries are signed, except our private ones
 ifeq ($(shell which codesign > /dev/null 2>&1 && echo $(ARCH)),Darwin)
@@ -237,6 +250,10 @@ OPT:=
 BESTOBJ:=.cmo
 BESTLIB:=.cma
 BESTDYN:=.cma
+
+# needed while booting if non -local
+CAML_LD_LIBRARY_PATH := $(PWD)/kernel/byterun:$(CAML_LD_LIBRARY_PATH)
+export CAML_LD_LIBRARY_PATH
 endif
 
 define bestobj
@@ -253,18 +270,8 @@ define ocamlbyte
 $(OCAMLC) $(MLINCLUDES) $(BYTEFLAGS) $(CUSTOM) -o $@ -linkpkg $(1) $^
 endef
 
-# Camlp5 settings
-
-CAMLP5DEPS:=grammar/grammar.cma
-CAMLP5USE=pa_extend.cmo q_MLast.cmo pa_macro.cmo -D$(CAMLVERSION)
-
-PR_O := $(if $(READABLE_ML4),pr_o.cmo,pr_dump.cmo)
-
 # Main packages linked by Coq.
 SYSMOD:=-package num,str,unix,dynlink,threads
-
-# We do not repeat the dependencies already in SYSMOD here
-P4CMA:=gramlib.cma
 
 ###########################################################################
 # Infrastructure for the rest of the Makefile
@@ -289,7 +296,7 @@ ifndef ORDER_ONLY_SEP
 $(error This Makefile needs GNU Make 3.81 or later (that is a version that supports the order-only dependency feature without major bugs.))
 endif
 
-VO_TOOLS_DEP := $(COQTOPBEST)
+VO_TOOLS_DEP := $(COQC)
 ifdef VALIDATE
  VO_TOOLS_DEP += $(CHICKEN)
 endif
@@ -317,11 +324,21 @@ $(LIBCOQRUN): kernel/byterun/coq_jumptbl.h $(BYTERUN)
 	cd $(dir $(LIBCOQRUN)) && \
 	$(OCAMLFIND) ocamlmklib -oc $(COQRUN) $(notdir $(BYTERUN))
 
-kernel/byterun/coq_jumptbl.h : kernel/byterun/coq_instruct.h kernel/byterun/make_jumptbl.sh
-	kernel/byterun/make_jumptbl.sh $< $@
+kernel/genOpcodeFiles.exe: kernel/genOpcodeFiles.ml
+	$(SHOW)'OCAMLC    $<'
+	$(HIDE)$(OCAMLC) -o $@ $<
 
-kernel/copcodes.ml: kernel/byterun/coq_instruct.h kernel/make_opcodes.sh kernel/make-opcodes
-	kernel/make_opcodes.sh $< $@
+kernel/byterun/coq_instruct.h: kernel/genOpcodeFiles.exe
+	$(SHOW)'WRITE $@'
+	$(HIDE)$< enum > $@
+
+kernel/byterun/coq_jumptbl.h: kernel/genOpcodeFiles.exe
+	$(SHOW)'WRITE $@'
+	$(HIDE)$< jump > $@
+
+kernel/copcodes.ml: kernel/genOpcodeFiles.exe
+	$(SHOW)'WRITE $@'
+	$(HIDE)$< copml > $@
 
 %.o: %.c
 	$(SHOW)'OCAMLC    $<'
@@ -335,70 +352,22 @@ kernel/copcodes.ml: kernel/byterun/coq_instruct.h kernel/make_opcodes.sh kernel/
 	$(SHOW)'CCDEP     $<'
 	$(HIDE)$(OCAMLC) -ccopt "-MM -MQ $@ -MQ $(<:.c=.o) -isystem $(CAMLHLIB)" $< $(TOTARGET)
 
-###########################################################################
-#  grammar/grammar.cma
-###########################################################################
-
-## In this part, we compile grammar/grammar.cma
-## without relying on .d dependency files, for bootstraping the creation
-## and inclusion of these .d files
-
-## Explicit dependencies for grammar stuff
-
-GRAMBASEDEPS := grammar/q_util.cmi
-GRAMCMO := grammar/q_util.cmo \
- grammar/argextend.cmo grammar/tacextend.cmo grammar/vernacextend.cmo
 COQPPCMO := $(addsuffix .cmo, $(addprefix coqpp/, coqpp_parse coqpp_lex))
-
-grammar/argextend.cmo : $(GRAMBASEDEPS)
-grammar/q_util.cmo : $(GRAMBASEDEPS)
-grammar/tacextend.cmo : $(GRAMBASEDEPS) grammar/argextend.cmo
-grammar/vernacextend.cmo : $(GRAMBASEDEPS) grammar/tacextend.cmo \
- grammar/argextend.cmo
 
 coqpp/coqpp_parse.cmi: coqpp/coqpp_ast.cmi
 coqpp/coqpp_parse.cmo: coqpp/coqpp_ast.cmi coqpp/coqpp_parse.cmi
 coqpp/coqpp_lex.cmo: coqpp/coqpp_ast.cmi coqpp/coqpp_parse.cmo
 
-## Ocaml compiler with the right options and -I for grammar
-
-GRAMC := $(OCAMLFIND) ocamlc $(CAMLFLAGS) $(CAMLDEBUG) $(USERFLAGS) \
- -I $(MYCAMLP5LIB) -I grammar
-
-## Specific rules for grammar.cma
-
-grammar/grammar.cma : $(GRAMCMO)
-	$(SHOW)'Testing $@'
-	@touch grammar/test.mlp
-	$(HIDE)$(GRAMC) -pp '$(CAMLP5O) $^ -impl' -impl grammar/test.mlp -o grammar/test
-	@rm -f grammar/test.* grammar/test
-	$(SHOW)'OCAMLC -a $@'
-	$(HIDE)$(GRAMC) $^ -linkall -a -o $@
-
 $(COQPP): $(COQPPCMO) coqpp/coqpp_main.ml
 	$(SHOW)'OCAMLC -a $@'
-	$(HIDE)$(GRAMC) -I coqpp $^ -linkall -o $@
+	$(HIDE)$(OCAMLC) -I coqpp $^ -linkall -o $@
 
-## Support of Camlp5 and Camlp5
-
-COMPATCMO:=
-GRAMP4USE:=$(COMPATCMO) pa_extend.cmo q_MLast.cmo pa_macro.cmo -D$(CAMLVERSION)
-GRAMPP:=$(CAMLP5O) -I $(MYCAMLP5LIB) $(GRAMP4USE) $(CAMLP5COMPAT) -impl
-
-## Rules for standard .mlp and .mli files in grammar/
-
-grammar/%.cmo: grammar/%.mlp | $(COMPATCMO)
-	$(SHOW)'OCAMLC -c -pp $<'
-	$(HIDE)$(GRAMC) -c -pp '$(GRAMPP)' -impl $<
-
-grammar/%.cmo: grammar/%.ml | $(COMPATCMO)
-	$(SHOW)'OCAMLC -c -pp $<'
-	$(HIDE)$(GRAMC) -c $<
-
-grammar/%.cmi: grammar/%.mli
-	$(SHOW)'OCAMLC -c $<'
-	$(HIDE)$(GRAMC) -c $<
-
+###########################################################################
+# Specific rules for Uint63
+###########################################################################
+kernel/uint63.ml: kernel/write_uint63.ml kernel/uint63_x86.ml kernel/uint63_amd64.ml
+	$(SHOW)'WRITE $@'
+	$(HIDE)(cd kernel && ocaml unix.cma $(shell basename $<))
 
 ###########################################################################
 # Main targets (coqtop.opt, coqtop.byte)
@@ -406,18 +375,21 @@ grammar/%.cmi: grammar/%.mli
 
 .PHONY: coqbinaries coqbyte
 
-coqbinaries: $(TOPBINOPT) $(COQTOPEXE) $(CHICKEN) $(CSDPCERT) $(FAKEIDE)
-coqbyte: $(TOPBYTE) $(CHICKENBYTE)
+coqbinaries: $(TOPBIN) $(COQC) $(COQTOPEXE) $(CHICKEN) $(CSDPCERT) $(FAKEIDE)
+coqbyte: $(TOPBYTE) $(COQCBYTE) $(CHICKENBYTE)
 
 # Special rule for coqtop, we imitate `ocamlopt` can delete the target
 # to avoid #7666
-$(COQTOPEXE): $(TOPBINOPT:.opt=.$(BEST))
+$(COQTOPEXE): $(TOPBIN)
+	rm -f $@ && cp $< $@
+
+$(COQC): $(COQCOPT:.opt=.$(BEST))
 	rm -f $@ && cp $< $@
 
 bin/%.opt$(EXE): topbin/%_bin.ml $(LINKCMX) $(LIBCOQRUN)
 	$(SHOW)'COQMKTOP -o $@'
 	$(HIDE)$(OCAMLOPT) -linkall -linkpkg $(MLINCLUDES) \
-			   $(SYSMOD) -package camlp5.gramlib \
+			   $(SYSMOD) \
 			   $(LINKCMX) $(OPTFLAGS) $(LINKMETADATA) $< -o $@
 	$(STRIP_HIDE) $@
 	$(CODESIGN_HIDE) $@
@@ -426,30 +398,19 @@ bin/%.byte$(EXE): topbin/%_bin.ml $(LINKCMO) $(LIBCOQRUN)
 	$(SHOW)'COQMKTOP -o $@'
 	$(HIDE)$(OCAMLC) -linkall -linkpkg $(MLINCLUDES) \
 	                 -I kernel/byterun/ -cclib -lcoqrun $(VMBYTEFLAGS) \
-			 $(SYSMOD) -package camlp5.gramlib \
+			 $(SYSMOD) \
 			 $(LINKCMO) $(BYTEFLAGS) $< -o $@
 
 COQTOP_BYTE=topbin/coqtop_byte_bin.ml
 
 # Special rule for coqtop.byte
 # VMBYTEFLAGS will either contain -custom of the right -dllpath for the VM
-$(COQTOPBYTE): $(LINKCMO) $(LIBCOQRUN) $(COQTOP_BYTE)
+$(COQTOPBYTE): $(COQTOP_BYTE) $(LINKCMO) $(LIBCOQRUN)
 	$(SHOW)'COQMKTOP -o $@'
 	$(HIDE)$(OCAMLC) -linkall -linkpkg -I lib -I vernac -I toplevel \
 	                 -I kernel/byterun/ -cclib -lcoqrun $(VMBYTEFLAGS) \
-			 $(SYSMOD) -package camlp5.gramlib,compiler-libs.toplevel \
-			 $(LINKCMO) $(BYTEFLAGS) $(COQTOP_BYTE) -o $@
-
-# For coqc
-COQCCMO:=clib/clib.cma lib/lib.cma toplevel/usage.cmo tools/coqc.cmo
-
-$(COQC): $(call bestobj, $(COQCCMO))
-	$(SHOW)'OCAMLBEST -o $@'
-	$(HIDE)$(call bestocaml, $(SYSMOD))
-
-$(COQCBYTE): $(COQCCMO)
-	$(SHOW)'OCAMLC -o $@'
-	$(HIDE)$(call ocamlbyte, $(SYSMOD))
+			 $(SYSMOD) -package compiler-libs.toplevel \
+			 $(LINKCMO) $(BYTEFLAGS) $< -o $@
 
 ###########################################################################
 # other tools
@@ -486,11 +447,11 @@ tools/coqdep_boot.cmx : tools/coqdep_common.cmx
 
 $(COQDEPBOOT): $(call bestobj, $(COQDEPBOOTSRC))
 	$(SHOW)'OCAMLBEST -o $@'
-	$(HIDE)$(call bestocaml, -I tools -package unix)
+	$(HIDE)$(call bestocaml, -I tools -package unix -package str)
 
 $(COQDEPBOOTBYTE): $(COQDEPBOOTSRC)
 	$(SHOW)'OCAMLC -o $@'
-	$(HIDE)$(call ocamlbyte, -I tools -package unix)
+	$(HIDE)$(call ocamlbyte, -I tools -package unix -package str)
 
 $(OCAMLLIBDEP): $(call bestobj, tools/ocamllibdep.cmo)
 	$(SHOW)'OCAMLBEST -o $@'
@@ -502,7 +463,7 @@ $(OCAMLLIBDEPBYTE): tools/ocamllibdep.cmo
 
 # The full coqdep (unused by this build, but distributed by make install)
 
-COQDEPCMO:=clib/clib.cma lib/lib.cma tools/coqdep_lexer.cmo	\
+COQDEPCMO:=config/config.cma clib/clib.cma lib/lib.cma tools/coqdep_lexer.cmo	\
   tools/coqdep_common.cmo tools/coqdep.cmo
 
 $(COQDEP): $(call bestobj, $(COQDEPCMO))
@@ -513,7 +474,7 @@ $(COQDEPBYTE): $(COQDEPCMO)
 	$(SHOW)'OCAMLC -o $@'
 	$(HIDE)$(call ocamlbyte, $(SYSMOD))
 
-COQMAKEFILECMO:=clib/clib.cma lib/lib.cma tools/coq_makefile.cmo
+COQMAKEFILECMO:=config/config.cma clib/clib.cma lib/lib.cma tools/coq_makefile.cmo
 
 $(COQMAKEFILE): $(call bestobj,$(COQMAKEFILECMO))
 	$(SHOW)'OCAMLBEST -o $@'
@@ -539,7 +500,7 @@ $(COQWCBYTE): tools/coqwc.cmo
 	$(SHOW)'OCAMLC -o $@'
 	$(HIDE)$(call ocamlbyte, -package str)
 
-COQDOCCMO:=clib/clib.cma lib/lib.cma $(addprefix tools/coqdoc/, \
+COQDOCCMO:=config/config.cma clib/clib.cma lib/lib.cma $(addprefix tools/coqdoc/, \
   cdglobals.cmo alpha.cmo index.cmo tokens.cmo output.cmo cpretty.cmo main.cmo )
 
 $(COQDOC): $(call bestobj, $(COQDOCCMO))
@@ -550,7 +511,7 @@ $(COQDOCBYTE): $(COQDOCCMO)
 	$(SHOW)'OCAMLC -o $@'
 	$(HIDE)$(call ocamlbyte, -package str,unix)
 
-COQWORKMGRCMO:=clib/clib.cma lib/lib.cma stm/spawned.cmo stm/coqworkmgrApi.cmo tools/coqworkmgr.cmo
+COQWORKMGRCMO:=config/config.cma clib/clib.cma lib/lib.cma stm/spawned.cmo stm/coqworkmgrApi.cmo tools/coqworkmgr.cmo
 
 $(COQWORKMGR): $(call bestobj, $(COQWORKMGRCMO))
 	$(SHOW)'OCAMLBEST -o $@'
@@ -563,9 +524,9 @@ $(COQWORKMGRBYTE): $(COQWORKMGRCMO)
 # fake_ide : for debugging or test-suite purpose, a fake ide simulating
 # a connection to coqidetop
 
-FAKEIDECMO:=clib/clib.cma lib/lib.cma ide/protocol/ideprotocol.cma ide/document.cmo ide/fake_ide.cmo
+FAKEIDECMO:=config/config.cma clib/clib.cma lib/lib.cma ide/protocol/ideprotocol.cma ide/document.cmo ide/fake_ide.cmo
 
-$(FAKEIDE): $(call bestobj, $(FAKEIDECMO)) | $(IDETOP)
+$(FAKEIDE): $(call bestobj, $(FAKEIDECMO)) | $(IDETOPEXE)
 	$(SHOW)'OCAMLBEST -o $@'
 	$(HIDE)$(call bestocaml, -I ide -I ide/protocol -package str -package dynlink)
 
@@ -575,7 +536,7 @@ $(FAKEIDEBYTE): $(FAKEIDECMO) | $(IDETOPBYTE)
 
 # votour: a small vo explorer (based on the checker)
 
-VOTOURCMO:=clib/cObj.cmo checker/analyze.cmo checker/values.cmo checker/votour.cmo
+VOTOURCMO:=clib/cObj.cmo kernel/uint63.cmo checker/analyze.cmo checker/values.cmo checker/votour.cmo
 
 bin/votour: $(call bestobj, $(VOTOURCMO))
 	$(SHOW)'OCAMLBEST -o $@'
@@ -607,11 +568,11 @@ $(CSDPCERTBYTE): $(CSDPCERTCMO)
 
 .PHONY: validate check test-suite $(ALLSTDLIB).v
 
-VALIDOPTS=$(if $(VERBOSE),,-silent) -o -m
+VALIDOPTS=$(if $(VERBOSE),,-silent) -o -m -coqlib .
 
-validate: $(CHICKEN) | $(ALLVO)
+validate: $(CHICKEN) | $(ALLVO:.$(VO)=.vo)
 	$(SHOW)'COQCHK <theories & plugins>'
-	$(HIDE)$(CHICKEN) -boot $(VALIDOPTS) $(ALLMODS)
+	$(HIDE)$(CHICKEN) $(VALIDOPTS) $(ALLVO)
 
 $(ALLSTDLIB).v:
 	$(SHOW)'MAKE $(notdir $@)'
@@ -629,15 +590,43 @@ test-suite: world byte $(ALLSTDLIB).v
 # Default rules for compiling ML code
 ###########################################################################
 
-# Target for libraries .cma and .cmxa
+gramlib/.pack:
+	mkdir -p $@
 
-# The dependency over the .mllib is somewhat artificial, since
-# ocamlc -a won't use this file, hence the $(filter-out ...) below.
-# But this ensures that the .cm(x)a is rebuilt when needed,
-# (especially when removing a module in the .mllib).
-# We used to have a "order-only" dependency over .mllib.d here,
-# but the -include mechanism should already ensure that we have
-# up-to-date dependencies.
+# gramlib.ml contents
+gramlib/.pack/gramlib.ml: | gramlib/.pack
+	echo " \
+module Ploc    = Gramlib__Ploc \
+module Plexing = Gramlib__Plexing \
+module Gramext = Gramlib__Gramext \
+module Grammar = Gramlib__Grammar" > $@
+
+gramlib/.pack/gramlib__P%: gramlib/p% | gramlib/.pack
+	printf '# 1 "%s"\n' $< > $@
+	cat $< >> $@
+gramlib/.pack/gramlib__G%: gramlib/g% | gramlib/.pack
+	printf '# 1 "%s"\n' $< > $@
+	cat $< >> $@
+
+# Specific rules for gramlib to pack it Dune / OCaml 4.08 style
+GRAMOBJS=$(addsuffix .cmo, $(GRAMFILES))
+
+gramlib/.pack/%: COND_BYTEFLAGS+=-no-alias-deps -w -49
+gramlib/.pack/%: COND_OPTFLAGS+=-no-alias-deps -w -49
+
+gramlib/.pack/gramlib.%: COND_OPENFLAGS=
+gramlib/.pack/gramlib__%: COND_OPENFLAGS=-open Gramlib
+
+gramlib/.pack/gramlib.cma: $(GRAMOBJS) gramlib/.pack/gramlib.cmo
+	$(SHOW)'OCAMLC -a -o $@'
+	$(HIDE)$(OCAMLC) $(MLINCLUDES) $(BYTEFLAGS) -a -o $@ $^
+
+gramlib/.pack/gramlib.cmxa: $(GRAMOBJS:.cmo=.cmx) gramlib/.pack/gramlib.cmx
+	$(SHOW)'OCAMLOPT -a -o $@'
+	$(HIDE)$(OCAMLOPT) $(MLINCLUDES) $(OPTFLAGS) -a -o $@ $^
+
+# used by install
+gramlib/.pack/gramlib_MLLIB_DEPENDENCIES:=$(GRAMFILES)
 
 # Specific rule for kernel.cma, with $(VMBYTEFLAGS).
 # This helps loading dllcoqrun.so during an ocamldebug
@@ -649,6 +638,16 @@ kernel/kernel.cma: kernel/kernel.mllib
 kernel/kernel.cmxa: kernel/kernel.mllib
 	$(SHOW)'OCAMLOPT -a -o $@'
 	$(HIDE)$(OCAMLOPT) $(MLINCLUDES) $(OPTFLAGS) -I kernel/byterun/ -cclib -lcoqrun -a -o $@ $(filter-out %.mllib, $^)
+
+# Target for libraries .cma and .cmxa
+
+# The dependency over the .mllib is somewhat artificial, since
+# ocamlc -a won't use this file, hence the $(filter-out ...) below.
+# But this ensures that the .cm(x)a is rebuilt when needed,
+# (especially when removing a module in the .mllib).
+# We used to have a "order-only" dependency over .mllib.d here,
+# but the -include mechanism should already ensure that we have
+# up-to-date dependencies.
 
 %.cma: %.mllib
 	$(SHOW)'OCAMLC -a -o $@'
@@ -671,11 +670,14 @@ kernel/kernel.cmxa: kernel/kernel.mllib
 COND_IDEFLAGS=$(if $(filter ide/fake_ide% tools/coq_makefile%,$<), -I ide -I ide/protocol,)
 COND_PRINTERFLAGS=$(if $(filter dev/%,$<), -I dev,)
 
+# For module packing
+COND_OPENFLAGS=
+
 COND_BYTEFLAGS= \
- $(COND_IDEFLAGS) $(COND_PRINTERFLAGS) $(MLINCLUDES) $(BYTEFLAGS)
+ $(COND_IDEFLAGS) $(COND_PRINTERFLAGS) $(MLINCLUDES) $(BYTEFLAGS) $(COND_OPENFLAGS)
 
 COND_OPTFLAGS= \
- $(COND_IDEFLAGS) $(MLINCLUDES) $(OPTFLAGS)
+ $(COND_IDEFLAGS) $(MLINCLUDES) $(OPTFLAGS) $(COND_OPENFLAGS)
 
 plugins/micromega/%.cmi: plugins/micromega/%.mli
 	$(SHOW)'OCAMLC    $<'
@@ -746,6 +748,10 @@ plugins/%.cmx: plugins/%.ml
 	$(SHOW)'OCAMLOPT  $<'
 	$(HIDE)$(OCAMLOPT) $(COND_OPTFLAGS) $(HACKMLI) $($(@:.cmx=_FORPACK)) -c $<
 
+user-contrib/%.cmx: user-contrib/%.ml
+	$(SHOW)'OCAMLOPT  $<'
+	$(HIDE)$(OCAMLOPT) $(COND_OPTFLAGS) $(HACKMLI) $($(@:.cmx=_FORPACK)) -c $<
+
 kernel/%.cmx: COND_OPTFLAGS+=-w +a-4-44-50
 
 %.cmx: %.ml
@@ -768,11 +774,6 @@ kernel/%.cmx: COND_OPTFLAGS+=-w +a-4-44-50
 	$(SHOW)'OCAMLYACC  $<'
 	$(HIDE)$(OCAMLYACC) --strict "$*.mly"
 
-%.ml: %.ml4 $(CAMLP5DEPS) $(COQPP)
-	$(SHOW)'CAMLP5O   $<'
-	$(HIDE)$(CAMLP5O) -I $(MYCAMLP5LIB) $(PR_O) \
-	  $(CAMLP5DEPS) $(CAMLP5USE) $(CAMLP5COMPAT) -impl $< -o $@
-
 %.ml: %.mlg $(COQPP)
 	$(SHOW)'COQPP   $<'
 	$(HIDE)$(COQPP) $<
@@ -782,14 +783,15 @@ kernel/%.cmx: COND_OPTFLAGS+=-w +a-4-44-50
 ###########################################################################
 
 # Ocamldep is now used directly again (thanks to -ml-synonym in OCaml >= 3.12)
-OCAMLDEP = $(OCAMLFIND) ocamldep -slash -ml-synonym .ml4 -ml-synonym .mlpack
+OCAMLDEP = $(OCAMLFIND) ocamldep -slash -ml-synonym .mlpack
 
-MAINMLFILES := $(filter-out checker/% plugins/%, $(MLFILES) $(MLIFILES))
-MAINMLLIBFILES := $(filter-out checker/% plugins/%, $(MLLIBFILES) $(MLPACKFILES))
+MAINMLFILES := $(filter-out gramlib/.pack/% checker/% plugins/% user-contrib/%, $(MLFILES) $(MLIFILES))
+MAINMLLIBFILES := $(filter-out gramlib/.pack/% checker/% plugins/% user-contrib/%, $(MLLIBFILES) $(MLPACKFILES))
 
-$(MLDFILE).d: $(D_DEPEND_BEFORE_SRC) $(MAINMLFILES) $(D_DEPEND_AFTER_SRC) $(GENFILES)
+$(MLDFILE).d: $(D_DEPEND_BEFORE_SRC) $(MAINMLFILES) $(D_DEPEND_AFTER_SRC) $(GENFILES) $(GENGRAMFILES)
 	$(SHOW)'OCAMLDEP  MLFILES MLIFILES'
-	$(HIDE)$(OCAMLDEP) $(DEPFLAGS) $(MAINMLFILES) $(TOTARGET)
+	$(HIDE)$(OCAMLDEP) $(DEPFLAGS)  -passrest $(MAINMLFILES) -open Gramlib $(GRAMMLFILES) $(TOTARGET)
+#NB: -passrest is needed to avoid ocamlfind reordering the -open Gramlib
 
 $(MLLIBDFILE).d: $(D_DEPEND_BEFORE_SRC) $(MAINMLLIBFILES) $(D_DEPEND_AFTER_SRC) $(OCAMLLIBDEP) $(GENFILES)
 	$(SHOW)'OCAMLLIBDEP  MLLIBFILES MLPACKFILES'
@@ -803,6 +805,14 @@ $(PLUGMLLIBDFILE).d: $(D_DEPEND_BEFORE_SRC) $(filter plugins/%, $(MLLIBFILES) $(
 	$(SHOW)'OCAMLLIBDEP  plugins/MLLIBFILES plugins/MLPACKFILES'
 	$(HIDE)$(OCAMLLIBDEP) $(DEPFLAGS) $(filter plugins/%, $(MLLIBFILES) $(MLPACKFILES)) $(TOTARGET)
 
+$(USERCONTRIBMLDFILE).d: $(D_DEPEND_BEFORE_SRC) $(filter user-contrib/%, $(MLFILES) $(MLIFILES)) $(D_DEPEND_AFTER_SRC) $(GENFILES)
+	$(SHOW)'OCAMLDEP  user-contrib/MLFILES user-contrib/MLIFILES'
+	$(HIDE)$(OCAMLDEP) $(DEPFLAGS) $(filter user-contrib/%, $(MLFILES) $(MLIFILES)) $(TOTARGET)
+
+$(USERCONTRIBMLLIBDFILE).d: $(D_DEPEND_BEFORE_SRC) $(filter user-contrib/%, $(MLLIBFILES) $(MLPACKFILES)) $(D_DEPEND_AFTER_SRC) $(OCAMLLIBDEP) $(GENFILES)
+	$(SHOW)'OCAMLLIBDEP  user-contrib/MLLIBFILES user-contrib/MLPACKFILES'
+	$(HIDE)$(OCAMLLIBDEP) $(DEPFLAGS) $(filter user-contrib/%, $(MLLIBFILES) $(MLPACKFILES)) $(TOTARGET)
+
 ###########################################################################
 # Compilation of .v files
 ###########################################################################
@@ -811,13 +821,18 @@ $(PLUGMLLIBDFILE).d: $(D_DEPEND_BEFORE_SRC) $(filter plugins/%, $(MLLIBFILES) $(
 # since they are all mentioned in at least one Declare ML Module in some .v
 
 coqlib: theories plugins
+ifdef QUICK
+	$(SHOW)'COQC -schedule-vio2vo $(NJOBS) theories/**.vio plugins/**.vio'
+	$(HIDE)$(BOOTCOQC) -schedule-vio2vo $(NJOBS) $(THEORIESVO) $(PLUGINSVO)
+endif
+
 coqlib.timing.diff: theories.timing.diff plugins.timing.diff
 
 theories: $(THEORIESVO)
 plugins: $(PLUGINSVO)
 
-theories.timing.diff: $(THEORIESVO:.vo=.v.timing.diff)
-plugins.timing.diff: $(PLUGINSVO:.vo=.v.timing.diff)
+theories.timing.diff: $(THEORIESVO:.$(VO)=.v.timing.diff)
+plugins.timing.diff: $(PLUGINSVO:.$(VO)=.v.timing.diff)
 
 .PHONY: coqlib theories plugins coqlib.timing.diff theories.timing.diff plugins.timing.diff
 
@@ -834,6 +849,10 @@ theories/Init/%.vo theories/Init/%.glob: theories/Init/%.v $(VO_TOOLS_DEP)
 	$(HIDE)rm -f theories/Init/$*.glob
 	$(HIDE)$(BOOTCOQC) $< -noinit -R theories Coq $(TIMING_ARG) $(TIMING_EXTRA)
 
+theories/Init/%.vio: theories/Init/%.v $(VO_TOOLS_DEP)
+	$(SHOW)'COQC -quick -noinit $<'
+	$(HIDE)$(BOOTCOQC) $< -noinit -R theories Coq -quick -noglob
+
 # The general rule for building .vo files :
 
 %.vo %.glob: %.v theories/Init/Prelude.vo $(VO_TOOLS_DEP)
@@ -842,9 +861,13 @@ theories/Init/%.vo theories/Init/%.glob: theories/Init/%.v $(VO_TOOLS_DEP)
 	$(HIDE)$(BOOTCOQC) $< $(TIMING_ARG) $(TIMING_EXTRA)
 ifdef VALIDATE
 	$(SHOW)'COQCHK    $(call vo_to_mod,$@)'
-	$(HIDE)$(CHICKEN) -boot -silent -norec $(call vo_to_mod,$@) \
+	$(HIDE)$(CHICKEN) $(VALIDOPTS) -norec $(call vo_to_mod,$@) \
 	  || ( RV=$$?; rm -f "$@"; exit $${RV} )
 endif
+
+%.vio: %.v theories/Init/Prelude.vio $(VO_TOOLS_DEP)
+	$(SHOW)'COQC -quick $<'
+	$(HIDE)$(BOOTCOQC) $< -quick -noglob
 
 %.v.timing.diff: %.v.before-timing %.v.after-timing
 	$(SHOW)PYTHON TIMING-DIFF $<
@@ -855,9 +878,21 @@ endif
 
 $(VDFILE).d: $(D_DEPEND_BEFORE_SRC) $(VFILES) $(D_DEPEND_AFTER_SRC) $(COQDEPBOOT)
 	$(SHOW)'COQDEP    VFILES'
-	$(HIDE)$(COQDEPBOOT) -boot $(DYNDEP) $(VFILES) $(TOTARGET)
+	$(HIDE)$(COQDEPBOOT) -boot $(DYNDEP) -Q user-contrib "" $(USERCONTRIBINCLUDES) $(VFILES) $(TOTARGET)
 
 ###########################################################################
+
+
+# Useful to check that the exported variables are within the win32 limits
+
+printenv-real:
+	@env
+	@echo
+	@echo -n "Maxsize (win32 limit is 8k) : "
+	@env | wc -L
+	@echo -n "Total (win32 limit is 32k) : "
+	@env | wc -m
+
 
 # To speed-up things a bit, let's dissuade make to attempt rebuilding makefiles
 
@@ -873,5 +908,5 @@ Makefile $(wildcard Makefile.*) config/Makefile : ;
 
 # For emacs:
 # Local Variables:
-# mode: makefile
+# mode: makefile-gmake
 # End:

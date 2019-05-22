@@ -13,6 +13,7 @@ open Names
 open Declarations
 open Term
 open Constr
+open Context
 open Vars
 open Environ
 open Inductive
@@ -31,10 +32,12 @@ module NamedDecl = Context.Named.Declaration
 let crazy_type =  mkSet
 
 let decompose_prod env t =
-  let (name,dom,codom as res) = destProd (whd_all env t) in
-  match name with
-  | Anonymous -> (Name (Id.of_string "x"), dom, codom)
-  | Name _ -> res
+  let (name,dom,codom) = destProd (whd_all env t) in
+  let name = map_annot (function
+  | Anonymous -> Name (Id.of_string "x")
+  | Name _ as na -> na) name
+  in
+  (name,dom,codom)
 
 exception Find_at of int
 
@@ -57,11 +60,12 @@ let find_rectype_a env c =
   let (t, l) = decompose_appvect (whd_all env c) in
   match kind t with
   | Ind ind -> (ind, l)
-  | _ -> assert false
+  | _ -> raise Not_found
 
 (* Instantiate inductives and parameters in constructor type *)
 
-let type_constructor mind mib u typ params =
+let type_constructor mind mib u (ctx, typ) params =
+  let typ = it_mkProd_or_LetIn typ ctx in
   let s = ind_subst mind mib u in
   let ctyp = substl s typ in
   let ctyp = subst_instance_constr u ctyp in
@@ -75,25 +79,18 @@ let type_constructor mind mib u typ params =
 
 
 let construct_of_constr const env tag typ =
-  let ((mind,_ as ind), u) as indu, allargs = find_rectype_a env typ in
-  (* spiwack : here be a branch for specific decompilation handled by retroknowledge *)
-  try
-    if const then
-      ((Retroknowledge.get_vm_decompile_constant_info env.retroknowledge (GlobRef.IndRef ind) tag),
-       typ) (*spiwack: this may need to be changed in case there are parameters in the
-	               type which may cause a constant value to have an arity.
-	               (type_constructor seems to be all about parameters actually)
-	               but it shouldn't really matter since constant values don't use
-	               their ctyp in the rest of the code.*)
-    else
-      raise Not_found (* No retroknowledge function (yet) for block decompilation *)
-  with Not_found ->
+  let (t, allargs) = decompose_appvect (whd_all env typ) in
+  match Constr.kind t with
+  | Ind ((mind,_ as ind), u as indu) ->
     let mib,mip = lookup_mind_specif env ind in
     let nparams = mib.mind_nparams in
     let i = invert_tag const tag mip.mind_reloc_tbl in
     let params = Array.sub allargs 0 nparams in
     let ctyp = type_constructor mind mib u (mip.mind_nf_lc.(i-1)) params in
-      (mkApp(mkConstructUi(indu,i), params), ctyp)
+    (mkApp(mkConstructUi(indu,i), params), ctyp)
+  | _ ->
+     assert (Constr.equal t (Typeops.type_of_int env));
+      (mkInt (Uint63.of_int tag), t)
 
 let construct_of_constr_const env tag typ =
   fst (construct_of_constr true env tag typ)
@@ -144,6 +141,8 @@ and nf_whd env sigma whd typ =
       let dom = nf_vtype env sigma (dom p) in
       let name = Name (Id.of_string "x") in
       let vc = reduce_fun (nb_rel env) (codom p) in
+      let r = Retyping.relevance_of_type env sigma (EConstr.of_constr dom) in
+      let name = make_annot name r in
       let codom = nf_vtype (push_rel (LocalAssum (name,dom)) env) sigma vc  in
       mkProd(name,dom,codom)
   | Vfun f -> nf_fun env sigma f typ
@@ -169,6 +168,7 @@ and nf_whd env sigma whd typ =
       let capp,ctyp = construct_of_constr_block env tag typ in
       let args = nf_bargs env sigma b ofs ctyp in
       mkApp(capp,args)
+  | Vint64 i -> i |> Uint63.of_int64 |> mkInt
   | Vatom_stk(Aid idkey, stk) ->
       constr_type_of_idkey env sigma idkey stk
   | Vatom_stk(Aind ((mi,i) as ind), stk) ->
@@ -202,15 +202,15 @@ and nf_univ_args ~nb_univs mk env sigma stk =
 and nf_evar env sigma evk stk =
   let evi = try Evd.find sigma evk with Not_found -> assert false in
   let hyps = Environ.named_context_of_val (Evd.evar_filtered_hyps evi) in
-  let concl = EConstr.Unsafe.to_constr @@ Evd.evar_concl evi in
+  let concl = EConstr.to_constr ~abort_on_undefined_evars:false sigma @@ Evd.evar_concl evi in
   if List.is_empty hyps then
     nf_stk env sigma (mkEvar (evk, [||])) concl stk
   else match stk with
   | Zapp args :: stk ->
-    (** We assume that there is no consecutive Zapp nodes in a VM stack. Is that
-        really an invariant? *)
-    (** Let-bound arguments are present in the evar arguments but not in the
-        type, so we turn the let into a product. *)
+    (* We assume that there is no consecutive Zapp nodes in a VM stack. Is that
+       really an invariant? *)
+    (* Let-bound arguments are present in the evar arguments but not in the
+       type, so we turn the let into a product. *)
     let hyps = Context.Named.drop_bodies hyps in
     let fold accu d = Term.mkNamedProd_or_LetIn d accu in
     let t = List.fold_left fold concl hyps in
@@ -312,6 +312,8 @@ and nf_predicate env sigma ind mip params v pT =
       let rargs = Array.init n (fun i -> mkRel (n-i)) in
       let params = if Int.equal n 0 then params else Array.map (lift n) params in
       let dom = mkApp(mkIndU ind,Array.append params rargs) in
+      let r = Inductive.relevance_of_inductive env (fst ind) in
+      let name = make_annot name r in
       let body = nf_vtype (push_rel (LocalAssum (name,dom)) env) sigma vb in
       mkLambda(name,dom,body)
     | _ -> assert false
@@ -322,7 +324,7 @@ and nf_args env sigma vargs ?from:(f=0) t =
   let args =
     Array.init len
       (fun i ->
-	let _,dom,codom = decompose_prod env !t in
+        let _,dom,codom = decompose_prod env !t in
 	let c = nf_val env sigma (arg vargs (f+i)) dom in
 	t := subst1 c codom; c) in
   !t,args
@@ -333,7 +335,7 @@ and nf_bargs env sigma b ofs t =
   let args =
     Array.init len
       (fun i ->
-	let _,dom,codom = decompose_prod env !t in
+        let _,dom,codom = decompose_prod env !t in
 	let c = nf_val env sigma (bfield b (i+ofs)) dom in
 	t := subst1 c codom; c) in
   args
@@ -344,9 +346,9 @@ and nf_fun env sigma f typ =
   let name,dom,codom =
     try decompose_prod env typ
     with DestKO ->
-      (* 27/2/13: Turned this into an anomaly *)
       CErrors.anomaly
-        (Pp.strbrk "Returned a functional value in a type not recognized as a product type.")
+        Pp.(strbrk "Returned a functional value in type " ++
+            Termops.Internal.print_constr_env env sigma (EConstr.of_constr typ))
   in
   let body = nf_val (push_rel (LocalAssum (name,dom)) env) sigma vb codom in
   mkLambda(name,dom,body)
@@ -358,14 +360,17 @@ and nf_fix env sigma f =
   let vb, vt = reduce_fix k f in
   let ndef = Array.length vt in
   let ft = Array.map (fun v -> nf_val env sigma v crazy_type) vt in
-  let name = Array.init ndef (fun _ -> (Name (Id.of_string "Ffix"))) in
-  (* Third argument of the tuple is ignored by push_rec_types *)
-  let env = push_rec_types (name,ft,ft) env in
+  let name = Name (Id.of_string "Ffix") in
+  let names = Array.map (fun t ->
+      make_annot name @@
+      Retyping.relevance_of_type env sigma (EConstr.of_constr t)) ft in
+  (* Body argument of the tuple is ignored by push_rec_types *)
+  let env = push_rec_types (names,ft,ft) env in
   (* We lift here because the types of arguments (in tt) will be evaluated
      in an environment where the fixpoints have been pushed *)
   let norm_vb v t = nf_fun env sigma v (lift ndef t) in
   let fb = Util.Array.map2 norm_vb vb ft in
-  mkFix ((rec_args,init),(name,ft,fb))
+  mkFix ((rec_args,init),(names,ft,fb))
 
 and nf_fix_app env sigma f vargs =
   let fd = nf_fix env sigma f in
@@ -378,17 +383,19 @@ and nf_cofix env sigma cf =
   let init = current_cofix cf in
   let k = nb_rel env in
   let vb,vt = reduce_cofix k cf in
-  let ndef = Array.length vt in
   let cft = Array.map (fun v -> nf_val env sigma v crazy_type) vt in
-  let name = Array.init ndef (fun _ -> (Name (Id.of_string "Fcofix"))) in
-  let env = push_rec_types (name,cft,cft) env in
+  let name = Name (Id.of_string "Fcofix") in
+  let names = Array.map (fun t ->
+      make_annot name @@
+      Retyping.relevance_of_type env sigma (EConstr.of_constr t)) cft in
+  let env = push_rec_types (names,cft,cft) env in
   let cfb = Util.Array.map2 (fun v t -> nf_val env sigma v t) vb cft in
-  mkCoFix (init,(name,cft,cfb))
+  mkCoFix (init,(names,cft,cfb))
 
 let cbv_vm env sigma c t  =
   if Termops.occur_meta sigma c then
     CErrors.user_err Pp.(str "vm_compute does not support metas.");
-  (** This evar-normalizes terms beforehand *)
+  (* This evar-normalizes terms beforehand *)
   let c = EConstr.to_constr ~abort_on_undefined_evars:false sigma c in
   let t = EConstr.to_constr ~abort_on_undefined_evars:false sigma t in
   let v = Csymtable.val_of_constr env c in

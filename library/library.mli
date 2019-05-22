@@ -19,8 +19,8 @@ open Libnames
   written at various dates.
 *)
 
-(** {6 ... } *)
-(** Require = load in the environment + open (if the optional boolean
+(** {6 ... }
+    Require = load in the environment + open (if the optional boolean
     is not [None]); mark also for export if the boolean is [Some true] *)
 val require_library_from_dirpath : (DirPath.t * string) list -> bool option -> unit
 
@@ -38,18 +38,15 @@ type seg_proofs = Constr.constr Future.computation array
    an export otherwise just a simple import *)
 val import_module : bool -> qualid list -> unit
 
-(** Start the compilation of a file as a library. The first argument must be
-    output file, and the 
-    returned path is the associated absolute logical path of the library. *)
-val start_library : CUnix.physical_path -> DirPath.t
-
-(** End the compilation of a library and save it to a ".vo" file *)
+(** End the compilation of a library and save it to a ".vo" file.
+    [output_native_objects]: when producing vo objects, also compile the native-code version. *)
 val save_library_to :
   ?todo:(((Future.UUID.t,'document) Stateid.request * bool) list * 'counters) ->
+  output_native_objects:bool ->
   DirPath.t -> string -> Opaqueproof.opaquetab -> unit
 
 val load_library_todo :
-  string -> string * seg_sum * seg_lib * seg_univ * seg_discharge * 'tasks * seg_proofs
+  string -> seg_sum * seg_lib * seg_univ * seg_discharge * 'tasks * seg_proofs
 val save_library_raw : string -> seg_sum -> seg_lib -> seg_univ -> seg_proofs -> unit
 
 (** {6 Interrogate the status of libraries } *)

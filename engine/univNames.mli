@@ -11,7 +11,7 @@
 open Univ
 
 val pr_with_global_universes : Level.t -> Pp.t
-val qualid_of_level : Level.t -> Libnames.qualid
+val qualid_of_level : Level.t -> Libnames.qualid option
 
 (** Local universe name <-> level mapping *)
 
@@ -19,7 +19,7 @@ type universe_binders = Univ.Level.t Names.Id.Map.t
 
 val empty_binders : universe_binders
 
-val register_universe_binders : Names.GlobRef.t -> universe_binders -> unit
+val compute_instance_binders : Instance.t -> universe_binders -> Names.Name.t array
 
 type univ_name_list = Names.lname list
 
@@ -29,5 +29,5 @@ type univ_name_list = Names.lname list
     of [ref] by [univs] (skipping Anonymous). May error if the lengths mismatch.
 
     Otherwise return the bound universe names registered for [ref]. *)
-val universe_binders_with_opt_names : Names.GlobRef.t ->
+val universe_binders_with_opt_names : AUContext.t ->
   univ_name_list option -> universe_binders

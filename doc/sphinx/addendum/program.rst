@@ -95,6 +95,14 @@ coercions.
    (the option is on by default). Coercion of subset types and pairs is still
    active in this case.
 
+.. flag:: Program Mode
+
+   Enables the program mode, in which 1) typechecking allows subset coercions and
+   2) the elaboration of pattern matching of :cmd:`Program Fixpoint` and
+   :cmd:`Program Definition` act
+   like Program Fixpoint/Definition, generating obligations if there are
+   unresolved holes after typechecking.
+
 .. _syntactic_control:
 
 Syntactic control over equalities
@@ -102,7 +110,7 @@ Syntactic control over equalities
 
 To give more control over the generation of equalities, the
 type checker will fall back directly to |Coq|’s usual typing of dependent
-pattern matching if a return or in clause is specified. Likewise, the
+pattern matching if a ``return`` or ``in`` clause is specified. Likewise, the
 if construct is not treated specially by |Program| so boolean tests in
 the code are not automatically reflected in the obligations. One can
 use the :g:`dec` combinator to get the correct hypotheses as in:
@@ -118,8 +126,9 @@ use the :g:`dec` combinator to get the correct hypotheses as in:
      else S (pred n).
 
 The :g:`let` tupling construct :g:`let (x1, ..., xn) := t in b` does not
-produce an equality, contrary to the let pattern construct :g:`let ’(x1,
-..., xn) := t in b`. Also, :g:`term :>` explicitly asks the system to
+produce an equality, contrary to the let pattern construct
+:g:`let '(x1,..., xn) := t in b`.
+Also, :g:`term :>` explicitly asks the system to
 coerce term to its support type. It can be useful in notations, for
 example:
 
@@ -150,6 +159,7 @@ Program Definition
 
    .. exn:: @ident already exists.
       :name: @ident already exists. (Program Definition)
+      :undocumented:
 
    .. cmdv:: Program Definition @ident : @type := @term
 
@@ -162,7 +172,7 @@ Program Definition
       and the aforementioned coercion derivation are solved.
 
       .. exn:: In environment … the term: @term does not have type @type. Actually, it has type ...
-
+         :undocumented:
 
    .. cmdv:: Program Definition @ident @binders : @type := @term
 
@@ -179,23 +189,23 @@ Program Definition
 Program Fixpoint
 ~~~~~~~~~~~~~~~~
 
-.. cmd:: Program Fixpoint @ident @params {? {@order}} : @type := @term
+.. cmd:: Program Fixpoint @ident @binders {? {@order}} : @type := @term
 
-The optional order annotation follows the grammar:
+   The optional order annotation follows the grammar:
 
-.. productionlist:: orderannot
-   order      : measure `term` (`term`)? | wf `term` `term`
+   .. productionlist:: orderannot
+      order      : measure `term` [ `term` ] | wf `term` `ident`
 
-+ :g:`measure f ( R )` where :g:`f` is a value of type :g:`X` computed on
-  any subset of the arguments and the optional (parenthesised) term
-  ``(R)`` is a relation on ``X``. By default ``X`` defaults to ``nat`` and ``R``
-  to ``lt``.
+   + :g:`measure f R` where :g:`f` is a value of type :g:`X` computed on
+     any subset of the arguments and the optional term
+     :g:`R` is a relation on :g:`X`. :g:`X` defaults to :g:`nat` and :g:`R`
+     to :g:`lt`.
 
-+ :g:`wf R x` which is equivalent to :g:`measure x (R)`.
+   + :g:`wf R x` which is equivalent to :g:`measure x R`.
 
-The structural fixpoint operator behaves just like the one of |Coq| (see
-:cmd:`Fixpoint`), except it may also generate obligations. It works
-with mutually recursive definitions too.
+   The structural fixpoint operator behaves just like the one of |Coq| (see
+   :cmd:`Fixpoint`), except it may also generate obligations. It works
+   with mutually recursive definitions too.
 
 .. coqtop:: reset in
 
@@ -273,7 +283,7 @@ optional identifier is used when multiple functions have unsolved
 obligations (e.g. when defining mutually recursive blocks). The
 optional tactic is replaced by the default one if not specified.
 
-.. cmd:: {? Local|Global} Obligation Tactic := @tactic
+.. cmd:: {? {| Local | Global } } Obligation Tactic := @tactic
    :name: Obligation Tactic
 
    Sets the default obligation solving tactic applied to all obligations

@@ -29,7 +29,7 @@ open Util
 open Names
 open Evd
 open Constr
-open Term
+open Context
 open Termops
 open Environ
 open EConstr
@@ -103,18 +103,20 @@ let search_guard ?loc env possible_indexes fixdefs =
 	 user_err ?loc ~hdr:"search_guard" (Pp.str errmsg)
      with Found indexes -> indexes)
 
+let esearch_guard ?loc env sigma indexes fix =
+  let fix = nf_fix sigma fix in
+  try search_guard ?loc env indexes fix
+  with TypeError (env,err) ->
+    raise (PretypeError (env,sigma,TypingError (map_ptype_error of_constr err)))
+
 (* To force universe name declaration before use *)
 
-let strict_universe_declarations = ref true
-let is_strict_universe_declarations () = !strict_universe_declarations
-
-let _ =
-  Goptions.(declare_bool_option
-	  { optdepr  = false;
-	    optname  = "strict universe declaration";
-	    optkey   = ["Strict";"Universe";"Declaration"];
-	    optread  = is_strict_universe_declarations;
-	    optwrite = (:=) strict_universe_declarations })
+let is_strict_universe_declarations =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"strict universe declaration"
+    ~key:["Strict";"Universe";"Declaration"]
+    ~value:true
 
 (** Miscellaneous interpretation functions *)
 
@@ -124,8 +126,8 @@ let interp_known_universe_level evd qid =
     if qualid_is_ident qid then Evd.universe_of_name evd @@ qualid_basename qid
     else raise Not_found
   with Not_found ->
-    let univ, k = Nametab.locate_universe qid in
-    Univ.Level.make univ k
+    let qid = Nametab.locate_universe qid in
+    Univ.Level.make qid
 
 let interp_universe_level_name ~anon_rigidity evd qid =
   try evd, interp_known_universe_level evd qid
@@ -144,7 +146,7 @@ let interp_universe_level_name ~anon_rigidity evd qid =
           user_err ?loc:qid.CAst.loc ~hdr:"interp_universe_level_name"
             (Pp.(str "Undeclared global universe: " ++ Libnames.pr_qualid qid))
       in
-      let level = Univ.Level.make dp num in
+      let level = Univ.Level.(make (UGlobal.make dp num)) in
       let evd =
         try Evd.add_global_univ evd level
         with UGraph.AlreadyDeclared -> evd
@@ -193,9 +195,10 @@ type inference_hook = env -> evar_map -> Evar.t -> evar_map * constr
 type inference_flags = {
   use_typeclasses : bool;
   solve_unification_constraints : bool;
-  use_hook : inference_hook option;
   fail_evar : bool;
-  expand_evars : bool
+  expand_evars : bool;
+  program_mode : bool;
+  polymorphic : bool;
 }
 
 (* Compute the set of still-undefined initial evars up to restriction
@@ -216,8 +219,8 @@ type frozen =
   (** Proper partition of the evar map as described above. *)
 
 let frozen_and_pending_holes (sigma, sigma') =
-  let undefined0 = Evd.undefined_map sigma in
-  (** Fast path when the undefined evars where not modified *)
+  let undefined0 = Option.cata Evd.undefined_map Evar.Map.empty sigma in
+  (* Fast path when the undefined evars where not modified *)
   if undefined0 == Evd.undefined_map sigma' then
     FrozenId undefined0
   else
@@ -231,30 +234,30 @@ let frozen_and_pending_holes (sigma, sigma') =
     end in
     FrozenProgress data
 
-let apply_typeclasses env sigma frozen fail_evar =
+let apply_typeclasses ~program_mode env sigma frozen fail_evar =
   let filter_frozen = match frozen with
     | FrozenId map -> fun evk -> Evar.Map.mem evk map
     | FrozenProgress (lazy (frozen, _)) -> fun evk -> Evar.Set.mem evk frozen
   in
   let sigma = Typeclasses.resolve_typeclasses
-      ~filter:(if Flags.is_program_mode ()
+      ~filter:(if program_mode
                then (fun evk evi -> Typeclasses.no_goals_or_obligations evk evi && not (filter_frozen evk))
                else (fun evk evi -> Typeclasses.no_goals evk evi && not (filter_frozen evk)))
       ~split:true ~fail:fail_evar env sigma in
-  let sigma = if Flags.is_program_mode () then (* Try optionally solving the obligations *)
+  let sigma = if program_mode then (* Try optionally solving the obligations *)
       Typeclasses.resolve_typeclasses
         ~filter:(fun evk evi -> Typeclasses.all_evars evk evi && not (filter_frozen evk)) ~split:true ~fail:false env sigma
     else sigma in
   sigma
 
-let apply_inference_hook hook sigma frozen = match frozen with
+let apply_inference_hook hook env sigma frozen = match frozen with
 | FrozenId _ -> sigma
 | FrozenProgress (lazy (_, pending)) ->
   Evar.Set.fold (fun evk sigma ->
     if Evd.is_undefined sigma evk (* in particular not defined by side-effect *)
     then
       try
-        let sigma, c = hook sigma evk in
+        let sigma, c = hook env sigma evk in
         Evd.define evk c sigma
       with Exit ->
         sigma
@@ -263,15 +266,15 @@ let apply_inference_hook hook sigma frozen = match frozen with
 
 let apply_heuristics env sigma fail_evar =
   (* Resolve eagerly, potentially making wrong choices *)
-  try solve_unif_constraints_with_heuristics
-        ~ts:(Typeclasses.classes_transparent_state ()) env sigma
+  let flags = default_flags_of (Typeclasses.classes_transparent_state ()) in
+  try solve_unif_constraints_with_heuristics ~flags env sigma
   with e when CErrors.noncritical e ->
     let e = CErrors.push e in
     if fail_evar then iraise e else sigma
 
-let check_typeclasses_instances_are_solved env current_sigma frozen =
+let check_typeclasses_instances_are_solved ~program_mode env current_sigma frozen =
   (* Naive way, call resolution again with failure flag *)
-  apply_typeclasses env current_sigma frozen true
+  apply_typeclasses ~program_mode env current_sigma frozen true
 
 let check_extra_evars_are_solved env current_sigma frozen = match frozen with
 | FrozenId _ -> ()
@@ -300,37 +303,38 @@ let check_evars env initial_sigma sigma c =
     | _ -> EConstr.iter sigma proc_rec c
   in proc_rec c
 
-let check_evars_are_solved env sigma frozen =
-  let sigma = check_typeclasses_instances_are_solved env sigma frozen in
+let check_evars_are_solved ~program_mode env sigma frozen =
+  let sigma = check_typeclasses_instances_are_solved ~program_mode env sigma frozen in
   check_problems_are_solved env sigma;
   check_extra_evars_are_solved env sigma frozen
 
 (* Try typeclasses, hooks, unification heuristics ... *)
 
-let solve_remaining_evars flags env sigma init_sigma =
-  let frozen = frozen_and_pending_holes (init_sigma, sigma) in
+let solve_remaining_evars ?hook flags env ?initial sigma =
+  let program_mode = flags.program_mode in
+  let frozen = frozen_and_pending_holes (initial, sigma) in
   let sigma =
     if flags.use_typeclasses
-    then apply_typeclasses env sigma frozen false
+    then apply_typeclasses ~program_mode env sigma frozen false
     else sigma
   in
-  let sigma = if Option.has_some flags.use_hook
-    then apply_inference_hook (Option.get flags.use_hook env) sigma frozen
-    else sigma
+  let sigma = match hook with
+  | None -> sigma
+  | Some hook -> apply_inference_hook hook env sigma frozen
   in
   let sigma = if flags.solve_unification_constraints
     then apply_heuristics env sigma false
     else sigma
   in
-  if flags.fail_evar then check_evars_are_solved env sigma frozen;
+  if flags.fail_evar then check_evars_are_solved ~program_mode env sigma frozen;
   sigma
 
-let check_evars_are_solved env current_sigma init_sigma =
-  let frozen = frozen_and_pending_holes (init_sigma, current_sigma) in
-  check_evars_are_solved env current_sigma frozen
+let check_evars_are_solved ~program_mode env ?initial current_sigma =
+  let frozen = frozen_and_pending_holes (initial, current_sigma) in
+  check_evars_are_solved ~program_mode env current_sigma frozen
 
-let process_inference_flags flags env initial_sigma (sigma,c,cty) =
-  let sigma = solve_remaining_evars flags env sigma initial_sigma in
+let process_inference_flags flags env initial (sigma,c,cty) =
+  let sigma = solve_remaining_evars flags env ~initial sigma in
   let c = if flags.expand_evars then nf_evar sigma c else c in
   sigma,c,cty
 
@@ -356,10 +360,10 @@ let adjust_evar_source sigma na c =
   | _, _ -> sigma, c
 
 (* coerce to tycon if any *)
-let inh_conv_coerce_to_tycon ?loc resolve_tc env sigma j = function
+let inh_conv_coerce_to_tycon ?loc ~program_mode resolve_tc env sigma j = function
   | None -> sigma, j
   | Some t ->
-    Coercion.inh_conv_coerce_to ?loc resolve_tc !!env sigma j t
+    Coercion.inh_conv_coerce_to ?loc ~program_mode resolve_tc !!env sigma j t
 
 let check_instance loc subst = function
   | [] -> ()
@@ -376,7 +380,7 @@ let orelse_name name name' = match name with
   | Anonymous -> name'
   | _ -> name
 
-let pretype_id pretype k0 loc env sigma id =
+let pretype_id pretype loc env sigma id =
   (* Look for the binder of [id] *)
   try
     let (n,_,typ) = lookup_rel_id id (rel_context !!env) in
@@ -390,17 +394,19 @@ let pretype_id pretype k0 loc env sigma id =
     sigma, { uj_val  = mkVar id; uj_type = NamedDecl.get_type (lookup_named id !!env) }
   with Not_found ->
     (* [id] not found, standard error message *)
-    error_var_not_found ?loc id
+    error_var_not_found ?loc !!env sigma id
 
 (*************************************************************************)
 (* Main pretyping function                                               *)
 
 let interp_known_glob_level ?loc evd = function
+  | GSProp -> Univ.Level.sprop
   | GProp -> Univ.Level.prop
   | GSet -> Univ.Level.set
   | GType s -> interp_known_level_info ?loc evd s
 
 let interp_glob_level ?loc evd : glob_level -> _ = function
+  | GSProp -> evd, Univ.Level.sprop
   | GProp -> evd, Univ.Level.prop
   | GSet -> evd, Univ.Level.set
   | GType s -> interp_level_info ?loc evd s
@@ -436,7 +442,7 @@ let pretype_ref ?loc sigma env ref us =
          (* This may happen if env is a goal env and section variables have
             been cleared - section variables should be different from goal
             variables *)
-         Pretype_errors.error_var_not_found ?loc id)
+         Pretype_errors.error_var_not_found ?loc !!env sigma id)
   | ref ->
     let sigma, c = pretype_global ?loc univ_flexible env sigma ref us in
     let ty = unsafe_type_of !!env sigma c in
@@ -445,11 +451,12 @@ let pretype_ref ?loc sigma env ref us =
 let judge_of_Type ?loc evd s =
   let evd, s = interp_universe ?loc evd s in
   let judge = 
-    { uj_val = mkSort (Type s); uj_type = mkSort (Type (Univ.super s)) }
+    { uj_val = mkType s; uj_type = mkType (Univ.super s) }
   in
     evd, judge
 
 let pretype_sort ?loc sigma = function
+  | GSProp -> sigma, judge_of_sprop
   | GProp -> sigma, judge_of_prop
   | GSet -> sigma, judge_of_set
   | GType s -> judge_of_Type ?loc sigma s
@@ -457,14 +464,21 @@ let pretype_sort ?loc sigma = function
 let new_type_evar env sigma loc =
   new_type_evar env sigma ~src:(Loc.tag ?loc Evar_kinds.InternalHole)
 
+let mark_obligation_evar sigma k evc =
+  match k with
+  | Evar_kinds.QuestionMark _
+  | Evar_kinds.ImplicitArg (_, _, false) ->
+    Evd.set_obligation_evar sigma (fst (destEvar sigma evc))
+  | _ -> sigma
+
 (* [pretype tycon env sigma lvar lmeta cstr] attempts to type [cstr] *)
 (* in environment [env], with existential variables [sigma] and *)
 (* the type constraint tycon *)
 
-let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma : evar_map) t =
-  let inh_conv_coerce_to_tycon ?loc = inh_conv_coerce_to_tycon ?loc resolve_tc in
-  let pretype_type = pretype_type k0 resolve_tc in
-  let pretype = pretype k0 resolve_tc in
+let rec pretype ~program_mode ~poly resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma : evar_map) t =
+  let inh_conv_coerce_to_tycon ?loc = inh_conv_coerce_to_tycon ?loc ~program_mode resolve_tc in
+  let pretype_type = pretype_type ~program_mode ~poly resolve_tc in
+  let pretype = pretype ~program_mode ~poly resolve_tc in
   let open Context.Rel.Declaration in
   let loc = t.CAst.loc in
   match DAst.get t with
@@ -473,7 +487,7 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
     inh_conv_coerce_to_tycon ?loc env sigma t_ref tycon
 
   | GVar id ->
-    let sigma, t_id = pretype_id (fun e r t -> pretype tycon e r t) k0 loc env sigma id in
+    let sigma, t_id = pretype_id (fun e r t -> pretype tycon e r t) loc env sigma id in
     inh_conv_coerce_to_tycon ?loc env sigma t_id tycon
 
   | GEvar (id, inst) ->
@@ -482,10 +496,9 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
       let id = interp_ltac_id env id in
       let evk =
         try Evd.evar_key id sigma
-        with Not_found ->
-          user_err ?loc  (str "Unknown existential variable.") in
+        with Not_found -> error_evar_not_found ?loc !!env sigma id in
       let hyps = evar_filtered_context (Evd.find sigma evk) in
-      let sigma, args = pretype_instance k0 resolve_tc env sigma loc hyps evk inst in
+      let sigma, args = pretype_instance ~program_mode ~poly resolve_tc env sigma loc hyps evk inst in
       let c = mkEvar (evk, args) in
       let j = Retyping.get_judgment_of !!env sigma c in
       inh_conv_coerce_to_tycon ?loc env sigma j tycon
@@ -510,6 +523,7 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
         | Some ty -> sigma, ty
         | None -> new_type_evar env sigma loc in
       let sigma, uj_val = new_evar env sigma ~src:(loc,k) ~naming ty in
+      let sigma = if program_mode then mark_obligation_evar sigma k uj_val else sigma in
       sigma, { uj_val; uj_type = ty }
 
   | GHole (k, _naming, Some arg) ->
@@ -517,28 +531,31 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
         match tycon with
         | Some ty -> sigma, ty
         | None -> new_type_evar env sigma loc in
-      let c, sigma = GlobEnv.interp_glob_genarg env sigma ty arg in
+      let c, sigma = GlobEnv.interp_glob_genarg env poly sigma ty arg in
       sigma, { uj_val = c; uj_type = ty }
 
   | GRec (fixkind,names,bl,lar,vdef) ->
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
     let rec type_bl env sigma ctxt = function
       | [] -> sigma, ctxt
       | (na,bk,None,ty)::bl ->
         let sigma, ty' = pretype_type empty_valcon env sigma ty in
-	let dcl = LocalAssum (na, ty'.utj_val) in
-        let dcl', env = push_rel sigma dcl env in
+        let rty' = Sorts.relevance_of_sort ty'.utj_type in
+        let dcl = LocalAssum (make_annot na rty', ty'.utj_val) in
+        let dcl', env = push_rel ~hypnaming sigma dcl env in
         type_bl env sigma (Context.Rel.add dcl' ctxt) bl
       | (na,bk,Some bd,ty)::bl ->
         let sigma, ty' = pretype_type empty_valcon env sigma ty in
+        let rty' = Sorts.relevance_of_sort ty'.utj_type in
         let sigma, bd' = pretype (mk_tycon ty'.utj_val) env sigma bd in
-        let dcl = LocalDef (na, bd'.uj_val, ty'.utj_val) in
-        let dcl', env = push_rel sigma dcl env in
+        let dcl = LocalDef (make_annot na rty', bd'.uj_val, ty'.utj_val) in
+        let dcl', env = push_rel ~hypnaming sigma dcl env in
         type_bl env sigma (Context.Rel.add dcl' ctxt) bl in
     let sigma, ctxtv = Array.fold_left_map (fun sigma -> type_bl env sigma Context.Rel.empty) sigma bl in
     let sigma, larj =
       Array.fold_left2_map
         (fun sigma e ar ->
-          pretype_type empty_valcon (snd (push_rel_context sigma e env)) sigma ar)
+          pretype_type empty_valcon (snd (push_rel_context ~hypnaming sigma e env)) sigma ar)
         sigma ctxtv lar in
     let lara = Array.map (fun a -> a.utj_val) larj in
     let ftys = Array.map2 (fun e a -> it_mkProd_or_LetIn a e) ctxtv lara in
@@ -551,14 +568,18 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 	  | GFix (vn,i) -> i
 	  | GCoFix i -> i
         in
-        begin match conv !!env sigma ftys.(fixi) t with
-          | None -> sigma
-          | Some sigma -> sigma
+        begin match Evarconv.unify_delay !!env sigma ftys.(fixi) t with
+          | exception Evarconv.UnableToUnify _ -> sigma
+          | sigma -> sigma
         end
       | None -> sigma
     in
+    let names = Array.map2 (fun na t ->
+        make_annot na (Retyping.relevance_of_type !!(env) sigma t))
+        names ftys
+    in
       (* Note: bodies are not used by push_rec_types, so [||] is safe *)
-    let names,newenv = push_rec_types sigma (names,ftys) env in
+    let names,newenv = push_rec_types ~hypnaming sigma (names,ftys) env in
     let sigma, vdefj =
       Array.fold_left2_map_i
         (fun i sigma ctxt def ->
@@ -567,14 +588,14 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
            let (ctxt,ty) =
              decompose_prod_n_assum sigma (Context.Rel.length ctxt)
                (lift nbfix ftys.(i)) in
-           let ctxt,nenv = push_rel_context sigma ctxt newenv in
+           let ctxt,nenv = push_rel_context ~hypnaming sigma ctxt newenv in
            let sigma, j = pretype (mk_tycon ty) nenv sigma def in
            sigma, { uj_val = it_mkLambda_or_LetIn j.uj_val ctxt;
                     uj_type = it_mkProd_or_LetIn j.uj_type ctxt })
         sigma ctxtv vdef in
       let sigma = Typing.check_type_fixpoint ?loc !!env sigma names ftys vdefj in
       let nf c = nf_evar sigma c in
-      let ftys = Array.map nf ftys in (** FIXME *)
+      let ftys = Array.map nf ftys in (* FIXME *)
       let fdefs = Array.map (fun x -> nf (j_val x)) vdefj in
       let fixj = match fixkind with
 	| GFix (vn,i) ->
@@ -586,18 +607,15 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 		 fixpoints ?) *)
 	  let possible_indexes =
 	    Array.to_list (Array.mapi
-			     (fun i (n,_) -> match n with
+                             (fun i annot -> match annot with
 			     | Some n -> [n]
 			     | None -> List.map_i (fun i _ -> i) 0 ctxtv.(i))
-			     vn)
+           vn)
 	  in
-	  let fixdecls = (names,ftys,fdefs) in
-          let indexes =
-            search_guard
-              ?loc !!env possible_indexes (nf_fix sigma fixdecls)
-          in
-	    make_judge (mkFix ((indexes,i),fixdecls)) ftys.(i)
-	| GCoFix i ->
+          let fixdecls = (names,ftys,fdefs) in
+          let indexes = esearch_guard ?loc !!env sigma possible_indexes fixdecls in
+          make_judge (mkFix ((indexes,i),fixdecls)) ftys.(i)
+        | GCoFix i ->
           let fixdecls = (names,ftys,fdefs) in
 	  let cofix = (i, fixdecls) in
             (try check_cofix !!env (i, nf_fix sigma fixdecls)
@@ -621,12 +639,12 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 	(* Bidirectional typechecking hint: 
 	   parameters of a constructor are completely determined
 	   by a typing constraint *)
-      if Flags.is_program_mode () && length > 0 && isConstruct sigma fj.uj_val then
+      if program_mode && length > 0 && isConstruct sigma fj.uj_val then
 	match tycon with
 	| None -> []
 	| Some ty ->
           let ((ind, i), u) = destConstruct sigma fj.uj_val in
-	  let npars = inductive_nparams ind in
+          let npars = inductive_nparams !!env ind in
 	    if Int.equal npars 0 then []
 	    else
 	      try
@@ -652,7 +670,7 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
       | [] -> sigma, resj
       | c::rest ->
         let argloc = loc_of_glob_constr c in
-        let sigma, resj = Coercion.inh_app_fun resolve_tc !!env sigma resj in
+        let sigma, resj = Coercion.inh_app_fun ~program_mode resolve_tc !!env sigma resj in
         let resty = whd_all !!env sigma resj.uj_type in
         match EConstr.kind sigma resty with
         | Prod (na,c1,c2) ->
@@ -662,15 +680,15 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
             match candargs with
             | [] -> sigma, [], j_val hj
             | arg :: args ->
-              begin match conv !!env sigma (j_val hj) arg with
-                | Some sigma ->
-                  sigma, args, nf_evar sigma (j_val hj)
-                | None ->
+              begin match Evarconv.unify_delay !!env sigma (j_val hj) arg with
+                | exception Evarconv.UnableToUnify _ ->
                   sigma, [], j_val hj
+                | sigma ->
+                  sigma, args, nf_evar sigma (j_val hj)
               end
           in
-            let sigma, ujval = adjust_evar_source sigma na ujval in
-	    let value, typ = app_f n (j_val resj) ujval, subst1 ujval c2 in
+            let sigma, ujval = adjust_evar_source sigma na.binder_name ujval in
+            let value, typ = app_f n (j_val resj) ujval, subst1 ujval c2 in
 	    let j = { uj_val = value; uj_type = typ } in
             apply_rec env sigma (n+1) j candargs rest
 	  | _ ->
@@ -682,7 +700,7 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
     let sigma, resj =
       match EConstr.kind sigma resj.uj_val with
       | App (f,args) ->
-          if is_template_polymorphic !!env sigma f then
+          if Termops.is_template_polymorphic_ind !!env sigma f then
 	    (* Special case for inductive type applications that must be 
 	       refreshed right away. *)
             let c = mkApp (f, args) in
@@ -699,28 +717,32 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
       match tycon with
       | None -> sigma, tycon
       | Some ty ->
-        let sigma, ty' = Coercion.inh_coerce_to_prod ?loc !!env sigma ty in
+        let sigma, ty' = Coercion.inh_coerce_to_prod ?loc ~program_mode !!env sigma ty in
         sigma, Some ty'
     in
     let sigma, (name',dom,rng) = split_tycon ?loc !!env sigma tycon' in
     let dom_valcon = valcon_of_tycon dom in
     let sigma, j = pretype_type dom_valcon env sigma c1 in
+    let name = {binder_name=name; binder_relevance=Sorts.relevance_of_sort j.utj_type} in
     let var = LocalAssum (name, j.utj_val) in
-    let var',env' = push_rel sigma var env in
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
+    let var',env' = push_rel ~hypnaming sigma var env in
     let sigma, j' = pretype rng env' sigma c2 in
     let name = get_name var' in
-    let resj = judge_of_abstraction !!env (orelse_name name name') j j' in
+    let resj = judge_of_abstraction !!env (orelse_name name name'.binder_name) j j' in
     inh_conv_coerce_to_tycon ?loc env sigma resj tycon
 
   | GProd(name,bk,c1,c2) ->
     let sigma, j = pretype_type empty_valcon env sigma c1 in
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
     let sigma, name, j' = match name with
       | Anonymous ->
         let sigma, j = pretype_type empty_valcon env sigma c2 in
         sigma, name, { j with utj_val = lift 1 j.utj_val }
       | Name _ ->
-        let var = LocalAssum (name, j.utj_val) in
-        let var, env' = push_rel sigma var env in
+        let r = Sorts.relevance_of_sort j.utj_type in
+        let var = LocalAssum (make_annot name r, j.utj_val) in
+        let var, env' = push_rel ~hypnaming sigma var env in
         let sigma, c2_j = pretype_type empty_valcon env' sigma c2 in
         sigma, get_name var, c2_j
     in
@@ -744,12 +766,14 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
     let sigma, j = pretype tycon1 env sigma c1 in
     let sigma, t = Evarsolve.refresh_universes
       ~onlyalg:true ~status:Evd.univ_flexible (Some false) !!env sigma j.uj_type in
-    let var = LocalDef (name, j.uj_val, t) in
+    let r = Retyping.relevance_of_term !!env sigma j.uj_val in
+    let var = LocalDef (make_annot name r, j.uj_val, t) in
     let tycon = lift_tycon 1 tycon in
-    let var, env = push_rel sigma var env in
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
+    let var, env = push_rel ~hypnaming sigma var env in
     let sigma, j' = pretype tycon env sigma c2 in
     let name = get_name var in
-    sigma, { uj_val = mkLetIn (name, j.uj_val, t, j'.uj_val) ;
+    sigma, { uj_val = mkLetIn (make_annot name r, j.uj_val, t, j'.uj_val) ;
              uj_type = subst1 j.uj_val j'.uj_type }
 
   | GLetTuple (nal,(na,po),c,d) ->
@@ -777,10 +801,11 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
       | Some ps ->
 	let rec aux n k names l =
 	  match names, l with
-	  | na :: names, (LocalAssum (_,t) :: l) ->
+          | na :: names, (LocalAssum (na', t) :: l) ->
             let t = EConstr.of_constr t in
 	    let proj = Projection.make ps.(cs.cs_nargs - k) true in
-	    LocalDef (na, lift (cs.cs_nargs - n) (mkProj (proj, cj.uj_val)), t)
+            LocalDef ({na' with binder_name = na},
+                      lift (cs.cs_nargs - n) (mkProj (proj, cj.uj_val)), t)
 	    :: aux (n+1) (k + 1) names l
 	  | na :: names, (decl :: l) ->
 	    set_name na decl :: aux (n+1) k names l
@@ -788,25 +813,26 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 	  | _ -> assert false
 	in aux 1 1 (List.rev nal) cs.cs_args, true in
     let fsign = Context.Rel.map (whd_betaiota sigma) fsign in
-    let fsign,env_f = push_rel_context sigma fsign env in
-    let obj ind p v f =
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
+    let fsign,env_f = push_rel_context ~hypnaming sigma fsign env in
+    let obj ind rci p v f =
       if not record then
-	let f = it_mkLambda_or_LetIn f fsign in
-        let ci = make_case_info !!env (fst ind) LetStyle in
-	  mkCase (ci, p, cj.uj_val,[|f|]) 
+        let f = it_mkLambda_or_LetIn f fsign in
+        let ci = make_case_info !!env (fst ind) rci LetStyle in
+          mkCase (ci, p, cj.uj_val,[|f|])
       else it_mkLambda_or_LetIn f fsign
     in
     (* Make dependencies from arity signature impossible *)
-    let arsgn =
-      let arsgn,_ = get_arity !!env indf in
-      List.map (set_name Anonymous) arsgn
+    let arsgn, indr =
+      let arsgn,s = get_arity !!env indf in
+      List.map (set_name Anonymous) arsgn, Sorts.relevance_of_sort_family s
     in
       let indt = build_dependent_inductive !!env indf in
-      let psign = LocalAssum (na, indt) :: arsgn in (* For locating names in [po] *)
+      let psign = LocalAssum (make_annot na indr, indt) :: arsgn in (* For locating names in [po] *)
       let psign = List.map (fun d -> map_rel_decl EConstr.of_constr d) psign in
       let predenv = Cases.make_return_predicate_ltac_lvar env sigma na c cj.uj_val in
       let nar = List.length arsgn in
-      let psign',env_p = push_rel_context ~force_names:true sigma psign predenv in
+      let psign',env_p = push_rel_context ~hypnaming ~force_names:true sigma psign predenv in
 	  (match po with
 	  | Some p ->
             let sigma, pj = pretype_type empty_valcon env_p sigma p in
@@ -820,9 +846,9 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
             let sigma, fj = pretype (mk_tycon fty) env_f sigma d in
 	    let v =
 	      let ind,_ = dest_ind_family indf in
-                Typing.check_allowed_sort !!env sigma ind cj.uj_val p;
-		obj ind p cj.uj_val fj.uj_val
-	    in
+                let rci = Typing.check_allowed_sort !!env sigma ind cj.uj_val p in
+                obj ind rci p cj.uj_val fj.uj_val
+            in
             sigma, { uj_val = v; uj_type = (substl (realargs@[cj.uj_val]) ccl) }
 
 	  | None ->
@@ -839,8 +865,8 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 	    let p = it_mkLambda_or_LetIn (lift (nar+1) ccl) psign' in
 	    let v =
 	      let ind,_ = dest_ind_family indf in
-                Typing.check_allowed_sort !!env sigma ind cj.uj_val p;
-		obj ind p cj.uj_val fj.uj_val
+                let rci = Typing.check_allowed_sort !!env sigma ind cj.uj_val p in
+                obj ind rci p cj.uj_val fj.uj_val
             in sigma, { uj_val = v; uj_type = ccl })
 
   | GIf (c,(na,po),b1,b2) ->
@@ -855,17 +881,18 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
         user_err ?loc 
 		      (str "If is only for inductive types with two constructors.");
 
-      let arsgn =
-        let arsgn,_ = get_arity !!env indf in
+      let arsgn, indr =
+        let arsgn,s = get_arity !!env indf in
         (* Make dependencies from arity signature impossible *)
-        List.map (set_name Anonymous) arsgn
+        List.map (set_name Anonymous) arsgn, Sorts.relevance_of_sort_family s
       in
       let nar = List.length arsgn in
       let indt = build_dependent_inductive !!env indf in
-      let psign = LocalAssum (na, indt) :: arsgn in (* For locating names in [po] *)
+      let psign = LocalAssum (make_annot na indr, indt) :: arsgn in (* For locating names in [po] *)
       let psign = List.map (fun d -> map_rel_decl EConstr.of_constr d) psign in
       let predenv = Cases.make_return_predicate_ltac_lvar env sigma na c cj.uj_val in
-      let psign,env_p = push_rel_context sigma psign predenv in
+    let hypnaming = if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames in
+      let psign,env_p = push_rel_context ~hypnaming sigma psign predenv in
       let sigma, pred, p = match po with
 	| Some p ->
           let sigma, pj = pretype_type empty_valcon env_p sigma p in
@@ -890,30 +917,30 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
 	let csgn =
           List.map (set_name Anonymous) cs_args
         in
-        let _,env_c = push_rel_context sigma csgn env in
+        let _,env_c = push_rel_context ~hypnaming sigma csgn env in
         let sigma, bj = pretype (mk_tycon pi) env_c sigma b in
         sigma, it_mkLambda_or_LetIn bj.uj_val cs_args in
       let sigma, b1 = f sigma cstrs.(0) b1 in
       let sigma, b2 = f sigma cstrs.(1) b2 in
       let v =
 	let ind,_ = dest_ind_family indf in
-        let ci = make_case_info !!env (fst ind) IfStyle in
         let pred = nf_evar sigma pred in
-          Typing.check_allowed_sort !!env sigma ind cj.uj_val pred;
-	  mkCase (ci, pred, cj.uj_val, [|b1;b2|])
+        let rci = Typing.check_allowed_sort !!env sigma ind cj.uj_val pred in
+        let ci = make_case_info !!env (fst ind) rci IfStyle in
+          mkCase (ci, pred, cj.uj_val, [|b1;b2|])
       in
       let cj = { uj_val = v; uj_type = p } in
       inh_conv_coerce_to_tycon ?loc env sigma cj tycon
 
   | GCases (sty,po,tml,eqns) ->
-    Cases.compile_cases ?loc sty (pretype, sigma) tycon env (po,tml,eqns)
+    Cases.compile_cases ?loc ~program_mode sty (pretype, sigma) tycon env (po,tml,eqns)
 
   | GCast (c,k) ->
     let sigma, cj =
       match k with
       | CastCoerce ->
         let sigma, cj = pretype empty_tycon env sigma c in
-        Coercion.inh_coerce_to_base ?loc !!env sigma cj
+        Coercion.inh_coerce_to_base ?loc ~program_mode !!env sigma cj
       | CastConv t | CastVM t | CastNative t ->
         let k = (match k with CastVM _ -> VMcast | CastNative _ -> NATIVEcast | _ -> DEFAULTcast) in
         let sigma, tj = pretype_type empty_valcon env sigma t in
@@ -949,7 +976,15 @@ let rec pretype k0 resolve_tc (tycon : type_constraint) (env : GlobEnv.t) (sigma
         sigma, { uj_val = v; uj_type = tval }
     in inh_conv_coerce_to_tycon ?loc env sigma cj tycon
 
-and pretype_instance k0 resolve_tc env sigma loc hyps evk update =
+      | GInt i ->
+        let resj =
+          try Typing.judge_of_int !!env i
+          with Invalid_argument _ ->
+            user_err ?loc ~hdr:"pretype" (str "Type of int63 should be registered first.")
+        in
+        inh_conv_coerce_to_tycon ?loc env sigma resj tycon
+
+and pretype_instance ~program_mode ~poly resolve_tc env sigma loc hyps evk update =
   let f decl (subst,update,sigma) =
     let id = NamedDecl.get_id decl in
     let b = Option.map (replace_vars subst) (NamedDecl.get_value decl) in
@@ -981,7 +1016,7 @@ and pretype_instance k0 resolve_tc env sigma loc hyps evk update =
     let sigma, c, update =
       try
         let c = List.assoc id update in
-        let sigma, c = pretype k0 resolve_tc (mk_tycon t) env sigma c in
+        let sigma, c = pretype ~program_mode ~poly resolve_tc (mk_tycon t) env sigma c in
         check_body sigma id (Some c.uj_val);
         sigma, c.uj_val, List.remove_assoc id update
       with Not_found ->
@@ -1006,7 +1041,7 @@ and pretype_instance k0 resolve_tc env sigma loc hyps evk update =
   sigma, Array.map_of_list snd subst
 
 (* [pretype_type valcon env sigma c] coerces [c] into a type *)
-and pretype_type k0 resolve_tc valcon (env : GlobEnv.t) sigma c = match DAst.get c with
+and pretype_type ~program_mode ~poly resolve_tc valcon (env : GlobEnv.t) sigma c = match DAst.get c with
   | GHole (knd, naming, None) ->
       let loc = loc_of_glob_constr c in
       (match valcon with
@@ -1030,33 +1065,38 @@ and pretype_type k0 resolve_tc valcon (env : GlobEnv.t) sigma c = match DAst.get
        | None ->
          let sigma, s = new_sort_variable univ_flexible_alg sigma in
          let sigma, utj_val = new_evar env sigma ~src:(loc, knd) ~naming (mkSort s) in
+         let sigma = if program_mode then mark_obligation_evar sigma knd utj_val else sigma in
          sigma, { utj_val; utj_type = s})
   | _ ->
-      let sigma, j = pretype k0 resolve_tc empty_tycon env sigma c in
+      let sigma, j = pretype ~program_mode ~poly resolve_tc empty_tycon env sigma c in
       let loc = loc_of_glob_constr c in
       let sigma, tj = Coercion.inh_coerce_to_sort ?loc !!env sigma j in
 	match valcon with
         | None -> sigma, tj
 	| Some v ->
-          begin match cumul !!env sigma v tj.utj_val with
-            | Some sigma -> sigma, tj
-            | None ->
+          begin match Evarconv.unify_leq_delay !!env sigma v tj.utj_val with
+            | sigma -> sigma, tj
+            | exception Evarconv.UnableToUnify _ ->
 	      error_unexpected_type
                 ?loc:(loc_of_glob_constr c) !!env sigma tj.utj_val v
           end
 
 let ise_pretype_gen flags env sigma lvar kind c =
-  let env = GlobEnv.make env sigma lvar in
-  let k0 = Context.Rel.length (rel_context !!env) in
+  let program_mode = flags.program_mode in
+  let poly = flags.polymorphic in
+  let hypnaming =
+    if program_mode then ProgramNaming else KeepUserNameAndRenameExistingButSectionNames
+  in
+  let env = GlobEnv.make ~hypnaming env sigma lvar in
   let sigma', c', c'_ty = match kind with
     | WithoutTypeConstraint ->
-      let sigma, j = pretype k0 flags.use_typeclasses empty_tycon env sigma c in
+      let sigma, j = pretype ~program_mode ~poly flags.use_typeclasses empty_tycon env sigma c in
       sigma, j.uj_val, j.uj_type
     | OfType exptyp ->
-      let sigma, j = pretype k0 flags.use_typeclasses (mk_tycon exptyp) env sigma c in
+      let sigma, j = pretype ~program_mode ~poly flags.use_typeclasses (mk_tycon exptyp) env sigma c in
       sigma, j.uj_val, j.uj_type
     | IsType ->
-      let sigma, tj = pretype_type k0 flags.use_typeclasses empty_valcon env sigma c in
+      let sigma, tj = pretype_type ~program_mode ~poly flags.use_typeclasses empty_valcon env sigma c in
       sigma, tj.utj_val, mkSort tj.utj_type
   in
   process_inference_flags flags !!env sigma (sigma',c',c'_ty)
@@ -1064,16 +1104,20 @@ let ise_pretype_gen flags env sigma lvar kind c =
 let default_inference_flags fail = {
   use_typeclasses = true;
   solve_unification_constraints = true;
-  use_hook = None;
   fail_evar = fail;
-  expand_evars = true }
+  expand_evars = true;
+  program_mode = false;
+  polymorphic = false;
+}
 
 let no_classes_no_fail_inference_flags = {
   use_typeclasses = false;
   solve_unification_constraints = true;
-  use_hook = None;
   fail_evar = false;
-  expand_evars = true }
+  expand_evars = true;
+  program_mode = false;
+  polymorphic = false;
+}
 
 let all_and_fail_flags = default_inference_flags true
 let all_no_fail_flags = default_inference_flags false
@@ -1100,3 +1144,38 @@ let understand_tcc ?flags env sigma ?expected_type c =
 let understand_ltac flags env sigma lvar kind c =
   let (sigma, c, _) = ise_pretype_gen flags env sigma lvar kind c in
   (sigma, c)
+
+let path_convertible env sigma p q =
+  let open Classops in
+  let mkGRef ref          = DAst.make @@ Glob_term.GRef(ref,None) in
+  let mkGVar id           = DAst.make @@ Glob_term.GVar(id) in
+  let mkGApp(rt,rtl)      = DAst.make @@ Glob_term.GApp(rt,rtl) in
+  let mkGLambda(n,t,b)    = DAst.make @@ Glob_term.GLambda(n,Decl_kinds.Explicit,t,b) in
+  let mkGHole ()          = DAst.make @@ Glob_term.GHole(Evar_kinds.BinderType Anonymous,Namegen.IntroAnonymous,None) in
+  let path_to_gterm p =
+    match p with
+    | ic :: p' ->
+      let names =
+        List.map (fun n -> Id.of_string ("x" ^ string_of_int n))
+          (List.interval 0 ic.coe_param)
+      in
+      List.fold_right
+        (fun id t -> mkGLambda (Name id, mkGHole (), t)) names @@
+        List.fold_left
+          (fun t ic ->
+             mkGApp (mkGRef ic.coe_value,
+                     List.make ic.coe_param (mkGHole ()) @ [t]))
+          (mkGApp (mkGRef ic.coe_value, List.map (fun i -> mkGVar i) names))
+          p'
+    | [] -> anomaly (str "A coercion path shouldn't be empty.")
+  in
+  try
+    let sigma,tp = understand_tcc env sigma (path_to_gterm p) in
+    let sigma,tq = understand_tcc env sigma (path_to_gterm q) in
+    if Evd.has_undefined sigma then
+      false
+    else
+      let _ = Evarconv.unify_delay env sigma tp tq in true
+  with Evarconv.UnableToUnify _ | PretypeError _ -> false
+
+let _ = Classops.install_path_comparator path_convertible

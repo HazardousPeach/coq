@@ -26,7 +26,6 @@ open Notation_ops
 open Glob_term
 open Glob_ops
 open Pattern
-open Nametab
 open Notation
 open Detyping
 open Decl_kinds
@@ -194,17 +193,12 @@ let without_specific_symbols l =
 (* Control printing of records *)
 
 (* Set Record Printing flag *)
-let record_print = ref true
-
-let _ =
-  let open Goptions in
-  declare_bool_option
-    { optdepr  = false;
-      optname  = "record printing";
-      optkey   = ["Printing";"Records"];
-      optread  = (fun () -> !record_print);
-      optwrite = (fun b -> record_print := b) }
-
+let get_record_print =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"record printing"
+    ~key:["Printing";"Records"]
+    ~value:true
 
 let is_record indsp =
   try
@@ -213,7 +207,7 @@ let is_record indsp =
   with Not_found -> false
 
 let encode_record r =
-  let indsp = global_inductive r in
+  let indsp = Nametab.global_inductive r in
   if not (is_record indsp) then
     user_err ?loc:r.CAst.loc ~hdr:"encode_record"
       (str "This type is not a structure type.");
@@ -221,7 +215,7 @@ let encode_record r =
 
 module PrintingRecordRecord =
   PrintingInductiveMake (struct
-    let encode = encode_record
+    let encode _env = encode_record
     let field = "Record"
     let title = "Types leading to pretty-printing using record notation: "
     let member_message s b =
@@ -233,7 +227,7 @@ module PrintingRecordRecord =
 
 module PrintingRecordConstructor =
   PrintingInductiveMake (struct
-    let encode = encode_record
+    let encode _env = encode_record
     let field = "Constructor"
     let title = "Types leading to pretty-printing using constructor form: "
     let member_message s b =
@@ -279,7 +273,7 @@ let extern_evar n l = CEvar (n,l)
     may be inaccurate *)
 
 let default_extern_reference ?loc vars r =
-  shortest_qualid_of_global ?loc vars r
+  Nametab.shortest_qualid_of_global ?loc vars r
 
 let my_extern_reference = ref default_extern_reference
 
@@ -293,11 +287,11 @@ let extern_reference ?loc vars l = !my_extern_reference vars l
 
 let add_patt_for_params ind l =
   if !Flags.in_debugger then l else
-    Util.List.addn (Inductiveops.inductive_nparamdecls ind) (CAst.make @@ CPatAtom None) l
+    Util.List.addn (Inductiveops.inductive_nparamdecls (Global.env()) ind) (CAst.make @@ CPatAtom None) l
 
 let add_cpatt_for_params ind l =
   if !Flags.in_debugger then l else
-    Util.List.addn  (Inductiveops.inductive_nparamdecls ind) (DAst.make @@ PatVar Anonymous) l
+    Util.List.addn  (Inductiveops.inductive_nparamdecls (Global.env()) ind) (DAst.make @@ PatVar Anonymous) l
 
 let drop_implicits_in_patt cst nb_expl args =
   let impl_st = (implicits_of_global cst) in
@@ -322,29 +316,28 @@ let drop_implicits_in_patt cst nb_expl args =
 let destPrim = function { CAst.v = CPrim t } -> Some t | _ -> None
 let destPatPrim = function { CAst.v = CPatPrim t } -> Some t | _ -> None
 
-let is_number s =
-  let rec aux i =
-    Int.equal (String.length s) i ||
-    match s.[i] with '0'..'9' -> aux (i+1) | _ -> false
-  in aux 0
-
 let is_zero s =
   let rec aux i =
     Int.equal (String.length s) i || (s.[i] == '0' && aux (i+1))
   in aux 0
+let is_zero n = is_zero n.NumTok.int && is_zero n.NumTok.frac
 
 let make_notation_gen loc ntn mknot mkprim destprim l bl =
   match snd ntn,List.map destprim l with
     (* Special case to avoid writing "- 3" for e.g. (Z.opp 3) *)
-    | "- _", [Some (Numeral (p,true))] when not (is_zero p) ->
+    | "- _", [Some (Numeral (SPlus,p))] when not (is_zero p) ->
         assert (bl=[]);
         mknot (loc,ntn,([mknot (loc,(InConstrEntrySomeLevel,"( _ )"),l,[])]),[])
     | _ ->
 	match decompose_notation_key ntn, l with
-        | (InConstrEntrySomeLevel,[Terminal "-"; Terminal x]), [] when is_number x ->
-	   mkprim (loc, Numeral (x,false))
-        | (InConstrEntrySomeLevel,[Terminal x]), [] when is_number x ->
-	   mkprim (loc, Numeral (x,true))
+        | (InConstrEntrySomeLevel,[Terminal "-"; Terminal x]), [] ->
+           begin match NumTok.of_string x with
+           | Some n -> mkprim (loc, Numeral (SMinus,n))
+           | None -> mknot (loc,ntn,l,bl) end
+        | (InConstrEntrySomeLevel,[Terminal x]), [] ->
+           begin match NumTok.of_string x with
+           | Some n -> mkprim (loc, Numeral (SPlus,n))
+           | None -> mknot (loc,ntn,l,bl) end
         | _ -> mknot (loc,ntn,l,bl)
 
 let make_notation loc ntn (terms,termlists,binders,binderlists as subst) =
@@ -369,7 +362,7 @@ let mkPat ?loc qid l = CAst.make ?loc @@
 
 let pattern_printable_in_both_syntax (ind,_ as c) =
   let impl_st = extract_impargs_data (implicits_of_global (ConstructRef c)) in
-  let nb_params = Inductiveops.inductive_nparams ind in
+  let nb_params = Inductiveops.inductive_nparams (Global.env()) ind in
   List.exists (fun (_,impls) ->
     (List.length impls >= nb_params) &&
       let params,args = Util.List.chop nb_params impls in
@@ -432,7 +425,7 @@ let rec extern_cases_pattern_in_scope (custom,scopes as allscopes) vars pat =
 	    with
 		Not_found | No_match | Exit ->
                   let c = extern_reference Id.Set.empty (ConstructRef cstrsp) in
-                  if !asymmetric_patterns then
+                  if Constrintern.get_asymmetric_patterns () then
 		    if pattern_printable_in_both_syntax cstrsp
 		    then CPatCstr (c, None, args)
 		    else CPatCstr (c, Some (add_patt_for_params (fst cstrsp) args), [])
@@ -455,10 +448,10 @@ and apply_notation_to_pattern ?loc gr ((subst,substlist),(nb_to_drop,more_args))
         | None -> raise No_match
         | Some coercion ->
         match availability_of_notation (sc,ntn) (tmp_scope,scopes) with
-	  (* Uninterpretation is not allowed in current context *)
-	  | None -> raise No_match
-	  (* Uninterpretation is allowed in current context *)
-	  | Some (scopt,key) ->
+          (* Uninterpretation is not allowed in current context *)
+          | None -> raise No_match
+          (* Uninterpretation is allowed in current context *)
+          | Some (scopt,key) ->
 	    let scopes' = Option.List.cons scopt scopes in
 	    let l =
               List.map (fun (c,(subentry,(scopt,scl))) ->
@@ -470,7 +463,7 @@ and apply_notation_to_pattern ?loc gr ((subst,substlist),(nb_to_drop,more_args))
 		List.map (extern_cases_pattern_in_scope subscope vars) c)
 		substlist in
 	    let l2 = List.map (extern_cases_pattern_in_scope allscopes vars) more_args in
-            let l2' = if !asymmetric_patterns || not (List.is_empty ll) then l2
+            let l2' = if Constrintern.get_asymmetric_patterns () || not (List.is_empty ll) then l2
 	      else
 		match drop_implicits_in_patt gr nb_to_drop l2 with
 		  |Some true_args -> true_args
@@ -481,20 +474,23 @@ and apply_notation_to_pattern ?loc gr ((subst,substlist),(nb_to_drop,more_args))
                  (make_pat_notation ?loc ntn (l,ll) l2') key)
       end
     | SynDefRule kn ->
-      let qid = shortest_qualid_of_syndef ?loc vars kn in
+      match availability_of_entry_coercion custom InConstrEntrySomeLevel with
+      | None -> raise No_match
+      | Some coercion ->
+      let qid = Nametab.shortest_qualid_of_syndef ?loc vars kn in
       let l1 =
         List.rev_map (fun (c,(subentry,(scopt,scl))) ->
           extern_cases_pattern_in_scope (subentry,(scopt,scl@scopes)) vars c)
           subst in
       let l2 = List.map (extern_cases_pattern_in_scope allscopes vars) more_args in
-      let l2' = if !asymmetric_patterns then l2
+      let l2' = if Constrintern.get_asymmetric_patterns () then l2
 	else
 	  match drop_implicits_in_patt gr (nb_to_drop + List.length l1) l2 with
 	    |Some true_args -> true_args
 	    |None -> raise No_match
       in
       assert (List.is_empty substlist);
-      mkPat ?loc qid (List.rev_append l1 l2')
+      insert_pat_coercion ?loc coercion (mkPat ?loc qid (List.rev_append l1 l2'))
 and extern_notation_pattern allscopes vars t = function
   | [] -> raise No_match
   | (keyrule,pat,n as _rule)::rules ->
@@ -505,12 +501,12 @@ and extern_notation_pattern allscopes vars t = function
         | PatCstr (cstr,args,na) ->
           let t = if na = Anonymous then t else DAst.make ?loc (PatCstr (cstr,args,Anonymous)) in
 	  let p = apply_notation_to_pattern ?loc (ConstructRef cstr)
-	    (match_notation_constr_cases_pattern t pat) allscopes vars keyrule in
+            (match_notation_constr_cases_pattern t pat) allscopes vars keyrule in
 	  insert_pat_alias ?loc p na
 	| PatVar Anonymous -> CAst.make ?loc @@ CPatAtom None
         | PatVar (Name id) -> CAst.make ?loc @@ CPatAtom (Some (qualid_of_ident ?loc id))
     with
-	No_match -> extern_notation_pattern allscopes vars t rules
+        No_match -> extern_notation_pattern allscopes vars t rules
 
 let rec extern_notation_ind_pattern allscopes vars ind args = function
   | [] -> raise No_match
@@ -518,14 +514,14 @@ let rec extern_notation_ind_pattern allscopes vars ind args = function
     try
       if is_inactive_rule keyrule then raise No_match;
       apply_notation_to_pattern (IndRef ind)
-	(match_notation_constr_ind_pattern ind args pat) allscopes vars keyrule
+        (match_notation_constr_ind_pattern ind args pat) allscopes vars keyrule
     with
-	No_match -> extern_notation_ind_pattern allscopes vars ind args rules
+        No_match -> extern_notation_ind_pattern allscopes vars ind args rules
 
 let extern_ind_pattern_in_scope (custom,scopes as allscopes) vars ind args =
   (* pboutill: There are letins in pat which is incompatible with notations and
      not explicit application. *)
-  if !Flags.in_debugger||Inductiveops.inductive_has_local_defs ind then
+  if !Flags.in_debugger||Inductiveops.inductive_has_local_defs (Global.env()) ind then
     let c = extern_reference vars (IndRef ind) in
     let args = List.map (extern_cases_pattern_in_scope allscopes vars) args in
     CAst.make @@ CPatCstr (c, Some (add_patt_for_params ind args), [])
@@ -623,8 +619,13 @@ let explicitize inctx impl (cf,f) args =
 	  CApp ((ip,f),args1@args2)
     | None ->
       let args = exprec 1 (args,impl) in
-	if List.is_empty args then f.CAst.v else CApp ((None, f), args)
-  in
+        if List.is_empty args then f.CAst.v else
+          match f.CAst.v with
+          | CApp (g,args') ->
+              (* may happen with notations for a prefix of an n-ary
+                 application *)
+              CApp (g,args'@args)
+          | _ -> CApp ((None, f), args) in
     try expl ()
     with Expl -> 
       let f',us = match f with { CAst.v = CRef (f,us) } -> f,us | _ -> assert false in
@@ -714,23 +715,31 @@ let rec flatten_application c = match DAst.get c with
 (* one with no delimiter if possible)                                 *)
 
 let extern_possible_prim_token (custom,scopes) r =
-  try
-    let (sc,n) = uninterp_prim_token r in
-    match availability_of_entry_coercion custom InConstrEntrySomeLevel with
-    | None -> raise No_match
-    | Some coercion ->
-    match availability_of_prim_token n sc scopes with
-    | None -> None
-    | Some key -> Some (insert_coercion coercion (insert_delimiters (CAst.make ?loc:(loc_of_glob_constr r) @@ CPrim n) key))
-  with No_match ->
-    None
+   let (sc,n) = uninterp_prim_token r in
+   match availability_of_entry_coercion custom InConstrEntrySomeLevel with
+   | None -> raise No_match
+   | Some coercion ->
+   match availability_of_prim_token n sc scopes with
+   | None -> raise No_match
+   | Some key -> insert_coercion coercion (insert_delimiters (CAst.make ?loc:(loc_of_glob_constr r) @@ CPrim n) key)
 
-let extern_optimal_prim_token scopes r r' =
-  let c = extern_possible_prim_token scopes r in
-  let c' = if r==r' then None else extern_possible_prim_token scopes r' in
+let extern_possible extern r =
+  try Some (extern r) with No_match -> None
+
+let extern_optimal extern r r' =
+  let c = extern_possible extern r in
+  let c' = if r==r' then None else extern_possible extern r' in
   match c,c' with
   | Some n, (Some ({ CAst.v = CDelimiters _}) | None) | _, Some n -> n
   | _ -> raise No_match
+
+(* Helper function for safe and optimal printing of primitive tokens  *)
+(* such as those for Int63                                            *)
+let extern_prim_token_delimiter_if_required n key_n scope_n scopes =
+  match availability_of_prim_token n scope_n scopes with
+  | Some None -> CPrim n
+  | None -> CDelimiters(key_n, CAst.make (CPrim n))
+  | Some (Some key) -> CDelimiters(key, CAst.make (CPrim n))
 
 (**********************************************************************)
 (* mapping decl                                                       *)
@@ -748,6 +757,7 @@ let extended_glob_local_binder_of_decl ?loc u = DAst.make ?loc (extended_glob_lo
 (* mapping glob_constr to constr_expr                                    *)
 
 let extern_glob_sort = function
+  | GSProp -> GSProp
   | GProp -> GProp
   | GSet -> GSet
   | GType _ as s when !print_universes -> s
@@ -767,12 +777,14 @@ let rec extern inctx scopes vars r =
   let r' = remove_coercions inctx r in
   try
     if !Flags.raw_print || !print_no_symbol then raise No_match;
-    extern_optimal_prim_token scopes r r'
+    extern_optimal (extern_possible_prim_token scopes) r r'
   with No_match ->
   try
     let r'' = flatten_application r' in
     if !Flags.raw_print || !print_no_symbol then raise No_match;
-    extern_notation scopes vars r'' (uninterp_notations r'')
+    extern_optimal
+      (fun r -> extern_notation scopes vars r (uninterp_notations r))
+      r r''
   with No_match ->
   let loc = r'.CAst.loc in
   match DAst.get r' with
@@ -820,7 +832,7 @@ let rec extern inctx scopes vars r =
                    ()
                  else if PrintingConstructor.active (fst cstrsp) then
                    raise Exit
-                 else if not !record_print then
+                 else if not (get_record_print ()) then
                    raise Exit;
 		 let projs = struc.Recordops.s_PROJ in
 		 let locals = struc.Recordops.s_PROJKIND in
@@ -838,10 +850,10 @@ let rec extern inctx scopes vars r =
 		     | Some c :: q ->
 		         match locs with
 			   | [] -> anomaly (Pp.str "projections corruption [Constrextern.extern].")
-			   | (_, false) :: locs' ->
+                           | { Recordops.pk_true_proj = false } :: locs' ->
 			       (* we don't want to print locals *)
 			       ip q locs' args acc
-			   | (_, true) :: locs' ->
+                           | { Recordops.pk_true_proj = true } :: locs' ->
 			       match args with
 				 | [] -> raise No_match
 				     (* we give up since the constructor is not complete *)
@@ -929,13 +941,12 @@ let rec extern inctx scopes vars r =
                  let (assums,ids,bl) = extern_local_binder scopes vars bl in
                  let vars0 = List.fold_right (Name.fold_right Id.Set.add) ids vars in
                  let vars1 = List.fold_right (Name.fold_right Id.Set.add) ids vars' in
-		 let n =
-		   match fst nv.(i) with
-		     | None -> None
-                     | Some x -> Some (CAst.make @@ Name.get_id (List.nth assums x))
-		 in
-		 let ro = extern_recursion_order scopes vars (snd nv.(i)) in
-                 ((CAst.make fi), (n, ro), bl, extern_typ scopes vars0 ty,
+                 let n =
+                   match nv.(i) with
+                   | None -> None
+                   | Some x -> Some (CAst.make @@ CStructRec (CAst.make @@ Name.get_id (List.nth assums x)))
+                             in
+                 ((CAst.make fi), n, bl, extern_typ scopes vars0 ty,
                   extern false scopes vars1 def)) idv
 	     in
              CFix (CAst.(make ?loc idv.(n)), Array.to_list listdecl)
@@ -953,11 +964,16 @@ let rec extern inctx scopes vars r =
 
   | GSort s -> CSort (extern_glob_sort s)
 
-  | GHole (e,naming,_) -> CHole (Some e, naming, None) (** TODO: extern tactics. *)
+  | GHole (e,naming,_) -> CHole (Some e, naming, None) (* TODO: extern tactics. *)
 
   | GCast (c, c') ->
       CCast (sub_extern true scopes vars c,
              map_cast_type (extern_typ scopes vars) c')
+
+  | GInt i ->
+     extern_prim_token_delimiter_if_required
+       (Numeral (SPlus, NumTok.int (Uint63.to_string i)))
+       "int63" "int63_scope" (snd scopes)
 
   in insert_coercion coercion (CAst.make ?loc c)
 
@@ -1111,7 +1127,7 @@ and extern_notation (custom,scopes as allscopes) vars t = function
                   (* Uninterpretation is not allowed in current context *)
               | None -> raise No_match
                   (* Uninterpretation is allowed in current context *)
-	      | Some (scopt,key) ->
+              | Some (scopt,key) ->
                   let scopes' = Option.List.cons scopt (snd scopes) in
 	          let l =
                     List.map (fun (c,(subentry,(scopt,scl))) ->
@@ -1132,26 +1148,22 @@ and extern_notation (custom,scopes as allscopes) vars t = function
                       binderlists in
                   insert_coercion coercion (insert_delimiters (make_notation loc ntn (l,ll,bl,bll)) key))
           | SynDefRule kn ->
+             match availability_of_entry_coercion custom InConstrEntrySomeLevel with
+             | None -> raise No_match
+             | Some coercion ->
 	      let l =
                 List.map (fun (c,(subentry,(scopt,scl))) ->
                   extern true (subentry,(scopt,scl@snd scopes)) vars c, None)
 		  terms in
-              let a = CRef (shortest_qualid_of_syndef ?loc vars kn,None) in
-	      CAst.make ?loc @@ if List.is_empty l then a else CApp ((None, CAst.make a),l) in
+              let a = CRef (Nametab.shortest_qualid_of_syndef ?loc vars kn,None) in
+              insert_coercion coercion (CAst.make ?loc @@ if List.is_empty l then a else CApp ((None, CAst.make a),l)) in
  	if List.is_empty args then e
 	else
           let args = fill_arg_scopes args argsscopes allscopes in
 	  let args = extern_args (extern true) vars args in
 	  CAst.make ?loc @@ explicitize false argsimpls (None,e) args
       with
-	  No_match -> extern_notation allscopes vars t rules
-
-and extern_recursion_order scopes vars = function
-    GStructRec -> CStructRec
-  | GWfRec c -> CWfRec (extern true scopes vars c)
-  | GMeasureRec (m,r) -> CMeasureRec (extern true scopes vars m,
-				     Option.map (extern true scopes vars) r)
-
+          No_match -> extern_notation allscopes vars t rules
 
 let extern_glob_constr vars c =
   extern false (InConstrEntrySomeLevel,(None,[])) vars c
@@ -1281,7 +1293,7 @@ let rec glob_of_pat avoid env sigma pat = DAst.make @@ match pat with
      let v = Array.map3
                (fun c t i -> Detyping.share_pattern_names glob_of_pat (i+1) [] def_avoid def_env sigma c (Patternops.lift_pattern n t))
     bl tl ln in
-     GRec(GFix (Array.map (fun i -> Some i, GStructRec) ln,i),Array.of_list (List.rev lfi),
+     GRec(GFix (Array.map (fun i -> Some i) ln,i),Array.of_list (List.rev lfi),
        Array.map (fun (bl,_,_) -> bl) v,
        Array.map (fun (_,_,ty) -> ty) v,
        Array.map (fun (_,bd,_) -> bd) v)
@@ -1300,7 +1312,11 @@ let rec glob_of_pat avoid env sigma pat = DAst.make @@ match pat with
           Array.map (fun (bl,_,_) -> bl) v,
           Array.map (fun (_,_,ty) -> ty) v,
           Array.map (fun (_,bd,_) -> bd) v)
-  | PSort s -> GSort s
+  | PSort Sorts.InSProp -> GSort GSProp
+  | PSort Sorts.InProp -> GSort GProp
+  | PSort Sorts.InSet -> GSort GSet
+  | PSort Sorts.InType -> GSort (GType [])
+  | PInt i -> GInt i
 
 let extern_constr_pattern env sigma pat =
   extern true (InConstrEntrySomeLevel,(None,[])) Id.Set.empty (glob_of_pat Id.Set.empty env sigma pat)

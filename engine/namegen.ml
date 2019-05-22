@@ -18,10 +18,10 @@ open Util
 open Names
 open Term
 open Constr
+open Context
 open Environ
 open EConstr
 open Vars
-open Nametab
 open Nameops
 open Libnames
 open Globnames
@@ -82,14 +82,14 @@ let is_imported_ref = function
 
 let is_global id =
   try
-    let ref = locate (qualid_of_ident id) in
+    let ref = Nametab.locate (qualid_of_ident id) in
     not (is_imported_ref ref)
   with Not_found ->
     false
 
 let is_constructor id =
   try
-    match locate (qualid_of_ident id) with
+    match Nametab.locate (qualid_of_ident id) with
       | ConstructRef _ -> true
       | _ -> false
   with Not_found ->
@@ -116,10 +116,10 @@ let head_name sigma c = (* Find the head constant of a constr if any *)
     | Cast (c,_,_) | App (c,_) -> hdrec c
     | Proj (kn,_) -> Some (Label.to_id (Constant.label (Projection.constant kn)))
     | Const _ | Ind _ | Construct _ | Var _ as c ->
-	Some (basename_of_global (global_of_constr c))
+        Some (Nametab.basename_of_global (global_of_constr c))
     | Fix ((_,i),(lna,_,_)) | CoFix (i,(lna,_,_)) ->
-	Some (match lna.(i) with Name id -> id | _ -> assert false)
-    | Sort _ | Rel _ | Meta _|Evar _|Case (_, _, _, _) -> None
+        Some (match lna.(i).binder_name with Name id -> id | _ -> assert false)
+    | Sort _ | Rel _ | Meta _|Evar _|Case (_, _, _, _) | Int _ -> None
   in
   hdrec c
 
@@ -137,6 +137,7 @@ let lowercase_first_char id = (* First character of a constr *)
         s ^ Unicode.lowercase_first_char s'
 
 let sort_hdchar = function
+  | SProp -> "P"
   | Prop -> "P"
   | Set -> "S"
   | Type _ -> "T"
@@ -148,22 +149,23 @@ let hdchar env sigma c =
     | Cast (c,_,_) | App (c,_) -> hdrec k c
     | Proj (kn,_) -> lowercase_first_char (Label.to_id (Constant.label (Projection.constant kn)))
     | Const (kn,_) -> lowercase_first_char (Label.to_id (Constant.label kn))
-    | Ind (x,_) -> (try lowercase_first_char (basename_of_global (IndRef x)) with Not_found when !Flags.in_debugger -> "zz")
-    | Construct (x,_) -> (try lowercase_first_char (basename_of_global (ConstructRef x)) with Not_found when !Flags.in_debugger -> "zz")
+    | Ind (x,_) -> (try lowercase_first_char (Nametab.basename_of_global (IndRef x)) with Not_found when !Flags.in_debugger -> "zz")
+    | Construct (x,_) -> (try lowercase_first_char (Nametab.basename_of_global (ConstructRef x)) with Not_found when !Flags.in_debugger -> "zz")
     | Var id  -> lowercase_first_char id
     | Sort s -> sort_hdchar (ESorts.kind sigma s)
     | Rel n ->
 	(if n<=k then "p" (* the initial term is flexible product/function *)
 	 else
-	   try match lookup_rel (n-k) env with
-	     | LocalAssum (Name id,_)   | LocalDef (Name id,_,_) -> lowercase_first_char id
-	     | LocalAssum (Anonymous,t) | LocalDef (Anonymous,_,t) -> hdrec 0 (lift (n-k) t)
+           try match let d = lookup_rel (n-k) env in get_name d, get_type d with
+             | Name id, _ -> lowercase_first_char id
+             | Anonymous, t -> hdrec 0 (lift (n-k) t)
 	   with Not_found -> "y")
     | Fix ((_,i),(lna,_,_)) | CoFix (i,(lna,_,_)) ->
-	let id = match lna.(i) with Name id -> id | _ -> assert false in
+        let id = match lna.(i).binder_name with Name id -> id | _ -> assert false in
 	lowercase_first_char id
     | Evar _ (* We could do better... *)
     | Meta _ | Case (_, _, _, _) -> "y"
+    | Int _ -> "i"
   in
   hdrec 0 c
 
@@ -175,18 +177,20 @@ let named_hd env sigma a = function
   | Anonymous -> Name (Id.of_string (hdchar env sigma a))
   | x         -> x
 
-let mkProd_name   env sigma (n,a,b) = mkProd (named_hd env sigma a n, a, b)
-let mkLambda_name env sigma (n,a,b) = mkLambda (named_hd env sigma a n, a, b)
+let mkProd_name   env sigma (n,a,b) = mkProd (map_annot (named_hd env sigma a) n, a, b)
+let mkLambda_name env sigma (n,a,b) = mkLambda (map_annot (named_hd env sigma a) n, a, b)
 
 let lambda_name = mkLambda_name
 let prod_name = mkProd_name
 
-let prod_create   env sigma (a,b) = mkProd (named_hd env sigma a Anonymous, a, b)
-let lambda_create env sigma (a,b) =  mkLambda (named_hd env sigma a Anonymous, a, b)
+let prod_create   env sigma (r,a,b) =
+  mkProd (make_annot (named_hd env sigma a Anonymous) r, a, b)
+let lambda_create env sigma (r,a,b) =
+  mkLambda (make_annot (named_hd env sigma a Anonymous) r, a, b)
 
 let name_assumption env sigma = function
-    | LocalAssum (na,t) -> LocalAssum (named_hd env sigma t na, t)
-    | LocalDef (na,c,t) -> LocalDef (named_hd env sigma c na, c, t)
+    | LocalAssum (na,t) -> LocalAssum (map_annot (named_hd env sigma t) na, t)
+    | LocalDef (na,c,t) -> LocalDef (map_annot (named_hd env sigma c) na, c, t)
 
 let name_context env sigma hyps =
   snd
@@ -209,25 +213,18 @@ let it_mkLambda_or_LetIn_name env sigma b hyps =
 (* Introduce a mode where auto-generated names are mangled
    to test dependence of scripts on auto-generated names *)
 
-let mangle_names = ref false
-
-let _ = Goptions.(
-    declare_bool_option
-      { optdepr  = false;
-        optname  = "mangle auto-generated names";
-        optkey   = ["Mangle";"Names"];
-        optread  = (fun () -> !mangle_names);
-        optwrite = (:=) mangle_names; })
+let get_mangle_names =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"mangle auto-generated names"
+    ~key:["Mangle";"Names"]
+    ~value:false
 
 let mangle_names_prefix = ref (Id.of_string "_0")
+
 let set_prefix x = mangle_names_prefix := forget_subscript x
 
-let set_mangle_names_mode x = begin
-    set_prefix x;
-    mangle_names := true
-  end
-
-let _ = Goptions.(
+let () = Goptions.(
     declare_string_option
       { optdepr  = false;
         optname  = "mangled names prefix";
@@ -239,7 +236,7 @@ let _ = Goptions.(
                       with CErrors.UserError _ -> CErrors.user_err Pp.(str ("Not a valid identifier: \"" ^ x ^ "\".")))
                    end })
 
-let mangle_id id = if !mangle_names then !mangle_names_prefix else id
+let mangle_id id = if get_mangle_names () then !mangle_names_prefix else id
 
 (* Looks for next "good" name by lifting subscript *)
 
@@ -267,7 +264,7 @@ let visible_ids sigma (nenv, c) =
       begin
       try
       let gseen = GlobRef.Set_env.add g gseen in
-      let short = shortest_qualid_of_global Id.Set.empty g in
+      let short = Nametab.shortest_qualid_of_global Id.Set.empty g in
       let dir, id = repr_qualid short in
       let ids = if DirPath.is_empty dir then Id.Set.add id ids else ids in
       accu := (gseen, vseen, ids)
@@ -336,7 +333,7 @@ let next_name_away_in_goal na avoid =
 
 let next_global_ident_away id avoid =
   let id = if Id.Set.mem id avoid then restart_subscript id else id in
-  let bad id = Id.Set.mem id avoid || is_global id in
+  let bad id = Id.Set.mem id avoid || Global.exists_objlabel (Label.of_id id) in
   next_ident_away_from id bad
 
 (* 4- Looks for next fresh name outside a list; if name already used,
@@ -366,7 +363,7 @@ let next_name_away_with_default_using_types default na avoid t =
 let next_name_away = next_name_away_with_default default_non_dependent_string
 
 let make_all_name_different env sigma =
-  (** FIXME: this is inefficient, but only used in printing *)
+  (* FIXME: this is inefficient, but only used in printing *)
   let avoid = ref (ids_of_named_context_val (named_context_val env)) in
   let sign = named_context_val env in
   let rels = rel_context env in
@@ -463,13 +460,13 @@ let rename_bound_vars_as_displayed sigma avoid env c =
     | Prod (na,c1,c2)  ->
 	let na',avoid' =
           compute_displayed_name_in sigma
-            (RenamingElsewhereFor (env,c2)) avoid na c2 in
-	mkProd (na', c1, rename avoid' (na' :: env) c2)
+            (RenamingElsewhereFor (env,c2)) avoid na.binder_name c2 in
+        mkProd ({na with binder_name=na'}, c1, rename avoid' (na' :: env) c2)
     | LetIn (na,c1,t,c2) ->
 	let na',avoid' =
           compute_displayed_let_name_in sigma
-            (RenamingElsewhereFor (env,c2)) avoid na c2 in
-	mkLetIn (na',c1,t, rename avoid' (na' :: env) c2)
+            (RenamingElsewhereFor (env,c2)) avoid na.binder_name c2 in
+        mkLetIn ({na with binder_name=na'},c1,t, rename avoid' (na' :: env) c2)
     | Cast (c,k,t) -> mkCast (rename avoid env c, k,t)
     | _ -> c
   in

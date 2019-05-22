@@ -149,14 +149,14 @@ sig
   val is_empty : t -> bool
   (** Test whether a directory path is empty. *)
 
-  val to_string : t -> string
-  (** Print directory paths as ["coq_root.module.submodule"] *)
-
   val initial : t
   (** Initial "seed" of the unique identifier generator *)
 
   val hcons : t -> t
   (** Hashconsing of directory paths. *)
+
+  val to_string : t -> string
+  (** Print non-empty directory paths as ["coq_root.module.submodule"] *)
 
   val print : t -> Pp.t
 end
@@ -180,14 +180,14 @@ sig
   val make : string -> t
   (** Create a label out of a string. *)
 
-  val to_string : t -> string
-  (** Conversion to string. *)
-
   val of_id : Id.t -> t
   (** Conversion from an identifier. *)
 
   val to_id : t -> Id.t
   (** Conversion to an identifier. *)
+
+  val to_string : t -> string
+  (** Conversion to string. *)
 
   val print : t -> Pp.t
   (** Pretty-printer. *)
@@ -227,10 +227,10 @@ sig
   (** Return the identifier contained in the argument. *)
 
   val to_string : t -> string
-  (** Conversion to a string. *)
+  (** Encode as a string (not to be used for user-facing messages). *)
 
   val debug_to_string : t -> string
-  (** Same as [to_string], but outputs information related to debug. *)
+  (** Same as [to_string], but outputs extra information related to debug. *)
 
 end
 
@@ -252,15 +252,16 @@ sig
 
   val is_bound : t -> bool
 
-  val to_string : t -> string
-
-  val debug_to_string : t -> string
-  (** Same as [to_string], but outputs information related to debug. *)
-
   val initial : t
   (** Name of the toplevel structure ([= MPfile initial_dir]) *)
 
   val dp : t -> DirPath.t
+
+  val to_string : t -> string
+  (** Encode as a string (not to be used for user-facing messages). *)
+
+  val debug_to_string : t -> string
+  (** Same as [to_string], but outputs extra information related to debug. *)
 
 end
 
@@ -277,20 +278,21 @@ sig
   val make : ModPath.t -> Label.t -> t
   val repr : t -> ModPath.t * Label.t
 
-  val make2 : ModPath.t -> Label.t -> t
-  [@@ocaml.deprecated "Please use [KerName.make]"]
-
   (** Projections *)
   val modpath : t -> ModPath.t
   val label : t -> Label.t
 
-  (** Display *)
   val to_string : t -> string
-
-  val debug_to_string : t -> string
-  (** Same as [to_string], but outputs information related to debug. *)
+  (** Encode as a string (not to be used for user-facing messages). *)
 
   val print : t -> Pp.t
+  (** Print internal representation (not to be used for user-facing messages). *)
+
+  val debug_to_string : t -> string
+  (** Same as [to_string], but outputs extra information related to debug. *)
+
+  val debug_print : t -> Pp.t
+  (** Same as [print], but outputs extra information related to debug. *)
 
   (** Comparisons *)
   val compare : t -> t -> int
@@ -365,9 +367,16 @@ sig
   (** Displaying *)
 
   val to_string : t -> string
+  (** Encode as a string (not to be used for user-facing messages). *)
+
   val print : t -> Pp.t
+  (** Print internal representation (not to be used for user-facing messages). *)
+
   val debug_to_string : t -> string
+  (** Same as [to_string], but outputs extra information related to debug. *)
+
   val debug_print : t -> Pp.t
+  (** Same as [print], but outputs extra information related to debug. *)
 
 end
 
@@ -444,9 +453,16 @@ sig
   (** Displaying *)
 
   val to_string : t -> string
+  (** Encode as a string (not to be used for user-facing messages). *)
+
   val print : t -> Pp.t
+  (** Print internal representation (not to be used for user-facing messages). *)
+
   val debug_to_string : t -> string
+  (** Same as [to_string], but outputs extra information related to debug. *)
+
   val debug_print : t -> Pp.t
+  (** Same as [print], but outputs extra information related to debug. *)
 
 end
 
@@ -510,14 +526,6 @@ type 'a tableKey =
   | VarKey of Id.t
   | RelKey of Int.t
 
-(** Sets of names *)
-type transparent_state = Id.Pred.t * Cpred.t
-
-val empty_transparent_state : transparent_state
-val full_transparent_state : transparent_state
-val var_full_transparent_state : transparent_state
-val cst_full_transparent_state : transparent_state
-
 type inv_rel_key = int (** index in the [rel_context] part of environment
 			  starting by the end, {e inverse}
 			  of de Bruijn indice *)
@@ -575,8 +583,12 @@ module Projection : sig
     val map : (MutInd.t -> MutInd.t) -> t -> t
     val map_npars : (MutInd.t -> int -> MutInd.t * int) -> t -> t
 
-    val print : t -> Pp.t
     val to_string : t -> string
+    (** Encode as a string (not to be used for user-facing messages). *)
+
+    val print : t -> Pp.t
+    (** Print internal representation (not to be used for user-facing messages). *)
+
   end
   type t (* = Repr.t * bool *)
 
@@ -608,13 +620,19 @@ module Projection : sig
   val hcons : t -> t
   (** Hashconsing of projections. *)
 
+  val repr_equal : t -> t -> bool
+  (** Ignoring the unfolding boolean. *)
+
   val compare : t -> t -> int
 
   val map : (MutInd.t -> MutInd.t) -> t -> t
   val map_npars : (MutInd.t -> int -> MutInd.t * int) -> t -> t
 
   val to_string : t -> string
+  (** Encode as a string (not to be used for user-facing messages). *)
+
   val print : t -> Pp.t
+  (** Print internal representation (not to be used for user-facing messages). *)
 
 end
 

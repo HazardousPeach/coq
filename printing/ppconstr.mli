@@ -21,11 +21,6 @@ val prec_less : precedence -> tolerability -> bool
 
 val pr_tight_coma : unit -> Pp.t
 
-val pr_or_var : ('a -> Pp.t) -> 'a Locus.or_var -> Pp.t
-
-val pr_lident : lident -> Pp.t
-val pr_lname : lname -> Pp.t
-
 val pr_with_comments : ?loc:Loc.t -> Pp.t -> Pp.t
 val pr_com_at : int -> Pp.t
 val pr_sep_com :
@@ -40,25 +35,26 @@ val pr_patvar : Pattern.patvar -> Pp.t
 
 val pr_glob_level : Glob_term.glob_level -> Pp.t
 val pr_glob_sort : Glob_term.glob_sort -> Pp.t
-val pr_guard_annot : (constr_expr -> Pp.t) ->
-  local_binder_expr list ->
-  lident option * recursion_order_expr ->
-  Pp.t
+val pr_guard_annot
+  :  (constr_expr -> Pp.t)
+  -> local_binder_expr list
+  -> recursion_order_expr option
+  -> Pp.t
 
 val pr_record_body : (qualid * constr_expr) list -> Pp.t
-val pr_binders : local_binder_expr list -> Pp.t
-val pr_constr_pattern_expr : constr_pattern_expr -> Pp.t
-val pr_lconstr_pattern_expr : constr_pattern_expr -> Pp.t
-val pr_constr_expr : constr_expr -> Pp.t
-val pr_lconstr_expr : constr_expr -> Pp.t
+val pr_binders : Environ.env -> Evd.evar_map -> local_binder_expr list -> Pp.t
+val pr_constr_pattern_expr : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t
+val pr_lconstr_pattern_expr : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t
+val pr_constr_expr : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t
+val pr_lconstr_expr : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t
 val pr_cases_pattern_expr : cases_pattern_expr -> Pp.t
-val pr_constr_expr_n : tolerability -> constr_expr -> Pp.t
+val pr_constr_expr_n : Environ.env -> Evd.evar_map -> tolerability -> constr_expr -> Pp.t
 
 type term_pr = {
-  pr_constr_expr   : constr_expr -> Pp.t;
-  pr_lconstr_expr  : constr_expr -> Pp.t;
-  pr_constr_pattern_expr  : constr_pattern_expr -> Pp.t;
-  pr_lconstr_pattern_expr : constr_pattern_expr -> Pp.t
+  pr_constr_expr : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t;
+  pr_lconstr_expr : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t;
+  pr_constr_pattern_expr : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t;
+  pr_lconstr_pattern_expr : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t
 }
 
 val set_term_pr : term_pr -> unit

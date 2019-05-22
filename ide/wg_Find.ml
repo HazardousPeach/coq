@@ -14,10 +14,10 @@ class finder name (view : GText.view) =
   
   let widget = Wg_Detachable.detachable
     ~title:(Printf.sprintf "Find & Replace (%s)" name) () in 
-  let replace_box = GPack.table ~columns:4 ~rows:2 ~homogeneous:false
+  let replace_box = GPack.grid (* ~columns:4 ~rows:2 *) ~col_homogeneous:false ~row_homogeneous:false
     ~packing:widget#add () in
   let hb = GPack.hbox ~packing:(replace_box#attach
-      ~left:1 ~top:0 ~expand:`X ~fill:`X) () in
+      ~left:1 ~top:0 (*~expand:`X ~fill:`X*)) () in
   let use_regex =
     GButton.check_button ~label:"Regular expression"
       ~packing:(hb#pack ~expand:false ~fill:true ~padding:3) () in
@@ -26,25 +26,25 @@ class finder name (view : GText.view) =
       ~packing:(hb#pack ~expand:false ~fill:true ~padding:3) () in
   let _ = GMisc.label ~text:"Find:" ~xalign:1.0
     ~packing:(replace_box#attach
-      ~xpadding:3 ~ypadding:3 ~left:0 ~top:1 ~fill:`X) () in
+     (*~xpadding:3 ~ypadding:3*) ~left:0 ~top:1 (*~fill:`X*)) () in
   let _ = GMisc.label ~text:"Replace:" ~xalign:1.0
     ~packing:(replace_box#attach
-      ~xpadding:3 ~ypadding:3 ~left:0 ~top:2 ~fill:`X) () in
+     (* ~xpadding:3 ~ypadding:3*) ~left:0 ~top:2 (*~fill:`X*)) () in
   let find_entry = GEdit.entry ~editable:true
     ~packing:(replace_box#attach
-      ~xpadding:3 ~ypadding:3 ~left:1 ~top:1 ~expand:`X ~fill:`X) () in
+      (*~xpadding:3 ~ypadding:3*) ~left:1 ~top:1 (*~expand:`X ~fill:`X*)) () in
   let replace_entry = GEdit.entry ~editable:true
     ~packing:(replace_box#attach
-      ~xpadding:3 ~ypadding:3 ~left:1 ~top:2 ~expand:`X ~fill:`X) () in
+      (*~xpadding:3 ~ypadding:3*) ~left:1 ~top:2 (*~expand:`X ~fill:`X*)) () in
   let next_button = GButton.button ~label:"_Next" ~use_mnemonic:true
-    ~packing:(replace_box#attach ~xpadding:3 ~ypadding:3 ~left:2 ~top:1) () in
+    ~packing:(replace_box#attach (*~xpadding:3 ~ypadding:3*) ~left:2 ~top:1) () in
   let previous_button = GButton.button ~label:"_Previous" ~use_mnemonic:true
-    ~packing:(replace_box#attach ~xpadding:3 ~ypadding:3 ~left:3 ~top:1) () in
+    ~packing:(replace_box#attach (*~xpadding:3 ~ypadding:3*) ~left:3 ~top:1) () in
   let replace_button = GButton.button ~label:"_Replace" ~use_mnemonic:true
-    ~packing:(replace_box#attach ~xpadding:3 ~ypadding:3 ~left:2 ~top:2) () in
+    ~packing:(replace_box#attach (*~xpadding:3 ~ypadding:3*) ~left:2 ~top:2) () in
   let replace_all_button =
     GButton.button ~label:"Replace _All" ~use_mnemonic:true
-      ~packing:(replace_box#attach ~xpadding:3 ~ypadding:3 ~left:3 ~top:2) () in
+      ~packing:(replace_box#attach (*~xpadding:3 ~ypadding:3*) ~left:3 ~top:2) () in
 
   object (self)
     val mutable last_found = None
@@ -135,13 +135,13 @@ class finder name (view : GText.view) =
       view#buffer#end_user_action ()
 
     method private set_not_found () =
-      find_entry#misc#modify_base [`NORMAL, `NAME "#F7E6E6"];
+      find_entry#misc#modify_bg [`NORMAL, `NAME "#F7E6E6"];
 
     method private set_found () =
-      find_entry#misc#modify_base [`NORMAL, `NAME "#BAF9CE"]
+      find_entry#misc#modify_bg [`NORMAL, `NAME "#BAF9CE"]
 
     method private set_normal () =
-      find_entry#misc#modify_base [`NORMAL, `NAME "white"]
+      find_entry#misc#modify_bg [`NORMAL, `NAME "white"]
 
     method private find_from backward ?(wrapped=false) (starti : GText.iter) =
       let found =
@@ -212,13 +212,13 @@ class finder name (view : GText.view) =
     initializer
       let _ = self#hide () in
 
-      (** Widget button interaction *)
+      (* Widget button interaction *)
       let _ = next_button#connect#clicked ~callback:self#find_forward in
       let _ = previous_button#connect#clicked ~callback:self#find_backward in
       let _ = replace_button#connect#clicked ~callback:self#replace in
       let _ = replace_all_button#connect#clicked ~callback:self#replace_all in
 
-      (** Keypress interaction *)
+      (* Keypress interaction *)
       let generic_cb esc_cb ret_cb ev =
         let ev_key = GdkEvent.Key.keyval ev in
         let (return, _) = GtkData.AccelGroup.parse "Return" in
@@ -232,7 +232,7 @@ class finder name (view : GText.view) =
       let _ = find_entry#event#connect#key_press ~callback:find_cb in
       let _ = replace_entry#event#connect#key_press ~callback:replace_cb in
 
-      (** TextView interaction *)
+      (* TextView interaction *)
       let view_cb ev =
         if widget#visible then
           let ev_key = GdkEvent.Key.keyval ev in

@@ -21,18 +21,15 @@
 # Once the build is finished, you will find, in the current directory,
 # a symlink to where Coq was installed.
 
-{ pkgs ?
-    (import (fetchTarball {
-      url = "https://github.com/NixOS/nixpkgs/archive/4c95508641fe780efe41885366e03339b95d04fb.tar.gz";
-      sha256 = "1wjspwhzdb6d1kz4khd9l0fivxdk2nq3qvj93pql235sb7909ygx";
-    }) {})
-, ocamlPackages ? pkgs.ocaml-ng.ocamlPackages_4_06
+{ pkgs ? import ./dev/nixpkgs.nix {}
+, ocamlPackages ? pkgs.ocamlPackages
 , buildIde ? true
 , buildDoc ? true
 , doInstallCheck ? true
 , shell ? false
   # We don't use lib.inNixShell because that would also apply
   # when in a nix-shell of some package depending on this one.
+, coq-version ? "8.10-git"
 }:
 
 with pkgs;
@@ -47,8 +44,11 @@ stdenv.mkDerivation rec {
     python2 time # coq-makefile timing tools
     dune
   ]
-  ++ (with ocamlPackages; [ ocaml findlib camlp5_strict num ])
-  ++ optional buildIde ocamlPackages.lablgtk
+  ++ (with ocamlPackages; [ ocaml findlib num ])
+  ++ optionals buildIde [
+    ocamlPackages.lablgtk3-sourceview3
+    glib gnome3.defaultIconTheme wrapGAppsHook
+  ]
   ++ optionals buildDoc [
     # Sphinx doc dependencies
     pkgconfig (python3.withPackages
@@ -66,6 +66,7 @@ stdenv.mkDerivation rec {
   ++ optionals shell (
     [ jq curl gitFull gnupg ] # Dependencies of the merging script
     ++ (with ocamlPackages; [ merlin ocp-indent ocp-index utop ]) # Dev tools
+    ++ [ graphviz ] # Useful for STM debugging
   );
 
   src =
@@ -73,14 +74,15 @@ stdenv.mkDerivation rec {
     else
       with builtins; filterSource
         (path: _:
-           !elem (baseNameOf path) [".git" "result" "bin" "_build" "_build_ci"]) ./.;
+           !elem (baseNameOf path) [".git" "result" "bin" "_build" "_build_ci" "nix"]) ./.;
 
   preConfigure = ''
-    patchShebangs kernel/
     patchShebangs dev/tools/
   '';
 
   prefixKey = "-prefix ";
+
+  enableParallelBuilding = true;
 
   buildFlags = [ "world" "byte" ] ++ optional buildDoc "doc-html";
 
@@ -101,7 +103,20 @@ stdenv.mkDerivation rec {
 
   installCheckTarget = [ "check" ];
 
-  passthru = { inherit ocamlPackages; };
+  passthru = {
+    inherit coq-version ocamlPackages;
+    dontFilter = true; # Useful to use mkCoqPackages from <nixpkgs>
+  };
+
+  setupHook = writeText "setupHook.sh" "
+    addCoqPath () {
+      if test -d \"$1/lib/coq/${coq-version}/user-contrib\"; then
+        export COQPATH=\"$COQPATH\${COQPATH:+:}$1/lib/coq/${coq-version}/user-contrib/\"
+      fi
+    }
+
+    addEnvHooks \"$targetOffset\" addCoqPath
+  ";
 
   meta = {
     description = "Coq proof assistant";
@@ -113,6 +128,7 @@ stdenv.mkDerivation rec {
     '';
     homepage = http://coq.inria.fr;
     license = licenses.lgpl21;
+    platforms = platforms.unix;
   };
 
 }

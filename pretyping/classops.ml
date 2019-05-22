@@ -15,8 +15,6 @@ open Names
 open Constr
 open Libnames
 open Globnames
-open Nametab
-open Libobject
 open Mod_subst
 
 (* usage qque peu general: utilise aussi dans record *)
@@ -121,9 +119,6 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
-let coercions_in_scope =
-  Summary.ref ~name:"coercions_in_scope" GlobRef.Set_env.empty
-
 module ClPairOrd =
 struct
   type t = cl_index * cl_index
@@ -180,7 +175,7 @@ let find_class_type sigma t =
     | Proj (p, c) when not (Projection.unfolded p) ->
       CL_PROJ (Projection.repr p), EInstance.empty, (c :: args)
     | Ind (ind_sp,u) -> CL_IND ind_sp, u, args
-    | Prod (_,_,_) -> CL_FUN, EInstance.empty, []
+    | Prod _ -> CL_FUN, EInstance.empty, []
     | Sort _ -> CL_SORT, EInstance.empty, []
     |  _ -> raise Not_found
 
@@ -193,9 +188,11 @@ let subst_cl_typ subst ct = match ct with
     let c' = subst_proj_repr subst c in
       if c' == c then ct else CL_PROJ c'
   | CL_CONST c ->
-      let c',t = subst_con_kn subst c in
-	if c' == c then ct else
-         pi1 (find_class_type Evd.empty (EConstr.of_constr t))
+      let c',t = subst_con subst c in
+      if c' == c then ct else (match t with
+          | None -> CL_CONST c'
+          | Some t ->
+            pi1 (find_class_type Evd.empty (EConstr.of_constr t.Univ.univ_abstracted_value)))
   | CL_IND i ->
       let i' = subst_ind subst i in
 	if i' == i then ct else CL_IND i'
@@ -228,14 +225,14 @@ let string_of_class = function
   | CL_FUN -> "Funclass"
   | CL_SORT -> "Sortclass"
   | CL_CONST sp ->
-    string_of_qualid (shortest_qualid_of_global Id.Set.empty (ConstRef sp))
+    string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty (ConstRef sp))
   | CL_PROJ sp ->
     let sp = Projection.Repr.constant sp in
-    string_of_qualid (shortest_qualid_of_global Id.Set.empty (ConstRef sp))
+    string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty (ConstRef sp))
   | CL_IND sp ->
-      string_of_qualid (shortest_qualid_of_global Id.Set.empty (IndRef sp))
+      string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty (IndRef sp))
   | CL_SECVAR sp ->
-      string_of_qualid (shortest_qualid_of_global Id.Set.empty (VarRef sp))
+      string_of_qualid (Nametab.shortest_qualid_of_global Id.Set.empty (VarRef sp))
 
 let pr_class x = str (string_of_class x)
 
@@ -290,7 +287,7 @@ let get_coercion_constructor env coe =
   let red x = fst (Reductionops.whd_all_stack env evd x) in
   match EConstr.kind evd (red (mkNamed coe.coe_value)) with
   | Constr.Construct (c, _) ->
-      c, Inductiveops.constructor_nrealargs c -1
+      c, Inductiveops.constructor_nrealargs env c -1
   | _ -> raise Not_found
 
 let lookup_pattern_path_between env (s,t) =
@@ -307,42 +304,43 @@ let install_path_printer f = path_printer := f
 
 let print_path x = !path_printer x
 
-let message_ambig l =
-  str"Ambiguous paths:" ++ spc () ++
-  prlist_with_sep fnl print_path l
+let path_comparator : (Environ.env -> Evd.evar_map -> inheritance_path -> inheritance_path -> bool) ref =
+  ref (fun _ _ _ _ -> false)
+
+let install_path_comparator f = path_comparator := f
+
+let compare_path p q = !path_comparator p q
+
+let warn_ambiguous_path =
+  CWarnings.create ~name:"ambiguous-paths" ~category:"typechecker"
+    (fun l -> strbrk"Ambiguous paths: " ++ prlist_with_sep fnl print_path l)
 
 (* add_coercion_in_graph : coe_index * cl_index * cl_index -> unit
                          coercion,source,target *)
 
-let different_class_params i =
+let different_class_params env i =
   let ci = class_info_from_index i in
     if (snd ci).cl_param > 0 then true
     else 
       match fst ci with
-      | CL_IND i -> Global.is_polymorphic (IndRef i)
-      | CL_CONST c -> Global.is_polymorphic (ConstRef c)
+      | CL_IND i -> Environ.is_polymorphic env (IndRef i)
+      | CL_CONST c -> Environ.is_polymorphic env (ConstRef c)
       | _ -> false
 
-let add_coercion_in_graph (ic,source,target) =
+let add_coercion_in_graph env sigma (ic,source,target) =
   let old_inheritance_graph = !inheritance_graph in
   let ambig_paths =
     (ref [] : ((cl_index * cl_index) * inheritance_path) list ref) in
   let try_add_new_path (i,j as ij) p =
-    try
-      if Bijint.Index.equal i j then begin
-	if different_class_params i then begin
-	  let _ = lookup_path_between_class ij in
-          ambig_paths := (ij,p)::!ambig_paths
-	end
-      end else begin
-        let _ = lookup_path_between_class ij in
-        ambig_paths := (ij,p)::!ambig_paths
-      end;
+    if not (Bijint.Index.equal i j) || different_class_params env i then
+      match lookup_path_between_class ij with
+      | q ->
+        if not (compare_path env sigma p q) then
+          ambig_paths := (ij,p)::!ambig_paths;
+        false
+      | exception Not_found -> (add_new_path ij p; true)
+    else
       false
-    with Not_found -> begin
-      add_new_path ij p;
-      true
-    end
   in
   let try_add_new_path1 ij p =
     let _ = try_add_new_path ij p in ()
@@ -363,9 +361,7 @@ let add_coercion_in_graph (ic,source,target) =
 	 end)
       old_inheritance_graph
   end;
-  let is_ambig = match !ambig_paths with [] -> false | _ -> true in
-  if is_ambig && not !Flags.quiet then
-    Feedback.msg_info (message_ambig !ambig_paths)
+  match !ambig_paths with [] -> () | _ -> warn_ambiguous_path !ambig_paths
 
 type coercion = {
   coercion_type   : coe_typ;
@@ -377,70 +373,7 @@ type coercion = {
   coercion_params : int;
 }
 
-(* Computation of the class arity *)
-
-let reference_arity_length ref =
-  let t, _ = Global.type_of_global_in_context (Global.env ()) ref in
-  List.length (fst (Reductionops.splay_arity (Global.env()) Evd.empty (EConstr.of_constr t))) (** FIXME *)
-
-let projection_arity_length p =
-  let len = reference_arity_length (ConstRef (Projection.Repr.constant p)) in
-  len - Projection.Repr.npars p
-
-let class_params = function
-  | CL_FUN | CL_SORT -> 0
-  | CL_CONST sp -> reference_arity_length (ConstRef sp)
-  | CL_PROJ sp -> projection_arity_length sp
-  | CL_SECVAR sp -> reference_arity_length (VarRef sp)
-  | CL_IND sp  -> reference_arity_length (IndRef sp)
-
-(* add_class : cl_typ -> locality_flag option -> bool -> unit *)
-
-let add_class cl =
-  add_new_class cl { cl_param = class_params cl }
-
-let automatically_import_coercions = ref false
-
-open Goptions
-let _ =
-  declare_bool_option
-    { optdepr  = true; (* remove in 8.8 *)
-      optname  = "automatic import of coercions";
-      optkey   = ["Automatic";"Coercions";"Import"];
-      optread  = (fun () -> !automatically_import_coercions);
-      optwrite = (:=) automatically_import_coercions }
-
-let cache_coercion (_, c) =
-  let () = add_class c.coercion_source in
-  let () = add_class c.coercion_target in
-  let is, _ = class_info c.coercion_source in
-  let it, _ = class_info c.coercion_target in
-  let xf =
-    { coe_value = c.coercion_type;
-      coe_local = c.coercion_local;
-      coe_is_identity = c.coercion_is_id;
-      coe_is_projection = c.coercion_is_proj;
-      coe_param = c.coercion_params;
-    } in
-  let () = add_new_coercion c.coercion_type xf in
-  add_coercion_in_graph (xf,is,it)
-
-let load_coercion _ o =
-  if !automatically_import_coercions then
-    cache_coercion o
-
-let set_coercion_in_scope (_, c) =
-  let r = c.coercion_type in
-  coercions_in_scope := GlobRef.Set_env.add r !coercions_in_scope
-
-let open_coercion i o =
-  if Int.equal i 1 then begin
-    set_coercion_in_scope o;
-    if not !automatically_import_coercions then
-      cache_coercion o
-  end
-
-let subst_coercion (subst, c) =
+let subst_coercion subst c =
   let coe = subst_coe_typ subst c.coercion_type in
   let cls = subst_cl_typ subst c.coercion_source in
   let clt = subst_cl_typ subst c.coercion_target in
@@ -451,51 +384,42 @@ let subst_coercion (subst, c) =
   else { c with coercion_type = coe; coercion_source = cls;
                 coercion_target = clt; coercion_is_proj = clp; }
 
-let discharge_coercion (_, c) =
-  if c.coercion_local then None
-  else
-    let n =
-      try
-        let ins = Lib.section_instance c.coercion_type in
-        Array.length (snd ins)
-      with Not_found -> 0
-    in
-    let nc = { c with
-      coercion_params = n + c.coercion_params;
-      coercion_is_proj = Option.map Lib.discharge_proj_repr c.coercion_is_proj;
+(* Computation of the class arity *)
+
+let reference_arity_length env sigma ref =
+  let t, _ = Typeops.type_of_global_in_context env ref in
+  List.length (fst (Reductionops.splay_arity env sigma (EConstr.of_constr t)))
+
+let projection_arity_length env sigma p =
+  let len = reference_arity_length env sigma (ConstRef (Projection.Repr.constant p)) in
+  len - Projection.Repr.npars p
+
+let class_params env sigma = function
+  | CL_FUN | CL_SORT -> 0
+  | CL_CONST sp -> reference_arity_length env sigma (ConstRef sp)
+  | CL_PROJ sp -> projection_arity_length env sigma sp
+  | CL_SECVAR sp -> reference_arity_length env sigma (VarRef sp)
+  | CL_IND sp  -> reference_arity_length env sigma (IndRef sp)
+
+(* add_class : cl_typ -> locality_flag option -> bool -> unit *)
+
+let add_class env sigma cl =
+  add_new_class cl { cl_param = class_params env sigma cl }
+
+let declare_coercion env sigma c =
+  let () = add_class env sigma c.coercion_source in
+  let () = add_class env sigma c.coercion_target in
+  let is, _ = class_info c.coercion_source in
+  let it, _ = class_info c.coercion_target in
+  let xf =
+    { coe_value = c.coercion_type;
+      coe_local = c.coercion_local;
+      coe_is_identity = c.coercion_is_id;
+      coe_is_projection = c.coercion_is_proj;
+      coe_param = c.coercion_params;
     } in
-    Some nc
-
-let classify_coercion obj =
-  if obj.coercion_local then Dispose else Substitute obj
-
-let inCoercion : coercion -> obj =
-  declare_object {(default_object "COERCION") with
-    open_function = open_coercion;
-    load_function = load_coercion;
-    cache_function = (fun objn ->
-        set_coercion_in_scope objn;
-        cache_coercion objn);
-    subst_function = subst_coercion;
-    classify_function = classify_coercion;
-    discharge_function = discharge_coercion }
-
-let declare_coercion coef ?(local = false) ~isid ~src:cls ~target:clt ~params:ps =
-  let isproj = 
-    match coef with
-    | ConstRef c -> Recordops.find_primitive_projection c
-    | _ -> None
-  in
-  let c = {
-    coercion_type = coef;
-    coercion_local = local;
-    coercion_is_id = isid;
-    coercion_is_proj = isproj;
-    coercion_source = cls;
-    coercion_target = clt;
-    coercion_params = ps;
-  } in
-  Lib.add_anonymous_leaf (inCoercion c)
+  let () = add_new_coercion c.coercion_type xf in
+  add_coercion_in_graph env sigma (xf,is,it)
 
 (* For printing purpose *)
 let pr_cl_index = Bijint.Index.print
@@ -518,9 +442,9 @@ module CoercionPrinting =
   struct
     type t = coe_typ
     let compare = GlobRef.Ordered.compare
-    let encode = coercion_of_reference
+    let encode _env = coercion_of_reference
     let subst = subst_coe_typ
-    let printer x = pr_global_env Id.Set.empty x
+    let printer x = Nametab.pr_global_env Id.Set.empty x
     let key = ["Printing";"Coercion"]
     let title = "Explicitly printed coercions: "
     let member_message x b =
@@ -535,6 +459,3 @@ let hide_coercion coe =
     let coe_info = coercion_info coe in
     Some coe_info.coe_param
   else None
-
-let is_coercion_in_scope r =
-  GlobRef.Set_env.mem r !coercions_in_scope

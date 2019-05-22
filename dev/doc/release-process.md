@@ -4,37 +4,20 @@
 
 - [ ] Create a new issue to track the release process where you can copy-paste
   the present checklist.
-- [ ] Change the version name to the next major version and the magic numbers
-  (see [#7008](https://github.com/coq/coq/pull/7008/files)).
-- [ ] Update the compatibility infrastructure, which consists of doing
-      the following steps.  Note that all but the final step can be
-      performed automatically by
-      [`dev/tools/update-compat.py`](/dev/tools/update-compat.py) so
-      long as you have already updated `coq_version` in
-      [`configure.ml`](/configure.ml).
-  + [ ] Add a file `theories/Compat/CoqXX.v` which contains just the header
-        from [`dev/header.ml`](/dev/header.ml)
-  + [ ] Add the line `Require Export Coq.Compat.CoqXX.` at the top of
-        `theories/Compat/CoqYY.v`, where Y.Y is the version prior to X.X.
-  + [ ] Delete the file `theories/Compat/CoqWW.v`, where W.W is three versions
-        prior to X.X.
-  + [ ] Update
-        [`doc/stdlib/index-list.html.template`](/doc/stdlib/index-list.html.template)
-        with the deleted/added files.
-  + [ ] Remove any notations in the standard library which have `compat "W.W"`.
-  + [ ] Update the type `compat_version` in [`lib/flags.ml`](/lib/flags.ml) by
-        bumping all the version numbers by one, and update the interpretations
-        of those flags in [`toplevel/coqargs.ml`](/toplevel/coqargs.ml) and
-        [`vernac/g_vernac.mlg`](/vernac/g_vernac.mlg).
-  + [ ] Update the files
-        [`test-suite/success/CompatCurrentFlag.v`](/test-suite/success/CompatCurrentFlag.v),
-        [`test-suite/success/CompatPreviousFlag.v`](/test-suite/success/CompatPreviousFlag.v),
-        and
-        [`test-suite/success/CompatOldFlag.v`](/test-suite/success/CompatOldFlag.v)
-        by bumping all version numbers by 1.
-  + [ ] Decide what to do about all test-suite files which mention `-compat
-        W.W` or `Coq.Comapt.CoqWW` (which is no longer valid, since we only
-        keep compatibility against the two previous versions)
+- [ ] Change the version name to the next major version and the magic
+  numbers (see [#7008](https://github.com/coq/coq/pull/7008/files)).
+
+  Additionally, in the same commit, update the compatibility
+  infrastructure, which consists of invoking
+  [`dev/tools/update-compat.py`](../tools/update-compat.py) with the
+  `--master` flag.
+
+  Note that the `update-compat.py` script must be run twice: once
+  *immediately after* branching with the `--master` flag (which sets
+  up Coq to support four `-compat` flag arguments), *in the same
+  commit* as the one that updates `coq_version` in
+  [`configure.ml`](../../configure.ml), and once again later on before
+  the next branch point with the `--release` flag (see next section).
 - [ ] Put the corresponding alpha tag using `git tag -s`.
   The `VX.X+alpha` tag marks the first commit to be in `master` and not in the
   branch of the previous version.
@@ -42,6 +25,19 @@
 - [ ] Decide the release calendar with the team (freeze date, beta date, final
   release date) and put this information in the milestone (using the
   description and due date fields).
+
+## Anytime after the previous version is branched off master ##
+
+- [ ] Update the compatibility infrastructure to the next release,
+  which consists of invoking
+  [`dev/tools/update-compat.py`](../tools/update-compat.py) with the
+  `--release` flag; this sets up Coq to support three `-compat` flag
+  arguments.  To ensure that CI passes, you will have to decide what
+  to do about all test-suite files which mention `-compat U.U` or
+  `Coq.Comapt.CoqUU` (which is no longer valid, since we only keep
+  compatibility against the two previous versions on releases), and
+  you may have to prepare overlays for projects using the
+  compatibility flags.
 
 ## About one month before the beta ##
 
@@ -64,10 +60,8 @@
 
 ## On the date of the feature freeze ##
 
-- [ ] Create the new version branch `vX.X` and
-  [protect it](https://github.com/coq/coq/settings/branches)
-  (activate the "Protect this branch", "Require pull request reviews before
-  merging" and "Restrict who can push to this branch" guards).
+- [ ] Create the new version branch `vX.X` (using this name will ensure that
+  the branch will be automatically protected).
 - [ ] Remove all remaining unmerged feature PRs from the beta milestone.
 - [ ] Start a new project to track PR backporting. The proposed model is to
   have a "X.X-only PRs" column for the rare PRs on the stable branch, a
@@ -90,15 +84,27 @@
   Coq has been tagged.
 - [ ] Have some people test the recently auto-generated Windows and MacOS
   packages.
-- [ ] Change the version name from alpha to beta1 (see
+- [ ] In a PR:
+  - Change the version name from alpha to beta1 (see
   [#7009](https://github.com/coq/coq/pull/7009/files)).
-  We generally do not update the magic numbers at this point.
+  - We generally do not update the magic numbers at this point.
+  - Set `is_a_released_version` to `true` in `configure.ml`.
 - [ ] Put the `VX.X+beta1` tag using `git tag -s`.
+- [ ] Check using `git push --tags --dry-run` that you are not
+  pushing anything else than the new tag. If needed, remove spurious
+  tags with `git tag -d`. When this is OK, proceed with `git push --tags`.
+- [ ] Set `is_a_released_version` to `false` in `configure.ml`
+  (if you forget about it, you'll be reminded whenever you try to
+  backport a PR with a changelog entry).
 
 ### These steps are the same for all releases (beta, final, patch-level) ###
 
 - [ ] Send an e-mail on Coqdev announcing that the tag has been put so that
-  package managers can start preparing package updates.
+  package managers can start preparing package updates (including a
+  `coq-bignums` compatible version).
+- [ ] Ping **@erikmd** to update the Docker images in `coqorg/coq`
+  (requires `coq-bignums` in `extra-dev` for a beta / in `released`
+  for a final release).
 - [ ] Draft a release on GitHub.
 - [ ] Get **@maximedenes** to sign the Windows and MacOS packages and
   upload them on GitHub.
@@ -114,9 +120,17 @@
 
 ## At the final release time ##
 
-- [ ] Change the version name to X.X.0 and the magic numbers (see
+- [ ] In a PR:
+  - Change the version name from X.X.0 and the magic numbers (see
   [#7271](https://github.com/coq/coq/pull/7271/files)).
+  - Set `is_a_released_version` to `true` in `configure.ml`.
 - [ ] Put the `VX.X.0` tag.
+- [ ] Check using `git push --tags --dry-run` that you are not
+  pushing anything else than the new tag. If needed, remove spurious
+  tags with `git tag -d`. When this is OK, proceed with `git push --tags`.
+- [ ] Set `is_a_released_version` to `false` in `configure.ml`
+  (if you forget about it, you'll be reminded whenever you try to
+  backport a PR with a changelog entry).
 
 Repeat the generic process documented above for all releases.
 

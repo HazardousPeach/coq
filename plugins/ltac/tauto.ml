@@ -65,7 +65,7 @@ let assoc_flags ist : tauto_flags =
 let negation_unfolding = ref true
 
 open Goptions
-let _ =
+let () =
   declare_bool_option
     { optdepr  = false;
       optname  = "unfolding of not in intuition";
@@ -98,16 +98,18 @@ let split = Tactics.split_with_bindings false [Tactypes.NoBindings]
 (** Test *)
 
 let is_empty _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
-  if is_empty_type sigma (assoc_var "X1" ist) then idtac else fail
+  if is_empty_type genv sigma (assoc_var "X1" ist) then idtac else fail
 
 (* Strictly speaking, this exceeds the propositional fragment as it
    matches also equality types (and solves them if a reflexivity) *)
 let is_unit_or_eq _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
   let flags = assoc_flags ist in
   let test = if flags.strict_unit then is_unit_type else is_unit_or_eq_type in
-  if test sigma (assoc_var "X1" ist) then idtac else fail
+  if test genv sigma (assoc_var "X1" ist) then idtac else fail
 
 let bugged_is_binary sigma t =
   isApp sigma t &&
@@ -121,28 +123,30 @@ let bugged_is_binary sigma t =
 (** Dealing with conjunction *)
 
 let is_conj _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
   let flags = assoc_flags ist in
   let ind = assoc_var "X1" ist in
     if (not flags.binary_mode_bugged_detection || bugged_is_binary sigma ind) &&
-       is_conjunction sigma
+       is_conjunction genv sigma
          ~strict:flags.strict_in_hyp_and_ccl
          ~onlybinary:flags.binary_mode ind
     then idtac
     else fail
 
 let flatten_contravariant_conj _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
   let flags = assoc_flags ist in
   let typ = assoc_var "X1" ist in
   let c = assoc_var "X2" ist in
   let hyp = assoc_var "id" ist in
-  match match_with_conjunction sigma
+  match match_with_conjunction genv sigma
           ~strict:flags.strict_in_contravariant_hyp
           ~onlybinary:flags.binary_mode typ
   with
   | Some (_,args) ->
-    let newtyp = List.fold_right mkArrow args c in
+    let newtyp = List.fold_right (fun a b -> mkArrow a Sorts.Relevant b) args c in
     let intros = tclMAP (fun _ -> intro) args in
     let by = tclTHENLIST [intros; apply hyp; split; assumption] in
     tclTHENLIST [assert_ ~by newtyp; clear (destVar sigma hyp)]
@@ -151,29 +155,31 @@ let flatten_contravariant_conj _ ist =
 (** Dealing with disjunction *)
 
 let is_disj _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
   let flags = assoc_flags ist in
   let t = assoc_var "X1" ist in
   if (not flags.binary_mode_bugged_detection || bugged_is_binary sigma t) &&
-     is_disjunction sigma
+     is_disjunction genv sigma
        ~strict:flags.strict_in_hyp_and_ccl
        ~onlybinary:flags.binary_mode t
   then idtac
   else fail
 
 let flatten_contravariant_disj _ ist =
+  Proofview.tclENV >>= fun genv ->
   Proofview.tclEVARMAP >>= fun sigma ->
   let flags = assoc_flags ist in
   let typ = assoc_var "X1" ist in
   let c = assoc_var "X2" ist in
   let hyp = assoc_var "id" ist in
-  match match_with_disjunction sigma
+  match match_with_disjunction genv sigma
           ~strict:flags.strict_in_contravariant_hyp
           ~onlybinary:flags.binary_mode
           typ with
   | Some (_,args) ->
       let map i arg =
-        let typ = mkArrow arg c in
+        let typ = mkArrow arg Sorts.Relevant c in
         let ci = Tactics.constructor_tac false None (succ i) Tactypes.NoBindings in
         let by = tclTHENLIST [intro; apply hyp; ci; assumption] in
         assert_ ~by typ
@@ -191,7 +197,7 @@ let make_unfold name =
 let u_not = make_unfold "not"
 
 let reduction_not_iff _ ist =
-  let make_reduce c = TacAtom (Loc.tag @@ TacReduce (Genredexpr.Unfold c, Locusops.allHypsAndConcl)) in
+  let make_reduce c = TacAtom (CAst.make @@ TacReduce (Genredexpr.Unfold c, Locusops.allHypsAndConcl)) in
   let tac = match !negation_unfolding with
     | true -> make_reduce [u_not]
     | false -> TacId []
@@ -244,7 +250,7 @@ let with_flags flags _ ist =
   let x = CAst.make @@ Id.of_string "x" in
   let arg = Val.Dyn (tag_tauto_flags, flags) in
   let ist = { ist with lfun = Id.Map.add x.CAst.v arg ist.lfun } in
-  eval_tactic_ist ist (TacArg (Loc.tag @@ TacCall (Loc.tag (Locus.ArgVar f, [Reference (Locus.ArgVar x)]))))
+  eval_tactic_ist ist (TacArg (CAst.make @@ TacCall (CAst.make (Locus.ArgVar f, [Reference (Locus.ArgVar x)]))))
 
 let register_tauto_tactic tac name0 args =
   let ids = List.map (fun id -> Id.of_string id) args in
@@ -252,7 +258,7 @@ let register_tauto_tactic tac name0 args =
   let name = { mltac_plugin = tauto_plugin; mltac_tactic = name0; } in
   let entry = { mltac_name = name; mltac_index = 0 } in
   let () = Tacenv.register_ml_tactic name [| tac |] in
-  let tac = TacFun (ids, TacML (Loc.tag (entry, []))) in
+  let tac = TacFun (ids, TacML (CAst.make (entry, []))) in
   let obj () = Tacenv.register_ltac true true (Id.of_string name0) tac in
   Mltop.declare_cache_obj obj tauto_plugin
 

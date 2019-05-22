@@ -9,8 +9,8 @@ Config_lexer
 Utf8_convert
 Preferences
 Project_file
-Topfmt
 Ideutils
+Unicode_bindings
 Coq
 Coq_lex
 Sentence
@@ -30,5 +30,5 @@ CoqOps
 Wg_Command
 Session
 Coqide_ui
-NanoPG
+MicroPG
 Coqide

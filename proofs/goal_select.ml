@@ -45,7 +45,7 @@ let parse_goal_selector = function
   | "!" -> SelectAlreadyFocused
   | "all" -> SelectAll
   | i ->
-      let err_msg = "The default selector must be \"all\" or a natural number." in
+      let err_msg = "The default selector must be \"all\", \"!\" or a natural number." in
       begin try
               let i = int_of_string i in
               if i < 0 then CErrors.user_err Pp.(str err_msg);
@@ -53,7 +53,7 @@ let parse_goal_selector = function
         with Failure _ -> CErrors.user_err Pp.(str err_msg)
       end
 
-let _ = let open Goptions in
+let () = let open Goptions in
   declare_string_option
     { optdepr = false;
       optname = "default goal selector" ;

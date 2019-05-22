@@ -20,10 +20,13 @@ Displaying
    Error messages:
 
    .. exn:: @qualid not a defined object.
+      :undocumented:
 
    .. exn:: Universe instance should have length @num.
+      :undocumented:
 
    .. exn:: This object does not support universe names.
+      :undocumented:
 
 
    .. cmdv:: Print Term @qualid
@@ -81,20 +84,20 @@ and tables:
 * A :production:`flag` has a boolean value, such as :flag:`Asymmetric Patterns`.
 * An :production:`option` generally has a numeric or string value, such as :opt:`Firstorder Depth`.
 * A :production:`table` contains a set of strings or qualids.
-* In addition, some commands provide settings, such as :cmd:`Extraction Language OCaml`.
+* In addition, some commands provide settings, such as :cmd:`Extraction Language`.
 
-.. FIXME Convert `Extraction Language OCaml` to an option.
+.. FIXME Convert "Extraction Language" to an option.
 
 Flags, options and tables are identified by a series of identifiers, each with an initial
 capital letter.
 
-.. cmd::  {? Local | Global | Export } Set @flag
+.. cmd::  {? {| Local | Global | Export } } Set @flag
    :name: Set
 
    Sets :token:`flag` on. Scoping qualifiers are
    described :ref:`here <set_unset_scope_qualifiers>`.
 
-.. cmd:: {? Local | Global | Export } Unset @flag
+.. cmd:: {? {| Local | Global | Export } } Unset @flag
    :name: Unset
 
    Sets :token:`flag` off. Scoping qualifiers are
@@ -105,13 +108,13 @@ capital letter.
    Prints the current value of :token:`flag`.
 
 
-.. cmd:: {? Local | Global | Export } Set @option ( @num | @string )
+.. cmd:: {? {| Local | Global | Export } } Set @option {| @num | @string }
    :name: Set @option
 
    Sets :token:`option` to the specified value.  Scoping qualifiers are
    described :ref:`here <set_unset_scope_qualifiers>`.
 
-.. cmd:: {? Local | Global | Export } Unset @option
+.. cmd:: {? {| Local | Global | Export } } Unset @option
    :name: Unset @option
 
    Sets :token:`option` to its default value.  Scoping qualifiers are
@@ -126,17 +129,17 @@ capital letter.
    Prints the current value of all flags and options, and the names of all tables.
 
 
-.. cmd:: Add @table ( @string | @qualid )
+.. cmd:: Add @table {| @string | @qualid }
    :name: Add @table
 
    Adds the specified value to :token:`table`.
 
-.. cmd:: Remove @table ( @string | @qualid )
+.. cmd:: Remove @table {| @string | @qualid }
    :name: Remove @table
 
    Removes the specified value from :token:`table`.
 
-.. cmd:: Test @table for ( @string | @qualid )
+.. cmd:: Test @table for {| @string | @qualid }
    :name: Test @table for
 
    Reports whether :token:`table` contains the specified value.
@@ -159,7 +162,7 @@ capital letter.
 Scope qualifiers for :cmd:`Set` and :cmd:`Unset`
 `````````````````````````````````````````````````
 
-:n:`{? Local | Global | Export }`
+:n:`{? {| Local | Global | Export } }`
 
 Flag and option settings can be global in scope or local to nested scopes created by
 :cmd:`Module` and :cmd:`Section` commands.  There are four alternatives:
@@ -271,10 +274,10 @@ Requests to the environment
 
       This searches for all statements or types of
       definition that contains a subterm that matches the pattern
-      `term_pattern` (holes of the pattern are either denoted by `_` or by
-      `?ident` when non linear patterns are expected).
+      :token:`term_pattern` (holes of the pattern are either denoted by `_` or by
+      :n:`?@ident` when non linear patterns are expected).
 
-   .. cmdv:: Search { + [-]@term_pattern_string }
+   .. cmdv:: Search {+ {? -}@term_pattern_string}
 
       where
       :n:`@term_pattern_string` is a term_pattern, a string, or a string followed
@@ -286,17 +289,17 @@ Requests to the environment
       prefixed by `-`, the search excludes the objects that mention that
       term_pattern or that string.
 
-   .. cmdv:: Search @term_pattern_string … @term_pattern_string inside {+ @qualid }
+   .. cmdv:: Search {+ {? -}@term_pattern_string} inside {+ @qualid }
 
       This restricts the search to constructions defined in the modules
       named by the given :n:`qualid` sequence.
 
-   .. cmdv:: Search @term_pattern_string … @term_pattern_string outside {+ @qualid }
+   .. cmdv:: Search {+ {? -}@term_pattern_string} outside {+ @qualid }
 
       This restricts the search to constructions not defined in the modules
       named by the given :n:`qualid` sequence.
 
-   .. cmdv:: @selector: Search [-]@term_pattern_string … [-]@term_pattern_string
+   .. cmdv:: @selector: Search {+ {? -}@term_pattern_string}
 
       This specifies the goal on which to search hypothesis (see
       Section :ref:`invocation-of-tactics`).
@@ -350,7 +353,7 @@ Requests to the environment
       This restricts the search to constructions defined in the modules named
       by the given :n:`qualid` sequence.
 
-   .. cmdv:: SearchHead term outside {+ @qualid }
+   .. cmdv:: SearchHead @term outside {+ @qualid }
 
       This restricts the search to constructions not defined in the modules
       named by the given :n:`qualid` sequence.
@@ -440,7 +443,7 @@ Requests to the environment
 
          SearchRewrite (_ + _ + _).
 
-   .. cmdv:: SearchRewrite term inside {+ @qualid }
+   .. cmdv:: SearchRewrite @term inside {+ @qualid }
 
       This restricts the search to constructions defined in the modules
       named by the given :n:`qualid` sequence.
@@ -507,6 +510,20 @@ Requests to the environment
 
 .. seealso:: Section :ref:`locating-notations`
 
+.. _printing-flags:
+
+Printing flags
+-------------------------------
+
+.. flag:: Fast Name Printing
+
+   When turned on, |Coq| uses an asymptotically faster algorithm for the
+   generation of unambiguous names of bound variables while printing terms.
+   While faster, it is also less clever and results in a typically less elegant
+   display, e.g. it will generate more names rather than reusing certain names
+   across subterms. This flag is not enabled by default, because as Ltac
+   observes bound names, turning it on can break existing proof scripts.
+
 
 .. _loading-files:
 
@@ -538,8 +555,7 @@ toplevel. This kind of file is called a *script* for |Coq|. The standard
       will use the default extension ``.v``.
 
    .. cmdv:: Load Verbose @ident
-
-   .. cmdv:: Load Verbose @string
+             Load Verbose @string
 
       Display, while loading,
       the answers of |Coq| to each command (including tactics) contained in
@@ -548,10 +564,13 @@ toplevel. This kind of file is called a *script* for |Coq|. The standard
       .. seealso:: Section :ref:`controlling-display`.
 
    .. exn:: Can’t find file @ident on loadpath.
+      :undocumented:
 
    .. exn:: Load is not supported inside proofs.
+      :undocumented:
 
    .. exn:: Files processed by Load cannot leave open proofs.
+      :undocumented:
 
 .. _compiled-files:
 
@@ -575,7 +594,7 @@ file is a particular case of module called *library file*.
    replayed nor rechecked.
 
    To locate the file in the file system, :n:`@qualid` is decomposed under the
-   form `dirpath.ident` and the file `ident.vo` is searched in the physical
+   form :n:`dirpath.@ident` and the file :n:`@ident.vo` is searched in the physical
    directory of the file system that is mapped in |Coq| loadpath to the
    logical path dirpath (see Section :ref:`libraries-and-filesystem`). The mapping between
    physical directories and logical names at the time of requiring the
@@ -603,10 +622,10 @@ file is a particular case of module called *library file*.
       but if a further module, say `A`, contains a command :cmd:`Require Export` `B`,
       then the command :cmd:`Require Import` `A` also imports the module `B.`
 
-   .. cmdv:: Require [Import | Export] {+ @qualid }
+   .. cmdv:: Require {| Import | Export } {+ @qualid }
 
       This loads the
-      modules named by the :n:`qualid` sequence and their recursive
+      modules named by the :token:`qualid` sequence and their recursive
       dependencies. If
       ``Import`` or ``Export`` is given, it also imports these modules and
       all the recursive dependencies that were marked or transitively marked
@@ -615,11 +634,12 @@ file is a particular case of module called *library file*.
    .. cmdv:: From @dirpath Require @qualid
 
       This command acts as :cmd:`Require`, but picks
-      any library whose absolute name is of the form dirpath.dirpath’.qualid
-      for some `dirpath’`. This is useful to ensure that the :n:`@qualid` library
+      any library whose absolute name is of the form :n:`@dirpath.@dirpath’.@qualid`
+      for some :n:`@dirpath’`. This is useful to ensure that the :token:`qualid` library
       comes from a given package by making explicit its absolute root.
 
    .. exn:: Cannot load qualid: no physical path bound to dirpath.
+      :undocumented:
 
    .. exn:: Cannot find library foo in loadpath.
 
@@ -631,21 +651,21 @@ file is a particular case of module called *library file*.
 
       The command tried to load library file :n:`@ident`.vo that
       depends on some specific version of library :n:`@qualid` which is not the
-      one already loaded in the current |Coq| session. Probably `ident.v` was
+      one already loaded in the current |Coq| session. Probably :n:`@ident.v` was
       not properly recompiled with the last version of the file containing
-      module :n:`@qualid`.
+      module :token:`qualid`.
 
    .. exn:: Bad magic number.
 
-      The file `ident.vo` was found but either it is not a
+      The file :n:`@ident.vo` was found but either it is not a
       |Coq| compiled module, or it was compiled with an incompatible
       version of |Coq|.
 
-   .. exn:: The file `ident.vo` contains library dirpath and not library dirpath’.
+   .. exn:: The file :n:`@ident.vo` contains library dirpath and not library dirpath’.
 
-      The library file `dirpath’` is indirectly required by the
+      The library file :n:`@dirpath’` is indirectly required by the
       ``Require`` command but it is bound in the current loadpath to the
-      file `ident.vo` which was bound to a different library name `dirpath` at
+      file :n:`@ident.vo` which was bound to a different library name :token:`dirpath` at
       the time it was compiled.
 
 
@@ -669,10 +689,10 @@ file is a particular case of module called *library file*.
 .. cmd:: Declare ML Module {+ @string }
 
    This commands loads the OCaml compiled files
-   with names given by the :n:`@string` sequence
+   with names given by the :token:`string` sequence
    (dynamic link). It is mainly used to load tactics dynamically. The
    files are searched into the current OCaml loadpath (see the
-   command ``Add ML Path`` in Section :ref:`libraries-and-filesystem`).
+   command :cmd:`Add ML Path`).
    Loading of OCaml files is only possible under the bytecode version of
    ``coqtop`` (i.e. ``coqtop`` called with option ``-byte``, see chapter
    :ref:`thecoqcommands`), or when |Coq| has been compiled with a
@@ -684,15 +704,17 @@ file is a particular case of module called *library file*.
       where they occur, even if outside a section.
 
    .. exn:: File not found on loadpath: @string.
+      :undocumented:
 
    .. exn:: Loading of ML object file forbidden in a native Coq.
+      :undocumented:
 
 
 .. cmd:: Print ML Modules
 
-   This prints the name of all OCaml modules loaded with ``Declare
-   ML Module``. To know from where these module were loaded, the user
-   should use the command ``Locate File`` (see :ref:`here <locate-file>`)
+   This prints the name of all OCaml modules loaded with :cmd:`Declare ML Module`.
+   To know from where these module were loaded, the user
+   should use the command :cmd:`Locate File`.
 
 
 .. _loadpath:
@@ -713,7 +735,7 @@ the toplevel, and using them in source files is discouraged.
 
 .. cmd:: Cd @string
 
-   This command changes the current directory according to :n:`@string` which
+   This command changes the current directory according to :token:`string` which
    can be any valid path.
 
    .. cmdv:: Cd
@@ -724,24 +746,24 @@ the toplevel, and using them in source files is discouraged.
 .. cmd:: Add LoadPath @string as @dirpath
 
    This command is equivalent to the command line option
-   ``-Q`` :n:`@string` :n:`@dirpath`. It adds the physical directory string to the current
+   :n:`-Q @string @dirpath`. It adds the physical directory string to the current
    |Coq| loadpath and maps it to the logical directory dirpath.
 
    .. cmdv:: Add LoadPath @string
 
-      Performs as Add LoadPath :n:`@string` as :n:`@dirpath` but
+      Performs as :n:`Add LoadPath @string @dirpath` but
       for the empty directory path.
 
 
 .. cmd:: Add Rec LoadPath @string as @dirpath
 
    This command is equivalent to the command line option
-   ``-R`` :n:`@string` :n:`@dirpath`. It adds the physical directory string and all its
+   :n:`-R @string @dirpath`. It adds the physical directory string and all its
    subdirectories to the current |Coq| loadpath.
 
    .. cmdv:: Add Rec LoadPath @string
 
-      Works as :cmd:`Add Rec LoadPath` :n:`@string` as :n:`@dirpath` but for the empty
+      Works as :n:`Add Rec LoadPath @string as @dirpath` but for the empty
       logical directory path.
 
 
@@ -784,7 +806,7 @@ the toplevel, and using them in source files is discouraged.
 .. cmd:: Locate File @string
 
    This command displays the location of file string in the current
-   loadpath. Typically, string is a .cmo or .vo or .v file.
+   loadpath. Typically, string is a ``.cmo`` or ``.vo`` or ``.v`` file.
 
 
 .. cmd:: Locate Library @dirpath
@@ -812,6 +834,7 @@ interactively, they cannot be part of a vernacular file loaded via
    over the name of a module or of an object inside a module.
 
    .. exn:: @ident: no such entry.
+      :undocumented:
 
    .. cmdv:: Reset Initial
 
@@ -849,7 +872,7 @@ interactively, they cannot be part of a vernacular file loaded via
    state label is an integer which grows after each successful command.
    It is displayed in the prompt when in -emacs mode. Just as :cmd:`Back` (see
    above), the :cmd:`BackTo` command now handles proof states. For that, it may
-   have to undo some extra commands and end on a state `num′ ≤ num` if
+   have to undo some extra commands and end on a state :n:`@num′ ≤ @num` if
    necessary.
 
    .. cmdv:: Backtrack @num @num @num
@@ -953,6 +976,7 @@ Quitting and debugging
    it prints a message indicating that the failure did not occur.
 
    .. exn:: The command has not failed!
+      :undocumented:
 
 
 .. _controlling-display:
@@ -964,7 +988,7 @@ Controlling display
 
    This option controls the normal displaying.
 
-.. opt:: Warnings "{+, {? %( - %| + %) } @ident }"
+.. opt:: Warnings "{+, {? {| - | + } } @ident }"
    :name: Warnings
 
    This option configures the display of warnings. It is experimental, and
@@ -1136,6 +1160,7 @@ described first.
    variable nor a constant.
 
    .. exn:: The reference is not unfoldable.
+      :undocumented:
 
    .. cmdv:: Print Strategies
 
@@ -1146,7 +1171,7 @@ described first.
 
    This command allows giving a short name to a reduction expression, for
    instance lazy beta delta [foo bar]. This short name can then be used
-   in ``Eval`` :n:`@ident` ``in`` ... or ``eval`` directives. This command
+   in :n:`Eval @ident in` or ``eval`` directives. This command
    accepts the
    Local modifier, for discarding this reduction name at the end of the
    file or module. For the moment the name cannot be qualified. In
@@ -1154,7 +1179,7 @@ described first.
    functor applications will be refused if these declarations are not
    local. The name :n:`@ident` cannot be used directly as an Ltac tactic, but
    nothing prevents the user to also perform a
-   ``Ltac`` `ident` ``:=`` `convtactic`.
+   :n:`Ltac @ident := @convtactic`.
 
    .. seealso:: :ref:`performingcomputations`
 
@@ -1166,46 +1191,55 @@ Controlling the locality of commands
 
 
 .. cmd:: Local @command
-.. cmd:: Global @command
+         Global @command
 
-Some commands support a Local or Global prefix modifier to control the
-scope of their effect. There are four kinds of commands:
+   Some commands support a Local or Global prefix modifier to control the
+   scope of their effect. There are four kinds of commands:
 
 
-+ Commands whose default is to extend their effect both outside the
-  section and the module or library file they occur in.  For these
-  commands, the Local modifier limits the effect of the command to the
-  current section or module it occurs in.  As an example, the :cmd:`Coercion`
-  and :cmd:`Strategy` commands belong to this category.
-+ Commands whose default behavior is to stop their effect at the end
-  of the section they occur in but to extend their effect outside the module or
-  library file they occur in. For these commands, the Local modifier limits the
-  effect of the command to the current module if the command does not occur in a
-  section and the Global modifier extends the effect outside the current
-  sections and current module if the command occurs in a section. As an example,
-  the :cmd:`Arguments`, :cmd:`Ltac` or :cmd:`Notation` commands belong
-  to this category. Notice that a subclass of these commands do not support
-  extension of their scope outside sections at all and the Global modifier is not
-  applicable to them.
-+ Commands whose default behavior is to stop their effect at the end
-  of the section or module they occur in.  For these commands, the ``Global``
-  modifier extends their effect outside the sections and modules they
-  occur in.  The :cmd:`Transparent` and :cmd:`Opaque`
-  (see Section :ref:`vernac-controlling-the-reduction-strategies`) commands
-  belong to this category.
-+ Commands whose default behavior is to extend their effect outside
-  sections but not outside modules when they occur in a section and to
-  extend their effect outside the module or library file they occur in
-  when no section contains them.For these commands, the Local modifier
-  limits the effect to the current section or module while the Global
-  modifier extends the effect outside the module even when the command
-  occurs in a section.  The :cmd:`Set` and :cmd:`Unset` commands belong to this
-  category.
+   + Commands whose default is to extend their effect both outside the
+     section and the module or library file they occur in.  For these
+     commands, the Local modifier limits the effect of the command to the
+     current section or module it occurs in.  As an example, the :cmd:`Coercion`
+     and :cmd:`Strategy` commands belong to this category.
+   + Commands whose default behavior is to stop their effect at the end
+     of the section they occur in but to extend their effect outside the module or
+     library file they occur in. For these commands, the Local modifier limits the
+     effect of the command to the current module if the command does not occur in a
+     section and the Global modifier extends the effect outside the current
+     sections and current module if the command occurs in a section. As an example,
+     the :cmd:`Arguments`, :cmd:`Ltac` or :cmd:`Notation` commands belong
+     to this category. Notice that a subclass of these commands do not support
+     extension of their scope outside sections at all and the Global modifier is not
+     applicable to them.
+   + Commands whose default behavior is to stop their effect at the end
+     of the section or module they occur in.  For these commands, the ``Global``
+     modifier extends their effect outside the sections and modules they
+     occur in.  The :cmd:`Transparent` and :cmd:`Opaque`
+     (see Section :ref:`vernac-controlling-the-reduction-strategies`) commands
+     belong to this category.
+   + Commands whose default behavior is to extend their effect outside
+     sections but not outside modules when they occur in a section and to
+     extend their effect outside the module or library file they occur in
+     when no section contains them.For these commands, the Local modifier
+     limits the effect to the current section or module while the Global
+     modifier extends the effect outside the module even when the command
+     occurs in a section.  The :cmd:`Set` and :cmd:`Unset` commands belong to this
+     category.
+
+.. _internal-registration-commands:
+
+Internal registration commands
+--------------------------------
+
+Due to their internal nature, the commands that are presented in this section
+are not for general use. They are meant to appear only in standard libraries and
+in support libraries of plug-ins.
 
 .. _exposing-constants-to-ocaml-libraries:
 
 Exposing constants to OCaml libraries
-----------------------------------------------------------------
+````````````````````````````````````````````````````````````````
 
 .. cmd:: Register @qualid__1 as @qualid__2
 
@@ -1214,5 +1248,35 @@ Exposing constants to OCaml libraries
    calling :n:`Coqlib.lib_ref "@qualid__2"`; i.e., there is no need to known
    where is the constant defined (file, module, library, etc.).
 
-   Due to its internal nature, this command is not for general use. It is meant
-   to appear only in standard libraries and in support libraries of plug-ins.
+   As a special case, when the first segment of :n:`@qualid__2` is :g:`kernel`,
+   the constant is exposed to the kernel. For instance, the `Int63` module
+   features the following declaration:
+
+   .. coqdoc::
+
+      Register bool as kernel.ind_bool.
+
+   This makes the kernel aware of what is the type of boolean values. This
+   information is used for instance to define the return type of the
+   :g:`#int63_eq` primitive.
+
+   .. seealso:: :ref:`primitive-integers`
+
+Inlining hints for the fast reduction machines
+````````````````````````````````````````````````````````````````
+
+.. cmd:: Register Inline @qualid
+
+   This command gives as a hint to the reduction machines (VM and native) that
+   the body of the constant :n:`@qualid` should be inlined in the generated code.
+
+Registering primitive operations
+````````````````````````````````
+
+.. cmd:: Primitive @ident__1 := #@ident__2.
+
+   Declares :n:`@ident__1` as the primitive operator :n:`#@ident__2`. When
+   running this command, the type of the primitive should be already known by
+   the kernel (this is achieved through this command for primitive types and
+   through the :cmd:`Register` command with the :g:`kernel` name-space for other
+   types).

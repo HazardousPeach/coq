@@ -29,8 +29,8 @@ let bind (type a) (type b) (m : a t) (f : a -> b t) : b t = m >>= function
 | Depends l ->
   let f arg = f arg >>= function
   | Uniform x ->
-    (** We dispatch the uniform result on each goal under focus, as we know
-        that the [m] argument was actually dependent. *)
+    (* We dispatch the uniform result on each goal under focus, as we know
+       that the [m] argument was actually dependent. *)
     Proofview.Goal.goals >>= fun goals ->
     let ans = List.map (fun g -> (g,x)) goals in
     Proofview.tclUNIT ans
@@ -55,13 +55,6 @@ let bind (type a) (type b) (m : a t) (f : a -> b t) : b t = m >>= function
   Proofview.tclUNIT (Depends filtered)
 
 let goals = Proofview.Goal.goals >>= fun l -> Proofview.tclUNIT (Depends l)
-
-let nf_enter f =
-  bind goals
-    (fun gl ->
-      gl >>= fun gl ->
-      Proofview.Goal.normalize gl >>= fun nfgl ->
-      Proofview.V82.wrap_exceptions (fun () -> f nfgl)) [@warning "-3"]
 
 let enter f =
   bind goals

@@ -17,6 +17,7 @@ open Pp
 open Names
 open Sorts
 open Constr
+open Context
 open Vars
 open Goptions
 open Tacmach
@@ -26,14 +27,10 @@ let init_size=5
 
 let cc_verbose=ref false
 
-let print_constr t =
-  let sigma, env = Pfedit.get_current_context () in
-  Printer.pr_econstr_env env sigma t
-
 let debug x =
   if !cc_verbose then Feedback.msg_debug (x ())
 
-let _=
+let () =
   let gdopt=
     { optdepr=false;
       optname="Congruence Verbose";
@@ -61,7 +58,7 @@ module ST=struct
   type t = {toterm: int IntPairTable.t;
 	    tosign: (int * int) IntTable.t}
 
-  let empty ()=
+  let empty () =
     {toterm=IntPairTable.create init_size;
      tosign=IntTable.create init_size}
 
@@ -321,7 +318,7 @@ let compress_path uf i j = uf.map.(j).cpath<-i
 
 let rec find_aux uf visited i=
   let j = uf.map.(i).cpath in
-    if j<0 then let _ = List.iter (compress_path uf i) visited in i else
+    if j<0 then let () = List.iter (compress_path uf i) visited in i else
       find_aux uf (i::visited) j
 
 let find uf i= find_aux uf [] i
@@ -332,9 +329,6 @@ let get_representative uf i=
     | _ -> anomaly ~label:"get_representative" (Pp.str "not a representative.")
 
 let get_constructors uf i= uf.map.(i).constructors
-
-let find_pac uf i pac =
-  PacMap.find pac (get_constructors uf i)
 
 let rec find_oldest_pac uf i pac=
   try PacMap.find pac (get_constructors uf i) with
@@ -424,11 +418,11 @@ let new_representative typ =
 
 let _A_ = Name (Id.of_string "A")
 let _B_ = Name (Id.of_string "A")
-let _body_ =  mkProd(Anonymous,mkRel 2,mkRel 2)
+let _body_ =  mkProd(make_annot Anonymous Sorts.Relevant,mkRel 2,mkRel 2)
 
 let cc_product s1 s2 =
-  mkLambda(_A_,mkSort(s1),
-	   mkLambda(_B_,mkSort(s2),_body_))
+  mkLambda(make_annot _A_ Sorts.Relevant,mkSort(s1),
+           mkLambda(make_annot _B_ Sorts.Relevant,mkSort(s2),_body_))
 
 let rec constr_of_term = function
     Symb s-> s
@@ -455,11 +449,11 @@ let rec canonize_name sigma c =
 	  let canon_mind = MutInd.make1 (MutInd.canonical kn) in
 	    mkConstructU (((canon_mind,i),j),u)
       | Prod (na,t,ct) ->
-	  mkProd (na,func t, func ct)
+          mkProd (na,func t, func ct)
       | Lambda (na,t,ct) ->
-	  mkLambda (na, func t,func ct)
+          mkLambda (na, func t,func ct)
       | LetIn (na,b,t,ct) ->
-	  mkLetIn (na, func b,func t,func ct)
+          mkLetIn (na, func b,func t,func ct)
       | App (ct,l) ->
           mkApp (func ct,Array.Smart.map func l)
       | Proj(p,c) ->
@@ -486,11 +480,11 @@ let rec inst_pattern subst = function
 	(fun spat f -> Appli (f,inst_pattern subst spat))
 	   args t
 
-let pr_idx_term uf i = str "[" ++ int i ++ str ":=" ++
-  print_constr (EConstr.of_constr (constr_of_term (term uf i))) ++ str "]"
+let pr_idx_term env sigma uf i = str "[" ++ int i ++ str ":=" ++
+  Printer.pr_econstr_env env sigma (EConstr.of_constr (constr_of_term (term uf i))) ++ str "]"
 
-let pr_term t = str "[" ++
-  print_constr (EConstr.of_constr (constr_of_term t)) ++ str "]"
+let pr_term env sigma t = str "[" ++
+  Printer.pr_econstr_env env sigma (EConstr.of_constr (constr_of_term t)) ++ str "]"
 
 let rec add_term state t=
   let uf=state.uf in
@@ -605,16 +599,16 @@ let add_inst state (inst,int_subst) =
 	      begin
 		debug (fun () ->
 		   (str "Adding new equality, depth="++ int state.rew_depth) ++ fnl () ++
-                  (str "  [" ++ print_constr (EConstr.of_constr prf) ++ str " : " ++
-			   pr_term s ++ str " == " ++ pr_term t ++ str "]"));
+                  (str "  [" ++ Printer.pr_econstr_env state.env state.sigma (EConstr.of_constr prf) ++ str " : " ++
+                           pr_term state.env state.sigma s ++ str " == " ++ pr_term state.env state.sigma t ++ str "]"));
 		add_equality state prf s t
 	      end
 	    else
 	      begin
 		debug (fun () ->
 		   (str "Adding new disequality, depth="++ int state.rew_depth) ++ fnl () ++
-                  (str "  [" ++ print_constr (EConstr.of_constr prf) ++ str " : " ++
-			   pr_term s ++ str " <> " ++ pr_term t ++ str "]"));
+                  (str "  [" ++ Printer.pr_econstr_env state.env state.sigma (EConstr.of_constr prf) ++ str " : " ++
+                           pr_term state.env state.sigma s ++ str " <> " ++ pr_term state.env state.sigma t ++ str "]"));
 		add_disequality state (Hyp prf) s t
 	      end
   end
@@ -642,8 +636,8 @@ let join_path uf i j=
   min_path (down_path uf i [],down_path uf j [])
 
 let union state i1 i2 eq=
-  debug (fun () -> str "Linking " ++ pr_idx_term state.uf i1 ++
-		 str " and " ++ pr_idx_term state.uf i2 ++ str ".");
+  debug (fun () -> str "Linking " ++ pr_idx_term state.env state.sigma state.uf i1 ++
+                 str " and " ++ pr_idx_term state.env state.sigma state.uf i2 ++ str ".");
   let r1= get_representative state.uf i1
   and r2= get_representative state.uf i2 in
     link state.uf i1 i2 eq;
@@ -683,8 +677,8 @@ let union state i1 i2 eq=
 
 let merge eq state = (* merge and no-merge *)
   debug
-    (fun () -> str "Merging " ++ pr_idx_term state.uf eq.lhs ++
-       str " and " ++ pr_idx_term state.uf eq.rhs ++ str ".");
+    (fun () -> str "Merging " ++ pr_idx_term state.env state.sigma state.uf eq.lhs ++
+       str " and " ++ pr_idx_term state.env state.sigma state.uf eq.rhs ++ str ".");
   let uf=state.uf in
   let i=find uf eq.lhs
   and j=find uf eq.rhs in
@@ -696,7 +690,7 @@ let merge eq state = (* merge and no-merge *)
 
 let update t state = (* update 1 and 2 *)
   debug
-    (fun () -> str "Updating term " ++ pr_idx_term state.uf t ++ str ".");
+    (fun () -> str "Updating term " ++ pr_idx_term state.env state.sigma state.uf t ++ str ".");
   let (i,j) as sign = signature state.uf t in
   let (u,v) = subterms state.uf t in
   let rep = get_representative state.uf i in
@@ -758,7 +752,7 @@ let process_constructor_mark t i rep pac state =
 
 let process_mark t m state =
   debug
-    (fun () -> str "Processing mark for term " ++ pr_idx_term state.uf t ++ str ".");
+    (fun () -> str "Processing mark for term " ++ pr_idx_term state.env state.sigma state.uf t ++ str ".");
   let i=find state.uf t in
   let rep=get_representative state.uf i in
     match m with
@@ -779,8 +773,8 @@ let check_disequalities state =
           else (str "No", check_aux q)
         in
         let _ = debug
-        (fun () -> str "Checking if " ++ pr_idx_term state.uf dis.lhs ++ str " = " ++
-         pr_idx_term state.uf dis.rhs ++ str " ... " ++ info) in
+        (fun () -> str "Checking if " ++ pr_idx_term state.env state.sigma state.uf dis.lhs ++ str " = " ++
+         pr_idx_term state.env state.sigma state.uf dis.rhs ++ str " ... " ++ info) in
         ans
     | [] -> None
   in
@@ -809,7 +803,8 @@ let __eps__ = Id.of_string "_eps_"
 let new_state_var typ state =
   let ids = Environ.ids_of_named_context_val (Environ.named_context_val state.env) in
   let id = Namegen.next_ident_away __eps__ ids in
-  state.env<- EConstr.push_named (Context.Named.Declaration.LocalAssum (id,typ)) state.env;
+  let r = Sorts.Relevant in (* TODO relevance *)
+  state.env<- EConstr.push_named (Context.Named.Declaration.LocalAssum (make_annot id r,typ)) state.env;
   id
 
 let complete_one_class state i=
@@ -817,9 +812,9 @@ let complete_one_class state i=
       Partial pac ->
 	let rec app t typ n =
 	  if n<=0 then t else
-	    let _,etyp,rest= destProd typ in
+            let _,etyp,rest= destProd typ in
             let id = new_state_var (EConstr.of_constr etyp) state in
-		app (Appli(t,Eps id)) (substl [mkVar id] rest) (n-1) in
+                app (Appli(t,Eps id)) (substl [mkVar id] rest) (n-1) in
         let _c = Typing.unsafe_type_of state.env state.sigma
 	  (EConstr.of_constr (constr_of_term (term state.uf pac.cnode))) in
         let _c = EConstr.Unsafe.to_constr _c in

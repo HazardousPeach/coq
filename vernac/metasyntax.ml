@@ -23,7 +23,6 @@ open Libobject
 open Constrintern
 open Vernacexpr
 open Libnames
-open Tok
 open Notation
 open Nameops
 
@@ -33,11 +32,9 @@ open Nameops
 let cache_token (_,s) = CLexer.add_keyword s
 
 let inToken : string -> obj =
-  declare_object {(default_object "TOKEN") with
-       open_function = (fun i o -> if Int.equal i 1 then cache_token o);
-       cache_function = cache_token;
-       subst_function = Libobject.ident_subst_function;
-       classify_function = (fun o -> Substitute o)}
+  declare_object @@ global_object_nodischarge "TOKEN"
+    ~cache:cache_token
+    ~subst:(Some Libobject.ident_subst_function)
 
 let add_token_obj s = Lib.add_anonymous_leaf (inToken s)
 
@@ -53,12 +50,12 @@ let pr_entry e =
   str (Buffer.contents entry_buf)
 
 let pr_registered_grammar name =
-  let gram = try Some (Pcoq.find_grammars_by_name name) with Not_found -> None in
+  let gram = Pcoq.find_grammars_by_name name in
   match gram with
-  | None -> user_err Pp.(str "Unknown or unprintable grammar entry.")
-  | Some entries ->
+  | [] -> user_err Pp.(str "Unknown or unprintable grammar entry.")
+  | entries ->
     let pr_one (Pcoq.AnyEntry e) =
-      str "Entry " ++ str (Pcoq.Gram.Entry.name e) ++ str " is" ++ fnl () ++
+      str "Entry " ++ str (Pcoq.Entry.name e) ++ str " is" ++ fnl () ++
       pr_entry e
     in
     prlist pr_one entries
@@ -87,6 +84,8 @@ let pr_grammar = function
       str "Entry gallina_ext is" ++ fnl () ++
       pr_entry Pvernac.Vernac_.gallina_ext
   | name -> pr_registered_grammar name
+
+let pr_custom_grammar name = pr_registered_grammar ("constr:"^name)
 
 (**********************************************************************)
 (* Parse a format (every terminal starting with a letter or a single
@@ -253,7 +252,7 @@ let quote_notation_token x =
 let is_numeral symbs =
   match List.filter (function Break _ -> false | _ -> true) symbs with
   | ([Terminal "-"; Terminal x] | [Terminal x]) ->
-      (try let _ = Bigint.of_string x in true with Failure _ -> false)
+      NumTok.of_string x <> None
   | _ ->
       false
 
@@ -287,7 +286,7 @@ let pr_notation_entry = function
   | InConstrEntry -> str "constr"
   | InCustomEntry s -> str "custom " ++ str s
 
-let prec_assoc = function
+let prec_assoc = let open Gramlib.Gramext in function
   | RightA -> (L,E)
   | LeftA -> (E,L)
   | NonA -> (L,L)
@@ -577,20 +576,20 @@ let is_not_small_constr = function
   | _ -> false
 
 let rec define_keywords_aux = function
-  | GramConstrNonTerminal(e,Some _) as n1 :: GramConstrTerminal(IDENT k) :: l
+  | GramConstrNonTerminal(e,Some _) as n1 :: GramConstrTerminal(Tok.PIDENT (Some k)) :: l
       when is_not_small_constr e ->
       Flags.if_verbose Feedback.msg_info (str "Identifier '" ++ str k ++ str "' now a keyword");
       CLexer.add_keyword k;
-      n1 :: GramConstrTerminal(KEYWORD k) :: define_keywords_aux l
+      n1 :: GramConstrTerminal(Tok.PKEYWORD k) :: define_keywords_aux l
   | n :: l -> n :: define_keywords_aux l
   | [] -> []
 
   (* Ensure that IDENT articulation terminal symbols are keywords *)
 let define_keywords = function
-  | GramConstrTerminal(IDENT k)::l ->
+  | GramConstrTerminal(Tok.PIDENT (Some k))::l ->
       Flags.if_verbose Feedback.msg_info (str "Identifier '" ++ str k ++ str "' now a keyword");
       CLexer.add_keyword k;
-      GramConstrTerminal(KEYWORD k) :: define_keywords_aux l
+      GramConstrTerminal(Tok.PKEYWORD k) :: define_keywords_aux l
   | l -> define_keywords_aux l
 
 let distribute a ll = List.map (fun l -> a @ l) ll
@@ -685,7 +684,7 @@ let border = function
   | (_,(ETConstr(_,_,(_,BorderProd (_,a))))) :: _ -> a
   | _ -> None
 
-let recompute_assoc typs =
+let recompute_assoc typs = let open Gramlib.Gramext in
   match border typs, border (List.rev typs) with
     | Some LeftA, Some RightA -> assert false
     | Some LeftA, _ -> Some LeftA
@@ -802,7 +801,7 @@ let inSyntaxExtension : syntax_extension_obj -> obj =
 module NotationMods = struct
 
 type notation_modifier = {
-  assoc         : gram_assoc option;
+  assoc         : Gramlib.Gramext.g_assoc option;
   level         : int option;
   custom        : notation_entry;
   etyps         : (Id.t * simple_constr_prod_entry_key) list;
@@ -1230,7 +1229,7 @@ let compute_syntax_data local df modifiers =
   let onlyprint = mods.only_printing in
   let onlyparse = mods.only_parsing in
   if onlyprint && onlyparse then user_err (str "A notation cannot be both 'only printing' and 'only parsing'.");
-  let assoc = Option.append mods.assoc (Some NonA) in
+  let assoc = Option.append mods.assoc (Some Gramlib.Gramext.NonA) in
   let (recvars,mainvars,symbols) = analyze_notation_tokens ~onlyprint df in
   let _ = check_useless_entry_types recvars mainvars mods.etyps in
   let _ = check_binder_type recvars mods.etyps in
@@ -1361,7 +1360,7 @@ let inNotation : notation_obj -> obj =
 (**********************************************************************)
 
 let with_lib_stk_protection f x =
-  let fs = Lib.freeze ~marshallable:`No in
+  let fs = Lib.freeze ~marshallable:false in
   try let a = f x in Lib.unfreeze fs; a
   with reraise ->
     let reraise = CErrors.push reraise in
@@ -1467,7 +1466,7 @@ let add_notation_in_scope local df env c mods scope =
     notobj_local = local;
     notobj_scope = scope;
     notobj_interp = (List.map_filter map i_vars, ac);
-    (** Order is important here! *)
+    (* Order is important here! *)
     notobj_onlyparse = onlyparse;
     notobj_coercion = coe;
     notobj_onlyprint = sd.only_printing;
@@ -1486,7 +1485,7 @@ let add_notation_interpretation_core local df env ?(impls=empty_internalization_
   let level, i_typs, onlyprint = if not (is_numeral symbs) then begin
     let sy = recover_notation_syntax (make_notation_key InConstrEntrySomeLevel symbs) in
     let () = Lib.add_anonymous_leaf (inSyntaxExtension (local,sy)) in
-    (** If the only printing flag has been explicitly requested, put it back *)
+    (* If the only printing flag has been explicitly requested, put it back *)
     let onlyprint = onlyprint || sy.synext_notgram.notgram_onlyprinting in
     let _,_,_,typs = sy.synext_level in
     Some sy.synext_level, typs, onlyprint
@@ -1507,7 +1506,7 @@ let add_notation_interpretation_core local df env ?(impls=empty_internalization_
     notobj_local = local;
     notobj_scope = scope;
     notobj_interp = (List.map_filter map i_vars, ac);
-    (** Order is important here! *)
+    (* Order is important here! *)
     notobj_onlyparse = onlyparse;
     notobj_coercion = coe;
     notobj_onlyprint = onlyprint;
@@ -1565,14 +1564,17 @@ let add_notation_extra_printing_rule df k v =
 
 (* Infix notations *)
 
-let inject_var x = CAst.make @@ CRef (qualid_of_ident (Id.of_string x),None)
+let inject_var x = CAst.make @@ CRef (qualid_of_ident x,None)
 
 let add_infix local env ({CAst.loc;v=inf},modifiers) pr sc =
   check_infix_modifiers modifiers;
   (* check the precedence *)
-  let metas = [inject_var "x"; inject_var "y"] in
+  let vars = names_of_constr_expr pr in
+  let x = Namegen.next_ident_away (Id.of_string "x") vars in
+  let y = Namegen.next_ident_away (Id.of_string "y") vars in
+  let metas = [inject_var x; inject_var y] in
   let c = mkAppC (pr,metas) in
-  let df = CAst.make ?loc @@ "x "^(quote_notation_token inf)^" y" in
+  let df = CAst.make ?loc @@ Id.to_string x ^" "^(quote_notation_token inf)^" "^Id.to_string y in
   add_notation local env c (df,modifiers) sc
 
 (**********************************************************************)

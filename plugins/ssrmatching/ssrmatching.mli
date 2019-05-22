@@ -1,13 +1,20 @@
+(************************************************************************)
+(*         *   The Coq Proof Assistant / The Coq Development Team       *)
+(*  v      *   INRIA, CNRS and contributors - Copyright 1999-2018       *)
+(* <O___,, *       (see CREDITS file for the list of authors)           *)
+(*   \VV/  **************************************************************)
+(*    //   *    This file is distributed under the terms of the         *)
+(*         *     GNU Lesser General Public License Version 2.1          *)
+(*         *     (see LICENSE file for the text of the license)         *)
+(************************************************************************)
+
 (* (c) Copyright 2006-2015 Microsoft Corporation and Inria.                  *)
-(* Distributed under the terms of CeCILL-B.                                  *)
 
 open Goal
 open Environ
 open Evd
 open Constr
-
-open Ltac_plugin
-open Tacexpr
+open Genintern
 
 (** ******** Small Scale Reflection pattern matching facilities ************* *)
 
@@ -39,7 +46,7 @@ type ('ident, 'term) ssrpattern =
   | E_As_X_In_T of 'term * 'ident * 'term
 
 type pattern = evar_map * (constr, constr) ssrpattern
-val pp_pattern : pattern -> Pp.t
+val pp_pattern : env -> pattern -> Pp.t
 
 (** Extracts the redex and applies to it the substitution part of the pattern.
   @raise Anomaly if called on [In_T] or [In_X_In_T] *)
@@ -196,12 +203,13 @@ val cpattern_of_term : char * glob_constr_and_expr -> Geninterp.interp_sign -> c
 
 (** [do_once r f] calls [f] and updates the ref only once *)
 val do_once : 'a option ref -> (unit -> 'a) -> unit
+
 (** [assert_done r] return the content of r. @raise Anomaly is r is [None] *)
 val assert_done : 'a option ref -> 'a
 
 (** Very low level APIs.
     these are calls to evarconv's [the_conv_x] followed by
-    [solve_unif_constraints_with_heuristics] and [resolve_typeclasses].
+    [solve_unif_constraints_with_heuristics].
     In case of failure they raise [NoMatch] *)
 
 val unify_HO : env -> evar_map -> EConstr.constr -> EConstr.constr -> evar_map
@@ -214,16 +222,13 @@ val loc_of_cpattern : cpattern -> Loc.t option
 val id_of_pattern : pattern -> Names.Id.t option
 val is_wildcard : cpattern -> bool
 val cpattern_of_id : Names.Id.t -> cpattern
-val pr_constr_pat : constr -> Pp.t
+val pr_constr_pat : env -> evar_map -> constr -> Pp.t
+val pr_econstr_pat : env -> evar_map -> econstr -> Pp.t
 val pf_merge_uc : UState.t -> goal Evd.sigma -> goal Evd.sigma
 val pf_unsafe_merge_uc : UState.t -> goal Evd.sigma -> goal Evd.sigma
 
 (* One can also "Set SsrMatchingDebug" from a .v *)
 val debug : bool -> unit
-
-(* One should delimit a snippet with "Set SsrMatchingProfiling" and
- * "Unset SsrMatchingProfiling" to get timings *)
-val profile : bool -> unit
 
 val ssrinstancesof : cpattern -> Tacmach.tactic
 
@@ -234,7 +239,7 @@ sig
   val wit_rpatternty : (rpattern, rpattern, rpattern) Genarg.genarg_type
   val glob_rpattern : Genintern.glob_sign -> rpattern -> rpattern
   val subst_rpattern : Mod_subst.substitution -> rpattern -> rpattern
-  val interp_rpattern : Geninterp.interp_sign -> Proof_type.goal Evd.sigma -> rpattern -> Evd.evar_map * rpattern
+  val interp_rpattern : Geninterp.interp_sign -> Goal.goal Evd.sigma -> rpattern -> Evd.evar_map * rpattern
   val pr_rpattern : rpattern -> Pp.t
   val mk_rpattern : (cpattern, cpattern) ssrpattern -> rpattern
   val mk_lterm : Constrexpr.constr_expr -> Geninterp.interp_sign option -> cpattern
@@ -242,7 +247,7 @@ sig
 
   val glob_cpattern : Genintern.glob_sign -> cpattern -> cpattern
   val subst_ssrterm : Mod_subst.substitution -> cpattern -> cpattern
-  val interp_ssrterm : Geninterp.interp_sign -> Proof_type.goal Evd.sigma -> cpattern -> Evd.evar_map * cpattern
+  val interp_ssrterm : Geninterp.interp_sign -> Goal.goal Evd.sigma -> cpattern -> Evd.evar_map * cpattern
   val pr_ssrterm : cpattern -> Pp.t
 end
 

@@ -77,20 +77,28 @@ sig
 
 end
 
+module Abstraction : sig
+  type abstraction =
+    | Abstract
+    | Imitate
+
+  type t = abstraction list
+
+  val identity : t
+
+  val abstract_last : t -> t
+end
+
 (** {6 Evar infos} *)
 
 type evar_body =
   | Evar_empty
   | Evar_defined of econstr
 
-
-module Store : Store.S
-(** Datatype used to store additional information in evar maps. *)
-
 type evar_info = {
   evar_concl : econstr;
   (** Type of the evar. *)
-  evar_hyps : named_context_val; (** TODO econstr? *)
+  evar_hyps : named_context_val; (* TODO econstr? *)
   (** Context of the evar. *)
   evar_body : evar_body;
   (** Optional content of the evar. *)
@@ -98,12 +106,14 @@ type evar_info = {
   (** Boolean mask over {!evar_hyps}. Should have the same length.
       When filtered out, the corresponding variable is not allowed to occur
       in the solution *)
+  evar_abstract_arguments : Abstraction.t;
+  (** Boolean information over {!evar_hyps}, telling if an hypothesis instance
+      can be imitated or should stay abstract in HO unification problems
+      and inversion (see [second_order_matching_with_args] for its use). *)
   evar_source : Evar_kinds.t located;
   (** Information about the evar. *)
   evar_candidates : econstr list option;
   (** List of possible solutions when known that it is a finite list *)
-  evar_extra : Store.t
-  (** Extra store, used for clever hacks. *)
 }
 
 val make_evar : named_context_val -> etypes -> evar_info
@@ -145,7 +155,7 @@ val has_undefined : evar_map -> bool
     there are uninstantiated evars in [sigma]. *)
 
 val new_evar : evar_map ->
-  ?name:Id.t -> evar_info -> evar_map * Evar.t
+  ?name:Id.t -> ?typeclass_candidate:bool -> evar_info -> evar_map * Evar.t
 (** Creates a fresh evar mapping to the given information. *)
 
 val add : evar_map -> Evar.t -> evar_info -> evar_map
@@ -182,13 +192,17 @@ val raw_map_undefined : (Evar.t -> evar_info -> evar_info) -> evar_map -> evar_m
 (** Same as {!raw_map}, but restricted to undefined evars. For efficiency
     reasons. *)
 
-val define : Evar.t-> econstr -> evar_map -> evar_map
+val define : Evar.t -> econstr -> evar_map -> evar_map
 (** Set the body of an evar to the given constr. It is expected that:
     {ul
       {- The evar is already present in the evarmap.}
       {- The evar is not defined in the evarmap yet.}
       {- All the evars present in the constr should be present in the evar map.}
     } *)
+
+val define_with_evar : Evar.t -> econstr -> evar_map -> evar_map
+(** Same as [define ev body evd], except the body must be an existential variable [ev'].
+    This additionally makes [ev'] inherit the [obligation] and [typeclass] flags of [ev]. *)
 
 val cmap : (econstr -> econstr) -> evar_map -> evar_map
 (** Map the function on all terms in the evar map. *)
@@ -209,6 +223,8 @@ val undefined_map : evar_map -> evar_info Evar.Map.t
 (** Access the undefined evar mapping directly. *)
 
 val drop_all_defined : evar_map -> evar_map
+
+val is_maybe_typeclass_hook : (evar_map -> constr -> bool) Hook.t
 
 (** {6 Instantiating partial terms} *)
 
@@ -247,8 +263,29 @@ val restrict : Evar.t-> Filter.t -> ?candidates:econstr list ->
     possibly limiting the instances to a set of candidates (candidates
     are filtered according to the filter) *)
 
-val is_restricted_evar : evar_info -> Evar.t option
+val is_restricted_evar : evar_map -> Evar.t -> Evar.t option
 (** Tell if an evar comes from restriction of another evar, and if yes, which *)
+
+val set_typeclass_evars : evar_map -> Evar.Set.t -> evar_map
+(** Mark the given set of evars as available for resolution.
+
+    Precondition: they should indeed refer to undefined typeclass evars.
+ *)
+
+val get_typeclass_evars : evar_map -> Evar.Set.t
+(** The set of undefined typeclass evars *)
+
+val is_typeclass_evar : evar_map -> Evar.t -> bool
+(** Is the evar declared resolvable for typeclass resolution *)
+
+val get_obligation_evars : evar_map -> Evar.Set.t
+(** The set of obligation evars *)
+
+val set_obligation_evar : evar_map -> Evar.t -> evar_map
+(** Declare an evar as an obligation *)
+
+val is_obligation_evar : evar_map -> Evar.t -> bool
+(** Is the evar declared as an obligation *)
 
 val downcast : Evar.t-> etypes -> evar_map -> evar_map
 (** Change the type of an undefined evar to a new type assumed to be a
@@ -357,6 +394,9 @@ val add_universe_constraints : evar_map -> UnivProblem.Set.t -> evar_map
 
 *)
 
+module Store : Store.S
+(** Datatype used to store additional information in evar maps. *)
+
 val get_extra_data : evar_map -> Store.t
 val set_extra_data : Store.t -> evar_map -> evar_map
 
@@ -451,16 +491,15 @@ val extract_changed_conv_pbs : evar_map ->
 val extract_all_conv_pbs : evar_map -> evar_map * evar_constraint list
 val loc_of_conv_pb : evar_map -> evar_constraint -> Loc.t option
 
-(** The following functions return the set of evars immediately
-    contained in the object; need the term to be evar-normal otherwise
-    defined evars are returned too. *)
+(** The following functions return the set of undefined evars
+    contained in the object. *)
 
-val evars_of_term : constr -> Evar.Set.t
+val evars_of_term : evar_map -> econstr -> Evar.Set.t
   (** including evars in instances of evars *)
 
-val evars_of_named_context : (econstr, etypes) Context.Named.pt -> Evar.Set.t
+val evars_of_named_context : evar_map -> (econstr, etypes) Context.Named.pt -> Evar.Set.t
 
-val evars_of_filtered_evar_info : evar_info -> Evar.Set.t
+val evars_of_filtered_evar_info : evar_map -> evar_info -> Evar.Set.t
 
 (** Metas *)
 val meta_list : evar_map -> (metavariable * clbinding) list
@@ -522,6 +561,7 @@ val univ_flexible_alg : rigid
 type 'a in_evar_universe_context = 'a * UState.t
 
 val restrict_universe_context : evar_map -> Univ.LSet.t -> evar_map
+
 (** Raises Not_found if not a name for a universe in this map. *)
 val universe_of_name : evar_map -> Id.t -> Univ.Level.t
 
@@ -537,9 +577,13 @@ val universe_rigidity : evar_map -> Univ.Level.t -> rigid
 val make_flexible_variable : evar_map -> algebraic:bool -> Univ.Level.t -> evar_map
 (** See [UState.make_flexible_variable] *)
 
+val make_nonalgebraic_variable : evar_map -> Univ.Level.t -> evar_map
+(** See [UState.make_nonalgebraic_variable]. *)
+
 val is_sort_variable : evar_map -> Sorts.t -> Univ.Level.t option 
 (** [is_sort_variable evm s] returns [Some u] or [None] if [s] is 
     not a local sort variable declared in [evm] *)
+
 val is_flexible_level : evar_map -> Univ.Level.t -> bool
 
 (* val normalize_universe_level : evar_map -> Univ.Level.t -> Univ.Level.t *)
@@ -568,12 +612,9 @@ val universes : evar_map -> UGraph.t
     [Univ.ContextSet.to_context]. *)
 val to_universe_context : evar_map -> Univ.UContext.t
 
-val const_univ_entry : poly:bool -> evar_map -> Entries.constant_universes_entry
+val univ_entry : poly:bool -> evar_map -> Entries.universes_entry
 
-(** NB: [ind_univ_entry] cannot create cumulative entries. *)
-val ind_univ_entry : poly:bool -> evar_map -> Entries.inductive_universes
-
-val check_univ_decl : poly:bool -> evar_map -> UState.universe_decl -> Entries.constant_universes_entry
+val check_univ_decl : poly:bool -> evar_map -> UState.universe_decl -> Entries.universes_entry
 
 val merge_universe_context : evar_map -> UState.t -> evar_map
 val set_universe_context : evar_map -> UState.t -> evar_map
@@ -660,6 +701,7 @@ module MiniEConstr : sig
   val of_constr_array : Constr.t array -> t array
 
   val to_constr : ?abort_on_undefined_evars:bool -> evar_map -> t -> Constr.t
+  val to_constr_opt : evar_map -> t -> Constr.t option
 
   val unsafe_to_constr : t -> Constr.t
   val unsafe_to_constr_array : t array -> Constr.t array

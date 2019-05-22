@@ -14,7 +14,6 @@ open Util
 open Pp
 open CAst
 open Names
-open Nameops
 open Libnames
 open Pputils
 open Ppextend
@@ -85,7 +84,8 @@ let tag_var = tag Tag.variable
         | Any -> true
 
   let prec_of_prim_token = function
-    | Numeral (_,b) -> if b then lposint else lnegint
+    | Numeral (SPlus,_) -> lposint
+    | Numeral (SMinus,_) -> lnegint
     | String _ -> latom
 
   let print_hunks n pr pr_patt pr_binders (terms, termlists, binders, binderlists) unps =
@@ -170,12 +170,14 @@ let tag_var = tag Tag.variable
   let pr_univ_annot pr x = str "@{" ++ pr x ++ str "}"
 
   let pr_glob_sort = let open Glob_term in function
+    | GSProp -> tag_type (str "SProp")
     | GProp -> tag_type (str "Prop")
     | GSet -> tag_type (str "Set")
     | GType [] -> tag_type (str "Type")
     | GType u -> hov 0 (tag_type (str "Type") ++ pr_univ_annot pr_univ u)
 
   let pr_glob_level = let open Glob_term in function
+    | GSProp -> tag_type (str "SProp")
     | GProp -> tag_type (str "Prop")
     | GSet -> tag_type (str "Set")
     | GType UUnknown -> tag_type (str "Type")
@@ -198,6 +200,8 @@ let tag_var = tag Tag.variable
   let pr_patvar = pr_id
 
   let pr_glob_sort_instance = let open Glob_term in function
+    | GSProp ->
+      tag_type (str "SProp")
     | GProp ->
       tag_type (str "Prop")
     | GSet ->
@@ -230,22 +234,9 @@ let tag_var = tag Tag.variable
     | { CAst.v = CHole (_,IntroAnonymous,_) } -> mt ()
     | t ->  str " :" ++ pr_sep_com (fun()->brk(1,2)) (pr ltop) t
 
-  let pr_lident {loc; v=id} =
-    match loc with
-    | None     -> pr_id id
-    | Some loc -> let (b,_) = Loc.unloc loc in
-                  pr_located pr_id (Some (Loc.make_loc (b,b + String.length (Id.to_string id))), id)
-
-  let pr_lname = function
-    | {CAst.loc; v=Name id} -> pr_lident CAst.(make ?loc id)
-    | x -> pr_ast Name.print x
-
-  let pr_or_var pr = function
-    | Locus.ArgArg x -> pr x
-    | Locus.ArgVar id -> pr_lident id
-
   let pr_prim_token = function
-    | Numeral (n,s) -> str (if s then n else "-"^n)
+    | Numeral (SPlus,n) -> str (NumTok.to_string n)
+    | Numeral (SMinus,n) -> str ("-"^NumTok.to_string n)
     | String s -> qs s
 
   let pr_evar pr id l =
@@ -408,12 +399,12 @@ let tag_var = tag Tag.variable
       pr_opt_type_spc pr t ++ str " :=" ++
       pr_sep_com (fun () -> brk(1,2)) (pr_body ltop) c
 
-  let pr_guard_annot pr_aux bl (n,ro) =
-    match n with
+  let pr_guard_annot pr_aux bl ro =
+    match ro with
       | None -> mt ()
-      | Some {loc; v = id} ->
-        match (ro : Constrexpr.recursion_order_expr) with
-          | CStructRec ->
+      | Some {loc; v = ro} ->
+        match ro with
+          | CStructRec { v = id } ->
             let names_of_binder = function
               | CLocalAssum (nal,_,_) -> nal
               | CLocalDef (_,_,_) -> []
@@ -422,10 +413,11 @@ let tag_var = tag Tag.variable
                if List.length ids > 1 then
                  spc() ++ str "{" ++ keyword "struct" ++ spc () ++ pr_id id ++ str"}"
                else mt()
-          | CWfRec c ->
-            spc() ++ str "{" ++ keyword "wf" ++ spc () ++ pr_aux c ++ spc() ++ pr_id id ++ str"}"
-          | CMeasureRec (m,r) ->
-            spc() ++ str "{" ++ keyword "measure" ++ spc () ++ pr_aux m ++ spc() ++ pr_id id++
+          | CWfRec (id,c) ->
+            spc() ++ str "{" ++ keyword "wf" ++ spc () ++ pr_aux c ++ spc() ++ pr_lident id ++ str"}"
+          | CMeasureRec (id,m,r) ->
+            spc() ++ str "{" ++ keyword "measure" ++ spc () ++ pr_aux m ++
+            match id with None -> mt() | Some id -> spc () ++ pr_lident id ++
               (match r with None -> mt() | Some r -> str" on " ++ pr_aux r) ++ str"}"
 
   let pr_fixdecl pr prd dangling_with_for ({v=id},ro,bl,t,c) =
@@ -680,10 +672,10 @@ let tag_var = tag Tag.variable
       (sep() ++ if prec_less prec inherited then strm else surround strm)
 
   type term_pr = {
-    pr_constr_expr   : constr_expr -> Pp.t;
-    pr_lconstr_expr  : constr_expr -> Pp.t;
-    pr_constr_pattern_expr  : constr_pattern_expr -> Pp.t;
-    pr_lconstr_pattern_expr : constr_pattern_expr -> Pp.t
+    pr_constr_expr   : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t;
+    pr_lconstr_expr  : Environ.env -> Evd.evar_map -> constr_expr -> Pp.t;
+    pr_constr_pattern_expr  : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t;
+    pr_lconstr_pattern_expr : Environ.env -> Evd.evar_map -> constr_pattern_expr -> Pp.t
   }
 
   let modular_constr_pr = pr
@@ -704,18 +696,16 @@ let tag_var = tag Tag.variable
       Constrextern.extern_glob_constr (Termops.vars_of_env env) r
     else c
 
-  let pr_expr prec c =
-    let env = Global.env () in
-    let sigma = Evd.from_env env in
+  let pr_expr env sigma prec c =
     pr prec (transf env sigma c)
 
-  let pr_simpleconstr = pr_expr lsimpleconstr
+  let pr_simpleconstr env sigma = pr_expr env sigma lsimpleconstr
 
   let default_term_pr = {
     pr_constr_expr   = pr_simpleconstr;
-    pr_lconstr_expr  = pr_expr ltop;
+    pr_lconstr_expr  = (fun env sigma -> pr_expr env sigma ltop);
     pr_constr_pattern_expr  = pr_simpleconstr;
-    pr_lconstr_pattern_expr = pr_expr ltop
+    pr_lconstr_pattern_expr = (fun env sigma -> pr_expr env sigma ltop)
   }
 
   let term_pr = ref default_term_pr
@@ -732,5 +722,5 @@ let tag_var = tag Tag.variable
 
   let pr_record_body = pr_record_body_gen pr
 
-  let pr_binders = pr_undelimited_binders spc (pr_expr ltop)
+  let pr_binders env sigma = pr_undelimited_binders spc (pr_expr env sigma ltop)
 

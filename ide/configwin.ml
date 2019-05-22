@@ -37,8 +37,10 @@ type return_button =
   | Return_cancel
 
 let string = Configwin_ihm.string
+(*
 let strings = Configwin_ihm.strings
 let list = Configwin_ihm.list
+*)
 let bool = Configwin_ihm.bool
 let combo = Configwin_ihm.combo
 let custom = Configwin_ihm.custom
@@ -46,6 +48,6 @@ let modifiers = Configwin_ihm.modifiers
 
 let edit
     ?(apply=(fun () -> ()))
-    title ?width ?height
+    title ?parent ?width ?height
     conf_struct_list =
-  Configwin_ihm.edit ~with_apply: true ~apply title ?width ?height conf_struct_list
+  Configwin_ihm.edit ~with_apply: true ~apply title ?parent ?width ?height conf_struct_list

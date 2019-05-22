@@ -45,6 +45,7 @@ type case_info =
                                        in addition to the parameters of the related inductive type
                                        NOTE: "lets" are therefore excluded from the count
                                        NOTE: parameters of the inductive type are also excluded from the count *)
+    ci_relevance : Sorts.relevance; (* relevance of the predicate (not of the inductive!) *)
     ci_pp_info    : case_printing   (* not interpreted by the kernel *)
   }
 
@@ -72,6 +73,9 @@ val mkRel : int -> constr
 (** Constructs a Variable *)
 val mkVar : Id.t -> constr
 
+(** Constructs a machine integer *)
+val mkInt : Uint63.t -> constr
+
 (** Constructs an patvar named "?n" *)
 val mkMeta : metavariable -> constr
 
@@ -81,6 +85,7 @@ val mkEvar : existential -> constr
 
 (** Construct a sort *)
 val mkSort : Sorts.t -> types
+val mkSProp : types
 val mkProp : types
 val mkSet  : types
 val mkType : Univ.Universe.t -> types
@@ -94,13 +99,13 @@ type cast_kind = VMcast | NATIVEcast | DEFAULTcast | REVERTcast
 val mkCast : constr * cast_kind * constr -> constr
 
 (** Constructs the product [(x:t1)t2] *)
-val mkProd : Name.t * types * types -> types
+val mkProd : Name.t Context.binder_annot * types * types -> types
 
 (** Constructs the abstraction \[x:t{_ 1}\]t{_ 2} *)
-val mkLambda : Name.t * types * constr -> constr
+val mkLambda : Name.t Context.binder_annot * types * constr -> constr
 
 (** Constructs the product [let x = t1 : t2 in t3] *)
-val mkLetIn : Name.t * constr * types * constr -> constr
+val mkLetIn : Name.t Context.binder_annot * constr * types * constr -> constr
 
 (** [mkApp (f, [|t1; ...; tN|]] constructs the application
     {%html:(f t<sub>1</sub> ... t<sub>n</sub>)%}
@@ -157,7 +162,7 @@ val mkCase : case_info * constr * constr * constr array -> constr
    where the length of the {% $ %}j{% $ %}th context is {% $ %}ij{% $ %}.
 *)
 type ('constr, 'types) prec_declaration =
-    Name.t array * 'types array * 'constr array
+    Name.t Context.binder_annot array * 'types array * 'constr array
 type ('constr, 'types) pfixpoint =
     (int array * int) * ('constr, 'types) prec_declaration
   (* The array of [int]'s tells for each component of the array of
@@ -210,9 +215,9 @@ type ('constr, 'types, 'sort, 'univs) kind_of_term =
   | Evar      of 'constr pexistential
   | Sort      of 'sort
   | Cast      of 'constr * cast_kind * 'types
-  | Prod      of Name.t * 'types * 'types             (** Concrete syntax ["forall A:B,C"] is represented as [Prod (A,B,C)]. *)
-  | Lambda    of Name.t * 'types * 'constr            (** Concrete syntax ["fun A:B => C"] is represented as [Lambda (A,B,C)].  *)
-  | LetIn     of Name.t * 'constr * 'types * 'constr  (** Concrete syntax ["let A:C := B in D"] is represented as [LetIn (A,B,C,D)]. *)
+  | Prod      of Name.t Context.binder_annot * 'types * 'types             (** Concrete syntax ["forall A:B,C"] is represented as [Prod (A,B,C)]. *)
+  | Lambda    of Name.t Context.binder_annot * 'types * 'constr            (** Concrete syntax ["fun A:B => C"] is represented as [Lambda (A,B,C)].  *)
+  | LetIn     of Name.t Context.binder_annot * 'constr * 'types * 'constr  (** Concrete syntax ["let A:C := B in D"] is represented as [LetIn (A,B,C,D)]. *)
   | App       of 'constr * 'constr array              (** Concrete syntax ["(F P1 P2 ...  Pn)"] is represented as [App (F, [|P1; P2; ...; Pn|])].
 
                                                           The {!mkApp} constructor also enforces the following invariant:
@@ -228,6 +233,7 @@ type ('constr, 'types, 'sort, 'univs) kind_of_term =
   | Fix       of ('constr, 'types) pfixpoint
   | CoFix     of ('constr, 'types) pcofixpoint
   | Proj      of Projection.t * 'constr
+  | Int       of Uint63.t
 
 (** User view of [constr]. For [App], it is ensured there is at
    least one argument and the function is not itself an applicative
@@ -293,13 +299,13 @@ val destSort : constr -> Sorts.t
 val destCast : constr -> constr * cast_kind * constr
 
 (** Destructs the product {% $ %}(x:t_1)t_2{% $ %} *)
-val destProd : types -> Name.t * types * types
+val destProd : types -> Name.t Context.binder_annot * types * types
 
 (** Destructs the abstraction {% $ %}[x:t_1]t_2{% $ %} *)
-val destLambda : constr -> Name.t * types * constr
+val destLambda : constr -> Name.t Context.binder_annot * types * constr
 
 (** Destructs the let {% $ %}[x:=b:t_1]t_2{% $ %} *)
-val destLetIn : constr -> Name.t * constr * types * constr
+val destLetIn : constr -> Name.t Context.binder_annot * constr * types * constr
 
 (** Destructs an application *)
 val destApp : constr -> constr * constr array
@@ -382,6 +388,17 @@ type compacted_declaration = (constr, types) Context.Compacted.Declaration.pt
 type rel_context = rel_declaration list
 type named_context = named_declaration list
 type compacted_context = compacted_declaration list
+
+(** {6 Relocation and substitution } *)
+
+(** [exliftn el c] lifts [c] with lifting [el] *)
+val exliftn : Esubst.lift -> constr -> constr
+
+(** [liftn n k c] lifts by [n] indexes above or equal to [k] in [c] *)
+val liftn : int -> int -> constr -> constr
+
+(** [lift n c] lifts by [n] the positive indexes in [c] *)
+val lift : int -> constr -> constr
 
 (** {6 Functionals working on expressions canonically abstracted over
        a local context (possibly with let-ins)} *)
@@ -469,6 +486,10 @@ val map_return_predicate_with_full_binders : ((constr, constr) Context.Rel.Decla
    the usual representation of the constructions; it is not recursive *)
 
 val fold : ('a -> constr -> 'a) -> 'a -> constr -> 'a
+
+val fold_with_full_binders :
+  (rel_declaration -> 'a -> 'a) -> ('a -> 'b -> constr -> 'b) ->
+    'a -> 'b -> constr -> 'b
 
 (** [map f c] maps [f] on the immediate subterms of [c]; it is
    not recursive and the order with which subterms are processed is
@@ -586,3 +607,6 @@ val case_info_hash : case_info -> int
 (*********************************************************************)
 
 val hcons : constr -> constr
+
+val debug_print : constr -> Pp.t
+val debug_print_fix : ('a -> Pp.t) -> ('a, 'a) pfixpoint -> Pp.t

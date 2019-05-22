@@ -10,6 +10,7 @@
 open CErrors
 open Term
 open Constr
+open Context
 open Vars
 open Environ
 open Reduction
@@ -89,10 +90,12 @@ let invert_tag cst tag reloc_tbl =
   with Find_at j -> (j+1)
 
 let decompose_prod env t =
-  let (name,dom,codom as res) = destProd (whd_all env t) in
-  match name with
-  | Anonymous -> (Name (Id.of_string "x"),dom,codom)
-  | _ -> res
+  let (name,dom,codom) = destProd (whd_all env t) in
+  let name = map_annot (function
+      | Anonymous -> Name (Id.of_string "x")
+      | na -> na) name
+  in
+  (name,dom,codom)
 
 let app_type env c =
   let t = whd_all env c in
@@ -107,7 +110,8 @@ let find_rectype_a env c =
 
 (* Instantiate inductives and parameters in constructor type *)
 
-let type_constructor mind mib u typ params =
+let type_constructor mind mib u (ctx, typ) params =
+  let typ = it_mkProd_or_LetIn typ ctx in
   let s = ind_subst mind mib u in
   let ctyp = substl s typ in
   let nparams = Array.length params in
@@ -120,13 +124,6 @@ let construct_of_constr_notnative const env tag (mind, _ as ind) u allargs =
   let mib,mip = lookup_mind_specif env ind in
   let nparams = mib.mind_nparams in
   let params = Array.sub allargs 0 nparams in
-  try
-    if const then
-      let ctyp = type_constructor mind mib u (mip.mind_nf_lc.(0)) params in
-      Retroknowledge.get_vm_decompile_constant_info env.retroknowledge (GlobRef.IndRef ind) tag, ctyp
-    else
-      raise Not_found
-  with Not_found ->
   let i = invert_tag const tag mip.mind_reloc_tbl in
   let ctyp = type_constructor mind mib u (mip.mind_nf_lc.(i-1)) params in
   (mkApp(mkConstructU((ind,i),u), params), ctyp)
@@ -137,7 +134,9 @@ let construct_of_constr const env sigma tag typ =
   match EConstr.kind_upto sigma t with
   | Ind (ind,u) -> 
       construct_of_constr_notnative const env tag ind u l
-  | _ -> assert false
+  | _ ->
+    assert (Constr.equal t (Typeops.type_of_int env));
+    (mkInt (Uint63.of_int tag), t)
 
 let construct_of_constr_const env sigma tag typ =
   fst (construct_of_constr true env sigma tag typ)
@@ -198,7 +197,7 @@ let rec nf_val env sigma v typ =
   | Vaccu accu -> nf_accu env sigma accu
   | Vfun f -> 
       let lvl = nb_rel env in
-      let name,dom,codom = 
+      let name,dom,codom =
 	try decompose_prod env typ
 	with DestKO ->
           CErrors.anomaly
@@ -208,6 +207,7 @@ let rec nf_val env sigma v typ =
       let body = nf_val env sigma (f (mk_rel_accu lvl)) codom in
       mkLambda(name,dom,body)
   | Vconst n -> construct_of_constr_const env sigma n typ
+  | Vint64 i -> i |> Uint63.of_int64 |> mkInt
   | Vblock b ->
       let capp,ctyp = construct_of_constr_block env sigma (block_tag b) typ in
       let args = nf_bargs env sigma b ctyp in
@@ -222,7 +222,12 @@ and nf_type_sort env sigma v =
   match kind_of_value v with
   | Vaccu accu -> 
       let t,s = nf_accu_type env sigma accu in
-      let s = try destSort s with DestKO -> assert false in
+      let s =
+        try
+          destSort (whd_all env s)
+        with DestKO ->
+          CErrors.anomaly (Pp.str "Value should be a sort")
+      in
       t, s
   | _ -> assert false
 
@@ -278,11 +283,13 @@ and nf_atom env sigma atom =
   | Asort s -> mkSort s
   | Avar id -> mkVar id
   | Aprod(n,dom,codom) ->
-      let dom = nf_type env sigma dom in
-      let vn = mk_rel_accu (nb_rel env) in
-      let env = push_rel (LocalAssum (n,dom)) env in
-      let codom = nf_type env sigma (codom vn) in
-      mkProd(n,dom,codom)
+    let dom, sdom = nf_type_sort env sigma dom in
+    let rdom = Sorts.relevance_of_sort sdom in
+    let n = make_annot n rdom in
+    let vn = mk_rel_accu (nb_rel env) in
+    let env = push_rel (LocalAssum (n,dom)) env in
+    let codom = nf_type env sigma (codom vn) in
+    mkProd(n,dom,codom)
   | Ameta (mv,_) -> mkMeta mv
   | Aproj (p, c) ->
       let c = nf_accu env sigma c in
@@ -328,28 +335,34 @@ and nf_atom_type env sigma atom =
       let ci = ans.asw_ci in
       mkCase(ci, p, a, branchs), tcase 
   | Afix(tt,ft,rp,s) ->
-      let tt = Array.map (fun t -> nf_type env sigma t) tt in
-      let name = Array.map (fun _ -> (Name (Id.of_string "Ffix"))) tt in
+      let tt = Array.map (fun t -> nf_type_sort env sigma t) tt in
+      let tt = Array.map fst tt and rt = Array.map snd tt in
+      let name = Name (Id.of_string "Ffix") in
+      let names = Array.map (fun s -> make_annot name (Sorts.relevance_of_sort s)) rt in
       let lvl = nb_rel env in
       let nbfix = Array.length ft in
       let fargs = mk_rels_accu lvl (Array.length ft) in
-      (* Third argument of the tuple is ignored by push_rec_types *)
-      let env = push_rec_types (name,tt,[||]) env in
+      (* Body argument of the tuple is ignored by push_rec_types *)
+      let env = push_rec_types (names,tt,[||]) env in
       (* We lift here because the types of arguments (in tt) will be evaluated
          in an environment where the fixpoints have been pushed *)
       let norm_body i v = nf_val env sigma (napply v fargs) (lift nbfix tt.(i)) in
       let ft = Array.mapi norm_body ft in
-      mkFix((rp,s),(name,tt,ft)), tt.(s)
+      mkFix((rp,s),(names,tt,ft)), tt.(s)
   | Acofix(tt,ft,s,_) | Acofixe(tt,ft,s,_) ->
-      let tt = Array.map (nf_type env sigma) tt in
-      let name = Array.map (fun _ -> (Name (Id.of_string "Fcofix"))) tt in
+      let tt = Array.map (fun t -> nf_type_sort env sigma t) tt in
+      let tt = Array.map fst tt and rt = Array.map snd tt in
+      let name = Name (Id.of_string "Fcofix") in
       let lvl = nb_rel env in
+      let names = Array.map (fun s -> make_annot name (Sorts.relevance_of_sort s)) rt in
       let fargs = mk_rels_accu lvl (Array.length ft) in
-      let env = push_rec_types (name,tt,[||]) env in
+      let env = push_rec_types (names,tt,[||]) env in
       let ft = Array.mapi (fun i v -> nf_val env sigma (napply v fargs) tt.(i)) ft in
-      mkCoFix(s,(name,tt,ft)), tt.(s)
+      mkCoFix(s,(names,tt,ft)), tt.(s)
   | Aprod(n,dom,codom) ->
       let dom,s1 = nf_type_sort env sigma dom in
+      let r1 = Sorts.relevance_of_sort s1 in
+      let n = make_annot n r1 in
       let vn = mk_rel_accu (nb_rel env) in
       let env = push_rel (LocalAssum (n,dom)) env in
       let codom,s2 = nf_type_sort env sigma (codom vn) in
@@ -393,6 +406,8 @@ and  nf_predicate env sigma ind mip params v pT =
       let rargs = Array.init n (fun i -> mkRel (n-i)) in
       let params = if Int.equal n 0 then params else Array.map (lift n) params in
       let dom = mkApp(mkIndU ind,Array.append params rargs) in
+      let r = Inductive.relevance_of_inductive env (fst ind) in
+      let name = make_annot name r in
       let body = nf_type (push_rel (LocalAssum (name,dom)) env) sigma vb in
       mkLambda(name,dom,body)
     | _ -> nf_type env sigma v
@@ -400,20 +415,21 @@ and  nf_predicate env sigma ind mip params v pT =
 and nf_evar env sigma evk args =
   let evi = try Evd.find sigma evk with Not_found -> assert false in
   let hyps = Environ.named_context_of_val (Evd.evar_filtered_hyps evi) in
-  let ty = EConstr.Unsafe.to_constr @@ Evd.evar_concl evi in
+  let ty = EConstr.to_constr ~abort_on_undefined_evars:false sigma @@ Evd.evar_concl evi in
   if List.is_empty hyps then begin
     assert (Int.equal (Array.length args) 0);
     mkEvar (evk, [||]), ty
   end
   else
-    (** Let-bound arguments are present in the evar arguments but not in the
-        type, so we turn the let into a product. *)
+    (* Let-bound arguments are present in the evar arguments but not
+       in the type, so we turn the let into a product. *)
     let hyps = Context.Named.drop_bodies hyps in
     let fold accu d = Term.mkNamedProd_or_LetIn d accu in
     let t = List.fold_left fold ty hyps in
     let ty, args = nf_args env sigma args t in
-    (** nf_args takes arguments in the reverse order but produces them in the
-        correct one, so we have to reverse them again for the evar node *)
+    (* nf_args takes arguments in the reverse order but produces them
+       in the correct one, so we have to reverse them again for the
+       evar node *)
     mkEvar (evk, Array.rev_of_list args), ty
 
 let evars_of_evar_map sigma =
@@ -476,25 +492,23 @@ let native_norm env sigma c ty =
   Format.eprintf "Numbers of free variables (named): %i\n" (List.length vl1);
   Format.eprintf "Numbers of free variables (rel): %i\n" (List.length vl2);
   *)
-  let ml_filename, prefix = Nativelib.get_ml_filename () in
-  let code, upd = mk_norm_code env (evars_of_evar_map sigma) prefix c in
-  let profile = get_profiling_enabled () in
-  match Nativelib.compile ml_filename code ~profile:profile with
-    | true, fn ->
-        if !Flags.debug then Feedback.msg_debug (Pp.str "Running norm ...");
-	let profiler_pid = if profile then start_profiler () else None in
-        let t0 = Sys.time () in
-        Nativelib.call_linker ~fatal:true prefix fn (Some upd);
-        let t1 = Sys.time () in
-	if profile then stop_profiler profiler_pid;
-        let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
-        if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
-        let res = nf_val env sigma !Nativelib.rt1 ty in
-        let t2 = Sys.time () in
-        let time_info = Format.sprintf "Reification done in %.5f@." (t2 -. t1) in
-        if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
-        EConstr.of_constr res
-    | _ -> anomaly (Pp.str "Compilation failure.") 
+    let ml_filename, prefix = Nativelib.get_ml_filename () in
+    let code, upd = mk_norm_code env (evars_of_evar_map sigma) prefix c in
+    let profile = get_profiling_enabled () in
+    let fn = Nativelib.compile ml_filename code ~profile:profile in
+    if !Flags.debug then Feedback.msg_debug (Pp.str "Running norm ...");
+    let profiler_pid = if profile then start_profiler () else None in
+    let t0 = Sys.time () in
+    Nativelib.call_linker ~fatal:true prefix fn (Some upd);
+    let t1 = Sys.time () in
+    if profile then stop_profiler profiler_pid;
+    let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
+    if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
+    let res = nf_val env sigma !Nativelib.rt1 ty in
+    let t2 = Sys.time () in
+    let time_info = Format.sprintf "Reification done in %.5f@." (t2 -. t1) in
+    if !Flags.debug then Feedback.msg_debug (Pp.str time_info);
+    EConstr.of_constr res
 
 let native_conv_generic pb sigma t =
   Nativeconv.native_conv_gen pb (evars_of_evar_map sigma) t

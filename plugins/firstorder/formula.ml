@@ -13,7 +13,6 @@ open Names
 open Constr
 open EConstr
 open Vars
-open Termops
 open Util
 open Declarations
 open Globnames
@@ -83,13 +82,13 @@ let pop t = Vars.lift (-1) t
 let kind_of_formula env sigma term =
   let normalize = special_nf env sigma in
   let cciterm = special_whd env sigma term in
-    match match_with_imp_term sigma cciterm with
+    match match_with_imp_term env sigma cciterm with
 	Some (a,b)-> Arrow (a, pop b)
       |_->
-	 match match_with_forall_term sigma cciterm with
+         match match_with_forall_term env sigma cciterm with
 	     Some (_,a,b)-> Forall (a, b)
 	   |_->
-	      match match_with_nodep_ind sigma cciterm with
+              match match_with_nodep_ind env sigma cciterm with
 		  Some (i,l,n)->
 		    let ind,u=EConstr.destInd sigma i in
 		    let u = EConstr.EInstance.kind sigma u in
@@ -100,9 +99,8 @@ let kind_of_formula env sigma term =
 		      else
 			let has_realargs=(n>0) in
 			let is_trivial=
-			  let is_constant c =
-			    Int.equal (nb_prod sigma (EConstr.of_constr c)) mib.mind_nparams in
-			    Array.exists is_constant mip.mind_nf_lc in
+                          let is_constant n = Int.equal n 0 in
+                            Array.exists is_constant mip.mind_consnrealargs in
 			  if Inductiveops.mis_is_recursive (ind,mib,mip) ||
 			    (has_realargs && not is_trivial)
 			  then
@@ -113,7 +111,7 @@ let kind_of_formula env sigma term =
 			    else
 			      Or((ind,u),l,is_trivial)
 		| _ ->
-		    match match_with_sigma_type sigma cciterm with
+                    match match_with_sigma_type env sigma cciterm with
 			Some (i,l)->
                           let (ind, u) = EConstr.destInd sigma i in
                           let u = EConstr.EInstance.kind sigma u in

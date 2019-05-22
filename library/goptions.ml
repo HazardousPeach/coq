@@ -42,13 +42,12 @@ let error_undeclared_key key =
 (****************************************************************************)
 (* 1- Tables                                                                *)
 
-class type ['a] table_of_A =
-object
-  method add : 'a -> unit
-  method remove : 'a -> unit
-  method mem : 'a -> unit
-  method print : unit
-end
+type 'a table_of_A =  {
+  add : Environ.env -> 'a -> unit;
+  remove : Environ.env -> 'a -> unit;
+  mem : Environ.env -> 'a -> unit;
+  print : unit -> unit;
+}
 
 module MakeTable =
   functor
@@ -57,7 +56,7 @@ module MakeTable =
 	  type key
 	  val compare : t -> t -> int
 	  val table : (string * key table_of_A) list ref
-	  val encode : key -> t
+          val encode : Environ.env -> key -> t
 	  val subst : substitution -> t -> t
           val printer : t -> Pp.t
           val key : option_name
@@ -73,7 +72,7 @@ module MakeTable =
 
     let _ =
       if String.List.mem_assoc nick !A.table then
-	user_err Pp.(str "Sorry, this table name is already used.")
+        user_err Pp.(str "Sorry, this table name (" ++ str nick ++ str ") is already used.")
 
     module MySet = Set.Make (struct type t = A.t let compare = A.compare end)
 
@@ -109,18 +108,17 @@ module MakeTable =
 		 (fun a b -> spc () ++ printer a ++ b)
 		 table (mt ()) ++ str "." ++ fnl ())))
 
-    class table_of_A () =
-    object
-      method add x = add_option (A.encode x)
-      method remove x = remove_option (A.encode x)
-      method mem x =
-	let y = A.encode x in
+    let table_of_A = {
+       add = (fun env x -> add_option (A.encode env x));
+       remove = (fun env x -> remove_option (A.encode env x));
+       mem = (fun env x ->
+        let y = A.encode env x in
         let answer = MySet.mem y !t in
-        Feedback.msg_info (A.member_message y answer)
-      method print = print_table A.title A.printer !t
-    end
+        Feedback.msg_info (A.member_message y answer));
+       print = (fun () -> print_table A.title A.printer !t);
+     }
 
-    let _ = A.table := (nick,new table_of_A ())::!A.table
+    let _ = A.table := (nick, table_of_A)::!A.table
     let active c = MySet.mem c !t
     let elements () = MySet.elements !t
   end
@@ -142,7 +140,7 @@ struct
   type key = string
   let compare = String.compare
   let table = string_table
-  let encode x = x
+  let encode _env x = x
   let subst _ x = x
   let printer = str
   let key = A.key
@@ -161,7 +159,7 @@ module type RefConvertArg =
 sig
   type t
   val compare : t -> t -> int
-  val encode : qualid -> t
+  val encode : Environ.env -> qualid -> t
   val subst : substitution -> t -> t
   val printer : t -> Pp.t
   val key : option_name
@@ -216,11 +214,11 @@ let get_option key = OptionMap.find key !value_tab
 
 let check_key key = try
   let _ = get_option key in
-  user_err Pp.(str "Sorry, this option name is already used.")
+  user_err Pp.(str "Sorry, this option name ("++ str (nickname key) ++ str ") is already used.")
 with Not_found ->
   if String.List.mem_assoc (nickname key) !string_table
     || String.List.mem_assoc (nickname key) !ref_table
-  then user_err Pp.(str "Sorry, this option name is already used.")
+  then user_err Pp.(str "Sorry, this option name (" ++ str (nickname key) ++ str ") is already used.")
 
 open Libobject
 
@@ -235,7 +233,7 @@ let declare_option cast uncast append ?(preprocess = fun x -> x)
   let default = read() in
   let change =
       let _ = Summary.declare_summary (nickname key)
-        { Summary.freeze_function = (fun _ -> read ());
+        { Summary.freeze_function = (fun ~marshallable -> read ());
           Summary.unfreeze_function = write;
           Summary.init_function = (fun () -> write default) } in
       let cache_options (_,(l,m,v)) =
@@ -246,14 +244,14 @@ let declare_option cast uncast append ?(preprocess = fun x -> x)
       | OptGlobal -> cache_options o
       | OptExport -> ()
       | OptLocal | OptDefault ->
-        (** Ruled out by classify_function *)
+        (* Ruled out by classify_function *)
         assert false
       in
       let open_options i  (_, (l, _, _) as o) = match l with
       | OptExport -> if Int.equal i 1 then cache_options o
       | OptGlobal -> ()
       | OptLocal | OptDefault ->
-        (** Ruled out by classify_function *)
+        (* Ruled out by classify_function *)
         assert false
       in
       let subst_options (subst,obj) = obj in
@@ -276,10 +274,7 @@ let declare_option cast uncast append ?(preprocess = fun x -> x)
   let cread () = cast (read ()) in
   let cwrite l v = warn (); change l OptSet (uncast v) in
   let cappend l v = warn (); change l OptAppend (uncast v) in
-  value_tab := OptionMap.add key (name, depr, (cread,cwrite,cappend)) !value_tab;
-  write
-
-type 'a write_function = 'a -> unit
+  value_tab := OptionMap.add key (name, depr, (cread,cwrite,cappend)) !value_tab
 
 let declare_int_option =
   declare_option
@@ -301,6 +296,18 @@ let declare_stringopt_option =
     (fun v -> StringOptValue v)
     (function StringOptValue v -> v | _ -> anomaly (Pp.str "async_option."))
     (fun _ _ -> anomaly (Pp.str "async_option."))
+
+let declare_bool_option_and_ref ~depr ~name ~key ~(value:bool) =
+  let r_opt = ref value in
+  let optwrite v = r_opt := v in
+  let optread () = !r_opt in
+  let _ = declare_bool_option {
+      optdepr = depr;
+      optname = name;
+      optkey = key;
+      optread; optwrite
+    } in
+  optread
 
 (* 3- User accessible commands *)
 
@@ -425,6 +432,3 @@ let print_tables () =
       (fun (nickkey,_) p -> p ++ str "  " ++ str nickkey ++ fnl ())
       !ref_table (mt ()) ++
     fnl ()
-
-
-

@@ -14,8 +14,8 @@ open Names
 open Nameops
 open Namegen
 open Constr
+open Context
 open Termops
-open Indtypes
 open Environ
 open Pretype_errors
 open Type_errors
@@ -104,9 +104,9 @@ let canonize_constr sigma c =
   let dn = Name.Anonymous in
   let rec canonize_binders c =
     match EConstr.kind sigma c with
-    | Prod (_,t,b) -> mkProd(dn,t,b)
-    | Lambda (_,t,b) -> mkLambda(dn,t,b)
-    | LetIn (_,u,t,b) -> mkLetIn(dn,u,t,b)
+    | Prod (x,t,b) -> mkProd({x with binder_name=dn},t,b)
+    | Lambda (x,t,b) -> mkLambda({x with binder_name=dn},t,b)
+    | LetIn (x,u,t,b) -> mkLetIn({x with binder_name=dn},u,t,b)
     | _ -> EConstr.map sigma canonize_binders c
   in
   canonize_binders c
@@ -125,12 +125,12 @@ let display_eq ~flags env sigma t1 t2 =
     printed alike. *)
 let rec pr_explicit_aux env sigma t1 t2 = function
 | [] ->
-  (** no specified flags: default. *)
-  (quote (Printer.pr_leconstr_env env sigma t1), quote (Printer.pr_leconstr_env env sigma t2))
+  (* no specified flags: default. *)
+  Printer.pr_leconstr_env env sigma t1, Printer.pr_leconstr_env env sigma t2
 | flags :: rem ->
   let equal = display_eq ~flags env sigma t1 t2 in
   if equal then
-    (** The two terms are the same from the user point of view *)
+    (* The two terms are the same from the user point of view *)
     pr_explicit_aux env sigma t1 t2 rem
   else
     let open Constrextern in
@@ -138,19 +138,37 @@ let rec pr_explicit_aux env sigma t1 t2 = function
     in
     let ct2 = Flags.with_options flags (fun () -> extern_constr false env sigma t2) ()
     in
-    quote (Ppconstr.pr_lconstr_expr ct1), quote (Ppconstr.pr_lconstr_expr ct2)
+    Ppconstr.pr_lconstr_expr env sigma ct1, Ppconstr.pr_lconstr_expr env sigma ct2
 
 let explicit_flags =
   let open Constrextern in
-  [ []; (** First, try with the current flags *)
-    [print_implicits]; (** Then with implicit *)
-    [print_universes]; (** Then with universes *)
-    [print_universes; print_implicits]; (** With universes AND implicits *)
-    [print_implicits; print_coercions; print_no_symbol]; (** Then more! *)
-    [print_universes; print_implicits; print_coercions; print_no_symbol] (** and more! *) ]
+  [ []; (* First, try with the current flags *)
+    [print_implicits]; (* Then with implicit *)
+    [print_universes]; (* Then with universes *)
+    [print_universes; print_implicits]; (* With universes AND implicits *)
+    [print_implicits; print_coercions; print_no_symbol]; (* Then more! *)
+    [print_universes; print_implicits; print_coercions; print_no_symbol] (* and more! *) ]
+
+let with_diffs pm pn =
+  if not (Proof_diffs.show_diffs ()) then pm, pn else
+  try
+    let tokenize_string = Proof_diffs.tokenize_string in
+    Pp_diff.diff_pp ~tokenize_string pm pn
+  with Pp_diff.Diff_Failure msg ->
+    begin
+      try ignore(Sys.getenv("HIDEDIFFFAILUREMSG"))
+      with Not_found ->
+        Feedback.msg_warning Pp.(
+            hov 0 (str ("Diff failure: " ^ msg) ++ spc () ++
+            hov 0 (str "Showing message without diff highlighting" ++ spc () ++
+            hov 0 (str "Please report at " ++ str Coq_config.wwwbugtracker ++ str "."))))
+    end;
+    pm, pn
 
 let pr_explicit env sigma t1 t2 =
-  pr_explicit_aux env sigma t1 t2 explicit_flags
+  let p1, p2 = pr_explicit_aux env sigma t1 t2 explicit_flags in
+  let p1, p2 = with_diffs p1 p2 in
+  quote p1, quote p2
 
 let pr_db env i =
   try
@@ -194,15 +212,15 @@ let rec pr_disjunction pr = function
   | a::l -> pr a ++ str "," ++ spc () ++ pr_disjunction pr l
   | [] -> assert false
 
-let explain_elim_arity env sigma ind sorts c pj okinds =
+let explain_elim_arity env sigma ind c pj okinds =
   let open EConstr in
   let env = make_all_name_different env sigma in
   let pi = pr_inductive env (fst ind) in
   let pc = pr_leconstr_env env sigma c in
   let msg = match okinds with
-  | Some(kp,ki,explanation) ->
-      let pki = pr_sort_family ki in
-      let pkp = pr_sort_family kp in
+  | Some(sorts,kp,ki,explanation) ->
+      let pki = Sorts.pr_sort_family ki in
+      let pkp = Sorts.pr_sort_family kp in
       let explanation =	match explanation with
 	| NonInformativeToInformative ->
           "proofs can be eliminated only to build proofs"
@@ -210,7 +228,7 @@ let explain_elim_arity env sigma ind sorts c pj okinds =
           "strong elimination on non-small inductive types leads to paradoxes"
 	| WrongArity ->
 	  "wrong arity" in
-      let ppar = pr_disjunction (fun s -> quote (pr_sort_family s)) sorts in
+      let ppar = pr_disjunction (fun s -> quote (Sorts.pr_sort_family s)) sorts in
       let ppt = pr_leconstr_env env sigma (snd (decompose_prod_assum sigma pj.uj_type)) in
       hov 0
 	(str "the return type has sort" ++ spc () ++ ppt ++ spc () ++
@@ -263,7 +281,7 @@ let explain_ill_formed_branch env sigma c ci actty expty =
 let explain_generalization env sigma (name,var) j =
   let pe = pr_ne_context_of (str "In environment") env sigma in
   let pv = pr_letype_env env sigma var in
-  let (pc,pt) = pr_ljudge_env (push_rel_assum (name,var) env) sigma j in
+  let (pc,pt) = pr_ljudge_env (push_rel_assum (make_annot name Sorts.Relevant,var) env) sigma j in
   pe ++ str "Cannot generalize" ++ brk(1,1) ++ pv ++ spc () ++
   str "over" ++ brk(1,1) ++ pc ++ str "," ++ spc () ++
   str "it has type" ++ spc () ++ pt ++
@@ -308,7 +326,7 @@ let explain_unification_error env sigma p1 p2 = function
      | UnifUnivInconsistency p ->
         if !Constrextern.print_universes then
 	  [str "universe inconsistency: " ++
-          Univ.explain_universe_inconsistency UnivNames.pr_with_global_universes p]
+          Univ.explain_universe_inconsistency (Termops.pr_evd_level sigma) p]
 	else
           [str "universe inconsistency"]
      | CannotSolveConstraint ((pb,env,t,u),e) ->
@@ -328,7 +346,7 @@ let explain_actual_type env sigma j t reason =
   let env = make_all_name_different env sigma in
   let j = j_nf_betaiotaevar env sigma j in
   let t = Reductionops.nf_betaiota env sigma t in
-  (** Actually print *)
+  (* Actually print *)
   let pe = pr_ne_context_of (str "In environment") env sigma in
   let pc = pr_leconstr_env env sigma (Environ.j_val j) in
   let (pt, pct) = pr_explicit env sigma t (Environ.j_type j) in
@@ -339,6 +357,20 @@ let explain_actual_type env sigma j t reason =
   str "has type" ++ brk(1,1) ++ pct ++ spc () ++
   str "while it is expected to have type" ++ brk(1,1) ++ pt ++
   ppreason ++ str ".")
+
+let explain_incorrect_primitive env sigma j exp =
+  let env = make_all_name_different env sigma in
+  let {uj_val=p;uj_type=t} = j in
+  let t = Reductionops.nf_betaiota env sigma t in
+  let exp = Reductionops.nf_betaiota env sigma exp in
+  (* Actually print *)
+  let pe = pr_ne_context_of (str "In environment") env sigma in
+  let (pt, pct) = pr_explicit env sigma exp t in
+  pe ++
+  hov 0 (
+  str "The primitive" ++ brk(1,1) ++ str (CPrimitives.op_or_type_to_string p) ++ spc () ++
+  str "has type" ++ brk(1,1) ++ pct ++ spc () ++
+  str "while it is expected to have type" ++ brk(1,1) ++ pt ++ str ".")
 
 let explain_cant_apply_bad_type env sigma (n,exptyp,actualtyp) rator randl =
   let randl = jv_nf_betaiotaevar env sigma randl in
@@ -391,18 +423,17 @@ let explain_unexpected_type env sigma actual_type expected_type =
   str "where" ++ spc () ++ prexp ++ str " was expected."
 
 let explain_not_product env sigma c =
-  let c = EConstr.to_constr sigma c in
-  let pr = pr_lconstr_env env sigma c in
+  let pr = pr_econstr_env env sigma c in
   str "The type of this term is a product" ++ spc () ++
   str "while it is expected to be" ++
-  (if Constr.is_Type c then str " a sort" else (brk(1,1) ++ pr)) ++ str "."
+  (if EConstr.isType sigma c then str " a sort" else (brk(1,1) ++ pr)) ++ str "."
 
 (* TODO: use the names *)
 (* (co)fixpoints *)
 let explain_ill_formed_rec_body env sigma err names i fixenv vdefj =
   let pr_lconstr_env env sigma c = pr_leconstr_env env sigma c in
   let prt_name i =
-    match names.(i) with
+    match names.(i).binder_name with
         Name id -> str "Recursive definition of " ++ Id.print id
       | Anonymous -> str "The " ++ pr_nth i ++ str " definition" in
 
@@ -417,7 +448,7 @@ let explain_ill_formed_rec_body env sigma err names i fixenv vdefj =
   | RecursionOnIllegalTerm(j,(arg_env, arg),le,lt) ->
       let arg_env = make_all_name_different arg_env sigma in
       let called =
-        match names.(j) with
+        match names.(j).binder_name with
             Name id -> Id.print id
           | Anonymous -> str "the " ++ pr_nth i ++ str " definition" in
       let pr_db x = quote (pr_db env x) in
@@ -437,7 +468,7 @@ let explain_ill_formed_rec_body env sigma err names i fixenv vdefj =
 
   | NotEnoughArgumentsForFixCall j ->
       let called =
-        match names.(j) with
+        match names.(j).binder_name with
             Name id -> Id.print id
           | Anonymous -> str "the " ++ pr_nth i ++ str " definition" in
      str "Recursive call to " ++ called ++ str " has not enough arguments"
@@ -476,6 +507,8 @@ let explain_ill_formed_rec_body env sigma err names i fixenv vdefj =
      str "The return clause of the following pattern matching should be" ++
      strbrk " a coinductive type:" ++
      spc () ++ pr_lconstr_env env sigma c
+  | FixpointOnIrrelevantInductive ->
+    strbrk "Fixpoints on proof irrelevant inductive types should produce proof irrelevant values"
   in
   prt_name i ++ str " is ill-formed." ++ fnl () ++
   pr_ne_context_of (str "In environment") env sigma ++
@@ -512,7 +545,7 @@ let pr_trailing_ne_context_of env sigma =
   if List.is_empty (Environ.rel_context env) &&
     List.is_empty (Environ.named_context env)
   then str "."
-  else (str " in environment:"++ pr_context_unlimited env sigma)
+  else (strbrk " in environment:" ++ pr_context_unlimited env sigma)
 
 let rec explain_evar_kind env sigma evk ty =
     let open Evar_kinds in
@@ -552,24 +585,24 @@ let rec explain_evar_kind env sigma evk ty =
       strbrk "an instance of type " ++ ty ++
       str " for the variable " ++ Id.print id
   | Evar_kinds.SubEvar (where,evk') ->
-      let evi = Evd.find sigma evk' in
+      let rec find_source evk =
+        let evi = Evd.find sigma evk in
+        match snd evi.evar_source with
+        | Evar_kinds.SubEvar (_,evk) -> find_source evk
+        | src -> evi,src in
+      let evi,src = find_source evk' in
       let pc = match evi.evar_body with
       | Evar_defined c -> pr_leconstr_env env sigma c
       | Evar_empty -> assert false in
       let ty' = evi.evar_concl in
-      (match where with
-      | Some Evar_kinds.Body -> str "the body of "
-      | Some Evar_kinds.Domain -> str "the domain of "
-      | Some Evar_kinds.Codomain -> str "the codomain of "
-      | None ->
-      pr_existential_key sigma evk ++ str " of type " ++ ty ++
-      str " in the partial instance " ++ pc ++
-      str " found for ") ++
-      explain_evar_kind env sigma evk'
-      (pr_leconstr_env env sigma ty') (snd evi.evar_source)
+      pr_existential_key sigma evk ++
+      strbrk " in the partial instance " ++ pc ++
+      strbrk " found for " ++
+      explain_evar_kind env sigma evk
+      (pr_leconstr_env env sigma ty') src
 
 let explain_typeclass_resolution env sigma evi k =
-  match Typeclasses.class_of_constr sigma evi.evar_concl with
+  match Typeclasses.class_of_constr env sigma evi.evar_concl with
   | Some _ ->
     let env = Evd.evar_filtered_env evi in
       fnl () ++ str "Could not find an instance for " ++
@@ -582,7 +615,7 @@ let explain_placeholder_kind env sigma c e =
   | Some (SeveralInstancesFound n) ->
       strbrk " (several distinct possible type class instances found)"
   | None ->
-      match Typeclasses.class_of_constr sigma c with
+      match Typeclasses.class_of_constr env sigma c with
       | Some _ -> strbrk " (no type class instance found)"
       | _ -> mt ()
 
@@ -599,6 +632,20 @@ let explain_var_not_found env id =
   str "The variable" ++ spc () ++ Id.print id ++
   spc () ++ str "was not found" ++
   spc () ++ str "in the current" ++ spc () ++ str "environment" ++ str "."
+
+
+let explain_evar_not_found env sigma id =
+  let undef = Evar.Map.domain (Evd.undefined_map sigma) in
+  let all_undef_evars = Evar.Set.elements undef in
+  let f ev = Id.equal id (Termops.evar_suggested_name ev sigma) in
+  if List.exists f all_undef_evars then
+    (* The name is used for printing but is not user-given *)
+    str "?" ++ Id.print id ++
+    strbrk " is a generated name. Only user-given names for existential variables" ++
+    strbrk " can be referenced. To give a user name to an existential variable," ++
+    strbrk " introduce it with the ?[name] syntax."
+  else
+    str "Unknown existential variable."
 
 let explain_wrong_case_info env (ind,u) ci =
   let pi = pr_inductive env ind in
@@ -684,6 +731,14 @@ let explain_undeclared_universe env sigma l =
     Termops.pr_evd_level sigma l ++
     spc () ++ str "(maybe a bugged tactic)."
 
+let explain_disallowed_sprop () =
+  Pp.(strbrk "SProp not allowed, you need to "
+      ++ str "Set Allow StrictProp"
+      ++ strbrk " or to use the -allow-sprop command-line-flag.")
+
+let explain_bad_relevance env =
+  strbrk "Bad relevance (maybe a bugged tactic)."
+
 let explain_type_error env sigma err =
   let env = make_all_name_different env sigma in
   match err with
@@ -697,8 +752,8 @@ let explain_type_error env sigma err =
       explain_bad_assumption env sigma c
   | ReferenceVariables (id,c) ->
       explain_reference_variables sigma id c
-  | ElimArity (ind, aritylst, c, pj, okinds) ->
-      explain_elim_arity env sigma ind aritylst c pj okinds
+  | ElimArity (ind, c, pj, okinds) ->
+      explain_elim_arity env sigma ind c pj okinds
   | CaseNotInductive cj ->
       explain_case_not_inductive env sigma cj
   | NumberBranches (cj, n) ->
@@ -708,7 +763,9 @@ let explain_type_error env sigma err =
   | Generalization (nvar, c) ->
       explain_generalization env sigma nvar c
   | ActualType (j, pt) ->
-      explain_actual_type env sigma j pt None
+    explain_actual_type env sigma j pt None
+  | IncorrectPrimitive (j, t) ->
+    explain_incorrect_primitive env sigma j t
   | CantApplyBadType (t, rator, randl) ->
       explain_cant_apply_bad_type env sigma t rator randl
   | CantApplyNonFunctional (rator, randl) ->
@@ -723,6 +780,8 @@ let explain_type_error env sigma err =
       explain_unsatisfied_constraints env sigma cst
   | UndeclaredUniverse l ->
      explain_undeclared_universe env sigma l
+  | DisallowedSProp -> explain_disallowed_sprop ()
+  | BadRelevance -> explain_bad_relevance env
 
 let pr_position (cl,pos) =
   let clpos = match cl with
@@ -769,16 +828,17 @@ let pr_constraints printenv env sigma evars cstrs =
       h 0 (pe ++ evs ++ pr_evar_constraints sigma cstrs)
     else
       let filter evk _ = Evar.Map.mem evk evars in
-      pr_evar_map_filter ~with_univs:false filter sigma
+      pr_evar_map_filter ~with_univs:false filter env sigma
 
 let explain_unsatisfiable_constraints env sigma constr comp =
   let (_, constraints) = Evd.extract_all_conv_pbs sigma in
+  let tcs = Evd.get_typeclass_evars sigma in
   let undef = Evd.undefined_map sigma in
-  (** Only keep evars that are subject to resolution and members of the given
+  (* Only keep evars that are subject to resolution and members of the given
      component. *)
-  let is_kept evk evi = match comp with
-  | None -> Typeclasses.is_resolvable evi
-  | Some comp -> Typeclasses.is_resolvable evi && Evar.Set.mem evk comp
+  let is_kept evk _ = match comp with
+  | None -> Evar.Set.mem evk tcs
+  | Some comp -> Evar.Set.mem evk tcs && Evar.Set.mem evk comp
   in
   let undef = 
     let m = Evar.Map.filter is_kept undef in
@@ -813,6 +873,7 @@ let explain_pretype_error env sigma err =
   | UnifOccurCheck (ev,rhs) -> explain_occur_check env sigma ev rhs
   | UnsolvableImplicit (evk,exp) -> explain_unsolvable_implicit env sigma evk exp
   | VarNotFound id -> explain_var_not_found env id
+  | EvarNotFound id -> explain_evar_not_found env sigma id
   | UnexpectedType (actual,expect) ->
     let env, actual, expect = contract2 env sigma actual expect in
     explain_unexpected_type env sigma actual expect
@@ -834,6 +895,8 @@ let explain_pretype_error env sigma err =
   | TypingError t -> explain_type_error env sigma t
   | CannotUnifyOccurrences (b,c1,c2,e) -> explain_cannot_unify_occurrences env sigma b c1 c2 e
   | UnsatisfiableConstraints (c,comp) -> explain_unsatisfiable_constraints env sigma c comp
+  | DisallowedSProp -> explain_disallowed_sprop ()
+
 (* Module errors *)
 
 open Modops
@@ -884,8 +947,6 @@ let explain_not_match_error = function
     let status b = if b then str"polymorphic" else str"monomorphic" in
       str "a " ++ status b ++ str" declaration was expected, but a " ++ 
 	status (not b) ++ str" declaration was found"
-  | IncompatibleInstances -> 
-    str"polymorphic universe instances do not match"
   | IncompatibleUniverses incon ->
     str"the universe constraints are inconsistent: " ++
       Univ.explain_universe_inconsistency UnivNames.pr_with_global_universes incon
@@ -894,11 +955,24 @@ let explain_not_match_error = function
       quote (Printer.safe_pr_lconstr_env env (Evd.from_env env) t1) ++ spc () ++
       str "compared to " ++ spc () ++
       quote (Printer.safe_pr_lconstr_env env (Evd.from_env env) t2)
-  | IncompatibleConstraints cst ->
-    str " the expected (polymorphic) constraints do not imply " ++
-      let cst = Univ.UContext.constraints (Univ.AUContext.repr cst) in
-      (** FIXME: provide a proper naming for the bound variables *)
-      quote (Univ.pr_constraints (Termops.pr_evd_level Evd.empty) cst)
+  | IncompatibleConstraints { got; expect } ->
+      let open Univ in
+    let pr_auctx auctx =
+      let sigma = Evd.from_ctx
+          (UState.of_binders
+             (UnivNames.universe_binders_with_opt_names auctx None))
+      in
+      let uctx = AUContext.repr auctx in
+      Printer.pr_universe_instance_constraints sigma
+        (UContext.instance uctx)
+        (UContext.constraints uctx)
+    in
+    str "incompatible polymorphic binders: got" ++ spc () ++ h 0 (pr_auctx got) ++ spc() ++
+    str "but expected" ++ spc() ++ h 0 (pr_auctx expect) ++
+    (if not (Int.equal (AUContext.size got) (AUContext.size expect)) then mt() else
+       fnl() ++ str "(incompatible constraints)")
+  | IncompatibleVariance ->
+    str "incompatible variance information"
 
 let explain_signature_mismatch l spec why =
   str "Signature components for label " ++ Label.print l ++
@@ -1013,37 +1087,38 @@ let explain_module_internalization_error = function
 
 (* Typeclass errors *)
 
-let explain_not_a_class env c =
-  let sigma = Evd.from_env env in
-  let c = EConstr.to_constr sigma c in
-  pr_constr_env env sigma c ++ str" is not a declared type class."
+let explain_not_a_class env sigma c =
+  pr_econstr_env env sigma c ++ str" is not a declared type class."
 
-let explain_unbound_method env cid { CAst.v = id } =
+let explain_unbound_method env sigma cid { CAst.v = id } =
   str "Unbound method name " ++ Id.print (id) ++ spc () ++
   str"of class" ++ spc () ++ pr_global cid ++ str "."
 
-let pr_constr_exprs exprs =
+let pr_constr_exprs env sigma exprs =
   hv 0 (List.fold_right
-	 (fun d pps -> ws 2 ++ Ppconstr.pr_constr_expr d ++ pps)
+         (fun d pps -> ws 2 ++ Ppconstr.pr_constr_expr env sigma d ++ pps)
          exprs (mt ()))
 
 let explain_mismatched_contexts env c i j =
+  let sigma = Evd.from_env env in
+  let pm, pn = with_diffs (pr_rel_context env sigma j) (pr_constr_exprs env sigma i) in
   str"Mismatched contexts while declaring instance: " ++ brk (1,1) ++
-    hov 1 (str"Expected:" ++ brk (1, 1) ++ pr_rel_context env (Evd.from_env env) j) ++
+    hov 1 (str"Expected:" ++ brk (1, 1) ++ pm) ++
     fnl () ++ brk (1,1) ++
-    hov 1 (str"Found:" ++ brk (1, 1) ++ pr_constr_exprs i)
+    hov 1 (str"Found:" ++ brk (1, 1) ++ pn)
 
-let explain_typeclass_error env = function
-  | NotAClass c -> explain_not_a_class env c
-  | UnboundMethod (cid, id) -> explain_unbound_method env cid id
+let explain_typeclass_error env sigma = function
+  | NotAClass c -> explain_not_a_class env sigma c
+  | UnboundMethod (cid, id) -> explain_unbound_method env sigma cid id
 
 (* Refiner errors *)
 
 let explain_refiner_bad_type env sigma arg ty conclty =
+  let pm, pn = with_diffs (pr_lconstr_env env sigma ty) (pr_lconstr_env env sigma conclty) in
   str "Refiner was given an argument" ++ brk(1,1) ++
   pr_lconstr_env env sigma arg ++ spc () ++
-  str "of type" ++ brk(1,1) ++ pr_lconstr_env env sigma ty ++ spc () ++
-  str "instead of" ++ brk(1,1) ++ pr_lconstr_env env sigma conclty ++ str "."
+  str "of type" ++ brk(1,1) ++ pm ++ spc () ++
+  str "instead of" ++ brk(1,1) ++ pn ++ str "."
 
 let explain_refiner_unresolved_bindings l =
   str "Unable to find an instance for the " ++
@@ -1103,7 +1178,7 @@ let error_ill_formed_inductive env c v =
 
 let error_ill_formed_constructor env id c v nparams nargs =
   let pv = pr_lconstr_env env (Evd.from_env env) v in
-  let atomic = Int.equal (nb_prod Evd.empty (EConstr.of_constr c)) (** FIXME *) 0 in
+  let atomic = Int.equal (nb_prod Evd.empty (EConstr.of_constr c)) (* FIXME *) 0 in
   str "The type of constructor" ++ brk(1,1) ++ Id.print id ++ brk(1,1) ++
   str "is not valid;" ++ brk(1,1) ++
   strbrk (if atomic then "it must be " else "its conclusion must be ") ++
@@ -1154,6 +1229,9 @@ let error_bad_entry () =
 let error_large_non_prop_inductive_not_in_type () =
   str "Large non-propositional inductive types must be in Type."
 
+let error_inductive_bad_univs () =
+  str "Incorrect universe constraints declared for inductive type."
+
 (* Recursion schemes errors *)
 
 let error_not_allowed_case_analysis env isrec kind i =
@@ -1190,7 +1268,8 @@ let explain_inductive_error = function
   | NotAnArity (env, c) -> error_not_an_arity env c
   | BadEntry -> error_bad_entry ()
   | LargeNonPropInductiveNotInType ->
-      error_large_non_prop_inductive_not_in_type ()
+    error_large_non_prop_inductive_not_in_type ()
+  | BadUnivs -> error_inductive_bad_univs ()
 
 (* Recursion schemes errors *)
 
@@ -1269,46 +1348,6 @@ let explain_pattern_matching_error env sigma = function
   | CannotInferPredicate typs ->
       explain_cannot_infer_predicate env sigma typs
 
-let map_pguard_error f = function
-| NotEnoughAbstractionInFixBody -> NotEnoughAbstractionInFixBody
-| RecursionNotOnInductiveType c -> RecursionNotOnInductiveType (f c)
-| RecursionOnIllegalTerm (n, (env, c), l1, l2) -> RecursionOnIllegalTerm (n, (env, f c), l1, l2)
-| NotEnoughArgumentsForFixCall n -> NotEnoughArgumentsForFixCall n
-| CodomainNotInductiveType c -> CodomainNotInductiveType (f c)
-| NestedRecursiveOccurrences -> NestedRecursiveOccurrences
-| UnguardedRecursiveCall c -> UnguardedRecursiveCall (f c)
-| RecCallInTypeOfAbstraction c -> RecCallInTypeOfAbstraction (f c)
-| RecCallInNonRecArgOfConstructor c -> RecCallInNonRecArgOfConstructor (f c)
-| RecCallInTypeOfDef c -> RecCallInTypeOfDef (f c)
-| RecCallInCaseFun c -> RecCallInCaseFun (f c)
-| RecCallInCaseArg c -> RecCallInCaseArg (f c)
-| RecCallInCasePred c -> RecCallInCasePred (f c)
-| NotGuardedForm c -> NotGuardedForm (f c)
-| ReturnPredicateNotCoInductive c -> ReturnPredicateNotCoInductive (f c)
-
-let map_ptype_error f = function
-| UnboundRel n -> UnboundRel n
-| UnboundVar id -> UnboundVar id
-| NotAType j -> NotAType (on_judgment f j)
-| BadAssumption j -> BadAssumption (on_judgment f j)
-| ReferenceVariables (id, c) -> ReferenceVariables (id, f c)
-| ElimArity (pi, dl, c, j, ar) -> ElimArity (pi, dl, f c, on_judgment f j, ar)
-| CaseNotInductive j -> CaseNotInductive (on_judgment f j)
-| WrongCaseInfo (pi, ci) -> WrongCaseInfo (pi, ci)
-| NumberBranches (j, n) -> NumberBranches (on_judgment f j, n)
-| IllFormedBranch (c, pc, t1, t2) -> IllFormedBranch (f c, pc, f t1, f t2)
-| Generalization ((na, t), j) -> Generalization ((na, f t), on_judgment f j)
-| ActualType (j, t) -> ActualType (on_judgment f j, f t)
-| CantApplyBadType ((n, c1, c2), j, vj) ->
-  CantApplyBadType ((n, f c1, f c2), on_judgment f j, Array.map (on_judgment f) vj)
-| CantApplyNonFunctional (j, jv) -> CantApplyNonFunctional (on_judgment f j, Array.map (on_judgment f) jv)
-| IllFormedRecBody (ge, na, n, env, jv) ->
-  IllFormedRecBody (map_pguard_error f ge, na, n, env, Array.map (on_judgment f) jv)
-| IllTypedRecBody (n, na, jv, t) ->
-  IllTypedRecBody (n, na, Array.map (on_judgment f) jv, Array.map f t)
-| UnsatisfiedConstraints g -> UnsatisfiedConstraints g
-| UndeclaredUniverse l -> UndeclaredUniverse l
-
 let explain_reduction_tactic_error = function
   | Tacred.InvalidAbstraction (env,sigma,c,(env',e)) ->
       let e = map_ptype_error EConstr.of_constr e in
@@ -1317,12 +1356,12 @@ let explain_reduction_tactic_error = function
       spc () ++ str "is not well typed." ++ fnl () ++
       explain_type_error env' (Evd.from_env env') e
 
-let explain_numeral_notation_error env sigma = function
+let explain_prim_token_notation_error kind env sigma = function
   | Notation.UnexpectedTerm c ->
     (strbrk "Unexpected term " ++
      pr_constr_env env sigma c ++
-     strbrk " while parsing a numeral notation.")
+     strbrk (" while parsing a "^kind^" notation."))
   | Notation.UnexpectedNonOptionTerm c ->
     (strbrk "Unexpected non-option term " ++
      pr_constr_env env sigma c ++
-     strbrk " while parsing a numeral notation.")
+     strbrk (" while parsing a "^kind^" notation."))

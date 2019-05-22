@@ -71,13 +71,15 @@ and conv_whd env pb k whd1 whd2 cu =
 	done;
 	!rcu
       else raise NotConvertible
+  | Vint64 i1, Vint64 i2 ->
+    if Int64.equal i1 i2 then cu else raise NotConvertible
   | Vatom_stk(a1,stk1), Vatom_stk(a2,stk2) ->
       conv_atom env pb k a1 stk1 a2 stk2 cu
   | Vfun _, _ | _, Vfun _ ->
      (* on the fly eta expansion *)
       conv_val env CONV (k+1) (apply_whd k whd1) (apply_whd k whd2) cu
 
-  | Vprod _, _ | Vfix _, _ | Vcofix _, _  | Vconstr_const _, _
+  | Vprod _, _ | Vfix _, _ | Vcofix _, _  | Vconstr_const _, _ | Vint64 _, _
   | Vconstr_block _, _ | Vatom_stk _, _ -> raise NotConvertible
 
 
@@ -86,17 +88,11 @@ and conv_atom env pb k a1 stk1 a2 stk2 cu =
   match a1, a2 with
   | Aind ((mi,_i) as ind1) , Aind ind2 ->
     if eq_ind ind1 ind2 && compare_stack stk1 stk2 then
-      if Environ.polymorphic_ind ind1 env then
-        let mib = Environ.lookup_mind mi env in
-	let ulen = 
-          match mib.Declarations.mind_universes with
-          | Declarations.Monomorphic_ind ctx -> Univ.ContextSet.size ctx
-          | Declarations.Polymorphic_ind auctx -> Univ.AUContext.size auctx
-          | Declarations.Cumulative_ind cumi -> 
-            Univ.AUContext.size (Univ.ACumulativityInfo.univ_context cumi)
-        in
+      let ulen = Univ.AUContext.size (Environ.mind_context env mi) in
+      if ulen = 0 then
+        conv_stack env k stk1 stk2 cu
+      else
         match stk1 , stk2 with
-	| [], [] -> assert (Int.equal ulen 0); cu
         | Zapp args1 :: stk1' , Zapp args2 :: stk2' ->
           assert (ulen <= nargs args1);
           assert (ulen <= nargs args2);
@@ -108,8 +104,6 @@ and conv_atom env pb k a1 stk1 a2 stk2 cu =
           conv_arguments env ~from:ulen k args1 args2
 	    (conv_stack env k stk1' stk2' cu)
         | _, _ -> assert false (* Should not happen if problem is well typed *)
-      else
-	conv_stack env k stk1 stk2 cu
     else raise NotConvertible
   | Aid ik1, Aid ik2 ->
     if Vmvalues.eq_id_key ik1 ik2 && compare_stack stk1 stk2 then
@@ -189,9 +183,9 @@ let warn_bytecode_compiler_failed =
                       strbrk "falling back to standard conversion")
 
 let vm_conv_gen cv_pb env univs t1 t2 =
-  if not Coq_config.bytecode_compiler then
+  if not (typing_flags env).Declarations.enable_VM then
     Reduction.generic_conv cv_pb ~l2r:false (fun _ -> None)
-      full_transparent_state env univs t1 t2
+      TransparentState.full env univs t1 t2
   else
   try
     let v1 = val_of_constr env t1 in
@@ -200,7 +194,7 @@ let vm_conv_gen cv_pb env univs t1 t2 =
   with Not_found | Invalid_argument _ ->
     warn_bytecode_compiler_failed ();
     Reduction.generic_conv cv_pb ~l2r:false (fun _ -> None)
-      full_transparent_state env univs t1 t2
+      TransparentState.full env univs t1 t2
 
 let vm_conv cv_pb env t1 t2 =
   let univs = Environ.universes env in

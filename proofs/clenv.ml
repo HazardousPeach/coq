@@ -15,6 +15,7 @@ open Names
 open Nameops
 open Termops
 open Constr
+open Context
 open Namegen
 open Environ
 open Evd
@@ -69,7 +70,7 @@ let clenv_push_prod cl =
     | Prod (na,t,u) ->
 	let mv = new_meta () in
 	let dep = not (noccurn (cl_sigma cl) 1 u) in
-	let na' = if dep then na else Anonymous in
+        let na' = if dep then na.binder_name else Anonymous in
         let e' = meta_declare mv t ~name:na' cl.evd in
 	let concl = if dep then subst1 (mkMeta mv) u else u in
 	let def = applist (cl.templval.rebus,[mkMeta mv]) in
@@ -103,7 +104,7 @@ let clenv_environments evd bound t =
       | (n, Prod (na,t1,t2)) ->
 	  let mv = new_meta () in
 	  let dep = not (noccurn evd 1 t2) in
-	  let na' = if dep then na else Anonymous in
+          let na' = if dep then na.binder_name else Anonymous in
           let e' = meta_declare mv t1 ~name:na' e in
 	  clrec (e', (mkMeta mv)::metas) (Option.map ((+) (-1)) n)
 	    (if dep then (subst1 (mkMeta mv) t2) else t2)
@@ -277,7 +278,7 @@ let adjust_meta_source evd mv = function
   | loc,Evar_kinds.VarInstance id ->
     let rec match_name c l =
       match EConstr.kind evd c, l with
-      | Lambda (Name id,_,c), a::l when EConstr.eq_constr evd a (mkMeta mv) -> Some id
+      | Lambda ({binder_name=Name id},_,c), a::l when EConstr.eq_constr evd a (mkMeta mv) -> Some id
       | Lambda (_,_,c), a::l -> match_name c l
       | _ -> None in
     (* This is very ad hoc code so that an evar inherits the name of the binder
@@ -324,21 +325,21 @@ let adjust_meta_source evd mv = function
 *)
 
 let clenv_pose_metas_as_evars clenv dep_mvs =
-  let rec fold clenv = function
-  | [] -> clenv
+  let rec fold clenv evs = function
+  | [] -> clenv, evs
   | mv::mvs ->
       let ty = clenv_meta_type clenv mv in
       (* Postpone the evar-ization if dependent on another meta *)
       (* This assumes no cycle in the dependencies - is it correct ? *)
-      if occur_meta clenv.evd ty then fold clenv (mvs@[mv])
+      if occur_meta clenv.evd ty then fold clenv evs (mvs@[mv])
       else
         let src = evar_source_of_meta mv clenv.evd in
         let src = adjust_meta_source clenv.evd mv src in
         let evd = clenv.evd in
 	let (evd, evar) = new_evar (cl_env clenv) evd ~src ty in
 	let clenv = clenv_assign mv evar {clenv with evd=evd} in
-	fold clenv mvs in
-  fold clenv dep_mvs
+        fold clenv (fst (destEvar evd evar) :: evs) mvs in
+  fold clenv [] dep_mvs
 
 (******************************************************************)
 
@@ -577,7 +578,7 @@ let pr_clenv clenv =
   h 0
     (str"TEMPL: " ++ Termops.Internal.print_constr_env clenv.env clenv.evd clenv.templval.rebus ++
      str" : " ++ Termops.Internal.print_constr_env clenv.env clenv.evd clenv.templtyp.rebus ++ fnl () ++
-     pr_evar_map (Some 2) clenv.evd)
+     pr_evar_map (Some 2) clenv.env clenv.evd)
 
 (****************************************************************)
 (** Evar version of mk_clenv *)
@@ -601,29 +602,36 @@ let make_evar_clause env sigma ?len t =
   | None -> -1
   | Some n -> assert (0 <= n); n
   in
-  (** FIXME: do the renaming online *)
+  (* FIXME: do the renaming online *)
   let t = rename_bound_vars_as_displayed sigma Id.Set.empty [] t in
-  let rec clrec (sigma, holes) n t =
+  let rec clrec (sigma, holes) inst n t =
     if n = 0 then (sigma, holes, t)
     else match EConstr.kind sigma t with
-    | Cast (t, _, _) -> clrec (sigma, holes) n t
+    | Cast (t, _, _) -> clrec (sigma, holes) inst n t
     | Prod (na, t1, t2) ->
-      let store = Typeclasses.set_resolvable Evd.Store.empty false in
-      let (sigma, ev) = new_evar ~store env sigma t1 in
+      (* Share the evar instances as we are living in the same context *)
+      let inst, ctx, args, subst = match inst with
+      | None ->
+        (* Dummy type *)
+        let ctx, _, args, subst = push_rel_context_to_named_context env sigma mkProp in
+        Some (ctx, args, subst), ctx, args, subst
+      | Some (ctx, args, subst) -> inst, ctx, args, subst
+      in
+      let (sigma, ev) = new_evar_instance ~typeclass_candidate:false ctx sigma (csubst_subst subst t1) args in
       let dep = not (noccurn sigma 1 t2) in
       let hole = {
         hole_evar = ev;
         hole_type = t1;
         hole_deps = dep;
         (* We fix it later *)
-        hole_name = na;
+        hole_name = na.binder_name;
       } in
       let t2 = if dep then subst1 ev t2 else t2 in
-      clrec (sigma, hole :: holes) (pred n) t2
-    | LetIn (na, b, _, t) -> clrec (sigma, holes) n (subst1 b t)
+      clrec (sigma, hole :: holes) inst (pred n) t2
+    | LetIn (na, b, _, t) -> clrec (sigma, holes) inst n (subst1 b t)
     | _ -> (sigma, holes, t)
   in
-  let (sigma, holes, t) = clrec (sigma, []) bound t in
+  let (sigma, holes, t) = clrec (sigma, []) None bound t in
   let holes = List.rev holes in
   let clause = { cl_concl = t; cl_holes = holes } in
   (sigma, clause)
@@ -670,7 +678,7 @@ let define_with_type sigma env ev c =
   let t = Retyping.get_type_of env sigma ev in
   let ty = Retyping.get_type_of env sigma c in
   let j = Environ.make_judge c ty in
-  let (sigma, j) = Coercion.inh_conv_coerce_to true env sigma j t in
+  let (sigma, j) = Coercion.inh_conv_coerce_to ~program_mode:false true env sigma j t in
   let (ev, _) = destEvar sigma ev in
   let sigma = Evd.define ev j.Environ.uj_val sigma in
   sigma
@@ -681,7 +689,7 @@ let solve_evar_clause env sigma hyp_only clause = function
   let open EConstr in
   let fold holes h =
     if h.hole_deps then
-      (** Some subsequent term uses the hole *)
+      (* Some subsequent term uses the hole *)
       let (ev, _) = destEvar sigma h.hole_evar in
       let is_dep hole = occur_evar sigma ev hole.hole_type in
       let in_hyp = List.exists is_dep holes in
@@ -690,7 +698,7 @@ let solve_evar_clause env sigma hyp_only clause = function
       let h = { h with hole_deps = dep } in
       h :: holes
     else
-      (** The hole does not occur anywhere *)
+      (* The hole does not occur anywhere *)
       h :: holes
   in
   let holes = List.fold_left fold [] (List.rev clause.cl_holes) in

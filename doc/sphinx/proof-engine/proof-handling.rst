@@ -30,7 +30,7 @@ When a proof is completed, the message ``Proof completed`` is displayed.
 One can then register this proof as a defined constant in the
 environment. Because there exists a correspondence between proofs and
 terms of λ-calculus, known as the *Curry-Howard isomorphism*
-:cite:`How80,Bar81,Gir89,Hue88`, |Coq| stores proofs as terms of |Cic|. Those
+:cite:`How80,Bar81,Gir89,H89`, |Coq| stores proofs as terms of |Cic|. Those
 terms are called *proof terms*.
 
 
@@ -67,6 +67,7 @@ list of assertion commands is given in :ref:`Assertions`. The command
    added to the environment as an opaque constant.
 
    .. exn:: Attempt to save an incomplete proof.
+      :undocumented:
 
    .. note::
 
@@ -106,6 +107,7 @@ list of assertion commands is given in :ref:`Assertions`. The command
    proof was edited.
 
    .. exn:: No focused proof (No proof-editing in progress).
+      :undocumented:
 
    .. cmdv::  Abort @ident
 
@@ -144,8 +146,9 @@ list of assertion commands is given in :ref:`Assertions`. The command
    the proof is a subset of the declared one.
 
    The set of declared variables is closed under type dependency. For
-   example if ``T`` is variable and a is a variable of type ``T``, the commands
-   ``Proof using a`` and ``Proof using T a`` are actually equivalent.
+   example, if ``T`` is a variable and ``a`` is a variable of type
+   ``T``, then the commands ``Proof using a`` and ``Proof using T a``
+   are equivalent.
 
    .. cmdv:: Proof using {+ @ident } with @tactic
 
@@ -281,6 +284,7 @@ Navigation in the proof tree
    This command restores the proof editing process to the original goal.
 
    .. exn:: No focused proof to restart.
+      :undocumented:
 
 .. cmd:: Focus
 
@@ -318,7 +322,7 @@ Navigation in the proof tree
 .. index:: {
            }
 
-.. cmd:: %{ %| %}
+.. cmd:: {| %{ | %} }
 
    The command ``{`` (without a terminating period) focuses on the first
    goal, much like :cmd:`Focus` does, however, the subproof can only be
@@ -342,10 +346,45 @@ Navigation in the proof tree
 
          Goals are just existential variables and existential variables do not
          get a name by default. You can give a name to a goal by using :n:`refine ?[@ident]`.
+         You may also wrap this in an Ltac-definition like:
+
+         .. coqtop:: in
+
+            Ltac name_goal name := refine ?[name].
 
       .. seealso:: :ref:`existential-variables`
 
       .. example::
+
+         This first example uses the Ltac definition above, and the named goals
+         only serve for documentation.
+
+         .. coqtop:: all
+
+            Goal forall n, n + 0 = n.
+            Proof.
+            induction n; [ name_goal base | name_goal step ].
+            [base]: {
+
+         .. coqtop:: all
+
+            reflexivity.
+
+         .. coqtop:: in
+
+            }
+
+         .. coqtop:: all
+
+            [step]: {
+
+         .. coqtop:: all
+
+            simpl.
+            f_equal.
+            assumption.
+            }
+            Qed.
 
          This can also be a way of focusing on a shelved goal, for instance:
 
@@ -391,7 +430,7 @@ not go beyond enclosing ``{`` and ``}``, so bullets can be reused as further
 nesting levels provided they are delimited by these. Bullets are made of
 repeated ``-``, ``+`` or ``*`` symbols:
 
-.. prodn:: bullet ::= {+ - } %| {+ + } %| {+ * }
+.. prodn:: bullet ::= {| {+ - } | {+ + } | {+ * } }
 
 Note again that when a focused goal is proved a message is displayed
 together with a suggestion about the right bullet or ``}`` to unfocus it
@@ -453,7 +492,7 @@ The following example script illustrates all these features:
 
 Set Bullet Behavior
 ```````````````````
-.. opt:: Bullet Behavior  %( "None" %| "Strict Subproofs" %)
+.. opt:: Bullet Behavior {| "None" | "Strict Subproofs" }
    :name: Bullet Behavior
 
    This option controls the bullet behavior and can take two possible values:
@@ -472,13 +511,14 @@ Requesting information
    This command displays the current goals.
 
    .. exn:: No focused proof.
+      :undocumented:
 
    .. cmdv:: Show @num
 
       Displays only the :token:`num`\-th subgoal.
 
       .. exn:: No such goal.
-
+         :undocumented:
 
    .. cmdv:: Show @ident
 
@@ -489,15 +529,11 @@ Requesting information
 
       .. example::
 
-         .. coqtop:: all
+         .. coqtop:: all abort
 
             Goal exists n, n = 0.
             eexists ?[n].
             Show n.
-
-         .. coqtop:: none
-
-            Abort.
 
    .. cmdv:: Show Script
       :name: Show Script
@@ -507,6 +543,10 @@ Requesting information
       holes (subgoals not yet proved). They are printed under the form
 
       ``<Your Tactic Text here>``.
+
+      .. deprecated:: 8.10
+
+         Please use a text editor.
 
    .. cmdv:: Show Proof
       :name: Show Proof
@@ -564,6 +604,7 @@ Requesting information
             Show Match nat.
 
       .. exn:: Unknown inductive type.
+         :undocumented:
 
    .. cmdv:: Show Universes
       :name: Show Universes
@@ -591,7 +632,8 @@ Showing differences between proof steps
 ---------------------------------------
 
 
-Coq can automatically highlight the differences between successive proof steps.
+Coq can automatically highlight the differences between successive proof steps and between
+values in some error messages.
 For example, the following screenshots of CoqIDE and coqtop show the application
 of the same :tacn:`intros` tactic.  The tactic creates two new hypotheses, highlighted in green.
 The conclusion is entirely in pale green because although it’s changed, no tokens were added
@@ -628,15 +670,24 @@ new, no line of old text is shown for them.
   .. image:: ../_static/diffs-coqtop-on3.png
      :alt: coqtop with Set Diffs on
 
+This image shows an error message with diff highlighting in CoqIDE:
+
+..
+
+  .. image:: ../_static/diffs-error-message.png
+     :alt: |CoqIDE| error message with diffs
+
 How to enable diffs
 ```````````````````
 
-.. opt:: Diffs %( "on" %| "off" %| "removed" %)
+.. opt:: Diffs {| "on" | "off" | "removed" }
    :name: Diffs
 
-   The “on” option highlights added tokens in green, while the “removed” option
+   The “on” setting highlights added tokens in green, while the “removed” setting
    additionally reprints items with removed tokens in red.  Unchanged tokens in
-   modified items are shown with pale green or red.  (Colors are user-configurable.)
+   modified items are shown with pale green or red.  Diffs in error messages
+   use red and green for the compared values; they appear regardless of the setting.
+   (Colors are user-configurable.)
 
 For coqtop, showing diffs can be enabled when starting coqtop with the
 ``-diffs on|off|removed`` command-line option or by setting the :opt:`Diffs` option
@@ -698,13 +749,9 @@ Notes:
 
       split.
 
-    .. coqtop:: all
+    .. coqtop:: all abort
 
       2: split.
-
-    .. coqtop:: none
-
-      Abort.
 
   ..
 
@@ -718,13 +765,9 @@ Notes:
 
        intros n.
 
-    .. coqtop:: all
+    .. coqtop:: all abort
 
       intros m.
-
-    .. coqtop:: none
-
-      Abort.
 
 This screen shot shows the result of applying a :tacn:`split` tactic that replaces one goal
 with 2 goals.  Notice that the goal ``P 1`` is not highlighted at all after
@@ -755,18 +798,6 @@ Controlling the effect of proof editing commands
    in the proof development.
    When unset, it goes back to the default mode which is to print all
    available hypotheses.
-
-
-.. flag:: Automatic Introduction
-
-   This option controls the way binders are handled
-   in assertion commands such as :n:`Theorem @ident {? @binders} : @term`. When the
-   option is on, which is the default, binders are automatically put in
-   the local context of the goal to prove.
-
-   When the option is off, binders are discharged on the statement to be
-   proved and a tactic such as :tacn:`intro` (see Section :ref:`managingthelocalcontext`)
-   has to be used to move the assumptions to the local context.
 
 
 .. flag:: Nested Proofs Allowed

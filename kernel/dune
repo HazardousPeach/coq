@@ -3,13 +3,26 @@
  (synopsis "The Coq Kernel")
  (public_name coq.kernel)
  (wrapped false)
- (modules_without_implementation cinstr nativeinstr)
- (libraries clib config lib byterun))
+ (modules (:standard \ genOpcodeFiles uint63_x86 uint63_amd64 write_uint63))
+ (libraries lib byterun dynlink))
+
+(executable
+  (name genOpcodeFiles)
+  (modules genOpcodeFiles))
 
 (rule
  (targets copcodes.ml)
- (deps (:h-file byterun/coq_instruct.h) make-opcodes)
- (action (run ./make_opcodes.sh %{h-file} %{targets})))
+ (action (with-stdout-to %{targets} (run ./genOpcodeFiles.exe copml))))
+
+(executable
+  (name write_uint63)
+  (modules write_uint63)
+  (libraries unix))
+
+(rule
+ (targets uint63.ml)
+ (deps (:gen ./write_uint63.exe) uint63_x86.ml uint63_amd64.ml)
+ (action (run %{gen})))
 
 (documentation
  (package coq))
@@ -18,3 +31,4 @@
 ; warnings.
 (env
  (dev (flags :standard -w +a-4-44-50)))
+ ; (ocaml408 (flags :standard -w +a-3-4-44-50)))

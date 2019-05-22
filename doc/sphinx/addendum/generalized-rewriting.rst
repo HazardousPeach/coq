@@ -121,7 +121,7 @@ parameters is any term :math:`f \, t_1 \ldots t_n`.
    morphism parametric over ``A`` that respects the relation instance
    ``(set_eq A)``. The latter condition is proved by showing:
 
-   .. coqtop:: in
+   .. coqdoc::
 
      forall (A: Type) (S1 S1' S2 S2': list A),
        set_eq A S1 S1' ->
@@ -170,12 +170,12 @@ compatibility constraints.
 Adding new relations and morphisms
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. cmd::  Add Parametric Relation (x1 : T1) ... (xn : Tk) : (A t1 ... tn) (Aeq t′1 ... t′m) {? reflexivity proved by refl} {? symmetry proved by sym} {? transitivity proved by trans} as @ident
+.. cmd::  Add Parametric Relation @binders : (A t1 ... tn) (Aeq t′1 ... t′m) {? reflexivity proved by @term} {? symmetry proved by @term} {? transitivity proved by @term} as @ident
 
    This command declares a parametric relation :g:`Aeq: forall (y1 : β1 ... ym : βm)`,
    :g:`relation (A t1 ... tn)` over :g:`(A : αi -> ... αn -> Type)`.
 
-   The :token:`ident` gives a unique name to the morphism and it is used
+   The final :token:`ident` gives a unique name to the morphism and it is used
    by the command to generate fresh names for automatically provided
    lemmas used internally.
 
@@ -205,7 +205,7 @@ Adding new relations and morphisms
 
    For Leibniz equality, we may declare:
 
-   .. coqtop:: in
+   .. coqdoc::
 
      Add Parametric Relation (A : Type) : A (@eq A)
        [reflexivity proved by @refl_equal A]
@@ -219,15 +219,16 @@ replace terms with related ones only in contexts that are syntactic
 compositions of parametric morphism instances declared with the
 following command.
 
-.. cmd:: Add Parametric Morphism (x1 : T1) ... (xk : Tk) : (f t1 ... tn) with signature sig as @ident
+.. cmd:: Add Parametric Morphism @binders : (@ident {+ @term__1}) with signature @term__2 as @ident
 
-   This command declares ``f`` as a parametric morphism of signature ``sig``. The
-   identifier :token:`ident` gives a unique name to the morphism and it is used as
-   the base name of the typeclass instance definition and as the name of
-   the lemma that proves the well-definedness of the morphism. The
-   parameters of the morphism as well as the signature may refer to the
-   context of variables. The command asks the user to prove interactively
-   that ``f`` respects the relations identified from the signature.
+   This command declares a parametric morphism :n:`@ident {+ @term__1}` of
+   signature :n:`@term__2`.  The final identifier :token:`ident` gives a unique
+   name to the morphism and it is used as the base name of the typeclass
+   instance definition and as the name of the lemma that proves the
+   well-definedness of the morphism. The parameters of the morphism as well as
+   the signature may refer to the context of variables. The command asks the
+   user to prove interactively that the function denoted by the first
+   :token:`ident` respects the relations identified from the signature.
 
 .. example::
 
@@ -274,7 +275,7 @@ following command.
    (maximally inserted) implicit arguments. If ``A`` is always set as
    maximally implicit in the previous example, one can write:
 
-   .. coqtop:: in
+   .. coqdoc::
 
       Add Parametric Relation A : (set A) eq_set
         reflexivity proved by eq_set_refl
@@ -282,13 +283,8 @@ following command.
         transitivity proved by eq_set_trans
         as eq_set_rel.
 
-   .. coqtop:: in
-
       Add Parametric Morphism A : (@union A) with
         signature eq_set ==> eq_set ==> eq_set as union_mor.
-
-   .. coqtop:: in
-
       Proof. exact (@union_compat A). Qed.
 
    We proceed now by proving a simple lemma performing a rewrite step and
@@ -300,7 +296,7 @@ following command.
    .. coqtop:: in
 
       Goal forall (S : set nat),
-        eq_set (union (union S empty) S) (union S S).
+        eq_set (union (union S (empty nat)) S) (union S S).
 
    .. coqtop:: in
 
@@ -486,7 +482,7 @@ registered as parametric relations and morphisms.
 
 .. example:: First class setoids
 
-   .. coqtop:: in
+   .. coqtop:: in reset
 
       Require Import Relation_Definitions Setoid.
 
@@ -530,19 +526,11 @@ Notice, however, that using the prefixed tactics it is possible to
 pass additional arguments such as ``using relation``.
 
 .. tacv:: setoid_reflexivity
-   :name: setoid_reflexivity
-
-.. tacv:: setoid_symmetry {? in @ident}
-   :name: setoid_symmetry
-
-.. tacv:: setoid_transitivity
-   :name: setoid_transitivity
-
-.. tacv:: setoid_rewrite {? @orientation} @term {? at @occs} {? in @ident}
-   :name: setoid_rewrite
-
-.. tacv:: setoid_replace @term with @term {? using relation @term} {? in @ident} {? by @tactic}
-   :name: setoid_replace
+          setoid_symmetry {? in @ident}
+          setoid_transitivity
+          setoid_rewrite {? @orientation} @term {? at @occs} {? in @ident}
+          setoid_replace @term with @term {? using relation @term} {? in @ident} {? by @tactic}
+   :name: setoid_reflexivity; setoid_symmetry; setoid_transitivity; setoid_rewrite; setoid_replace
 
    The ``using relation`` arguments cannot be passed to the unprefixed form.
    The latter argument tells the tactic what parametric relation should
@@ -590,7 +578,7 @@ Deprecated syntax and backward incompatibilities
    Notice that the syntax is not completely backward compatible since the
    identifier was not required.
 
-.. cmd:: Add Morphism f : @ident
+.. cmd:: Add Morphism @ident : @ident
    :name: Add Morphism
 
    This command is restricted to the declaration of morphisms
@@ -631,12 +619,16 @@ declared as morphisms in the ``Classes.Morphisms_Prop`` module. For
 example, to declare that universal quantification is a morphism for
 logical equivalence:
 
+.. coqtop:: none
+
+   Require Import Morphisms.
+
 .. coqtop:: in
 
    Instance all_iff_morphism (A : Type) :
             Proper (pointwise_relation A iff ==> iff) (@all A).
 
-.. coqtop:: all
+.. coqtop:: all abort
 
    Proof. simpl_relation.
 
@@ -658,7 +650,7 @@ functional arguments (or whatever subrelation of the pointwise
 extension). For example, one could declare the ``map`` combinator on lists
 as a morphism:
 
-.. coqtop:: in
+.. coqdoc::
 
    Instance map_morphism `{Equivalence A eqA, Equivalence B eqB} :
             Proper ((eqA ==> eqB) ==> list_equiv eqA ==> list_equiv eqB) (@map A B).
@@ -722,47 +714,47 @@ following grammar:
 
 .. productionlist:: rewriting
    s, t, u : `strategy`
-           : | `lemma`
-           : | `lemma_right_to_left`
-           : | `failure`
-           : | `identity`
-           : | `reflexivity`
-           : | `progress`
-           : | `failure_catch`
-           : | `composition`
-           : | `left_biased_choice`
-           : | `iteration_one_or_more`
-           : | `iteration_zero_or_more`
-           : | `one_subterm`
-           : | `all_subterms`
-           : | `innermost_first`
-           : | `outermost_first`
-           : | `bottom_up`
-           : | `top_down`
-           : | `apply_hint`
-           : | `any_of_the_terms`
-           : | `apply_reduction`
-           : | `fold_expression`
+           : `lemma`
+           : `lemma_right_to_left`
+           : `failure`
+           : `identity`
+           : `reflexivity`
+           : `progress`
+           : `failure_catch`
+           : `composition`
+           : `left_biased_choice`
+           : `iteration_one_or_more`
+           : `iteration_zero_or_more`
+           : `one_subterm`
+           : `all_subterms`
+           : `innermost_first`
+           : `outermost_first`
+           : `bottom_up`
+           : `top_down`
+           : `apply_hint`
+           : `any_of_the_terms`
+           : `apply_reduction`
+           : `fold_expression`
 
 .. productionlist:: rewriting
-   strategy : "(" `s` ")"
+   strategy : ( `s` )
    lemma : `c`
-   lemma_right_to_left : "<-" `c`
-   failure : `fail`
-   identity : `id`
-   reflexivity : `refl`
-   progress : `progress` `s`
-   failure_catch : `try` `s`
-   composition : `s` ";" `u`
+   lemma_right_to_left : <- `c`
+   failure : fail
+   identity : id
+   reflexivity : refl
+   progress : progress `s`
+   failure_catch : try `s`
+   composition : `s` ; `u`
    left_biased_choice : choice `s` `t`
-   iteration_one_or_more : `repeat` `s`
-   iteration_zero_or_more : `any` `s`
+   iteration_one_or_more : repeat `s`
+   iteration_zero_or_more : any `s`
    one_subterm : subterm `s`
    all_subterms : subterms `s`
-   innermost_first : `innermost` `s`
-   outermost_first : `outermost` `s`
-   bottom_up : `bottomup` `s`
-   top_down : `topdown` `s`
+   innermost_first : innermost `s`
+   outermost_first : outermost `s`
+   bottom_up : bottomup `s`
+   top_down : topdown `s`
    apply_hint : hints `hintdb`
    any_of_the_terms : terms (`c`)+
    apply_reduction : eval `redexpr`
@@ -775,7 +767,7 @@ primitive fixpoint operator:
 .. productionlist:: rewriting
    try `s` : choice `s` `id`
    any `s` : fix `u`. try (`s` ; `u`)
-   repeat `s` : `s` ; `any` `s`
+   repeat `s` : `s` ; any `s`
    bottomup s : fix `bu`. (choice (progress (subterms bu)) s) ; try bu
    topdown s : fix `td`. (choice s (progress (subterms td))) ; try td
    innermost s : fix `i`. (choice (subterm i) s)
@@ -818,7 +810,7 @@ Usage
 ~~~~~
 
 
-.. tacn:: rewrite_strat @s [in @ident]
+.. tacn:: rewrite_strat @s {? in @ident }
    :name: rewrite_strat
 
    Rewrite using the strategy s in hypothesis ident or the conclusion.

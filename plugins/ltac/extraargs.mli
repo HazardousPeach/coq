@@ -8,6 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
+open Genintern
 open Tacexpr
 open Names
 open Constrexpr
@@ -28,22 +29,22 @@ val wit_natural : int Genarg.uniform_genarg_type
 
 val wit_glob :
   (constr_expr,
-  Tacexpr.glob_constr_and_expr,
+  glob_constr_and_expr,
   Tacinterp.interp_sign * glob_constr) Genarg.genarg_type
 
 val wit_lglob :
   (constr_expr,
-  Tacexpr.glob_constr_and_expr,
+  glob_constr_and_expr,
   Tacinterp.interp_sign * glob_constr) Genarg.genarg_type
 
 val wit_lconstr :
   (constr_expr,
-  Tacexpr.glob_constr_and_expr,
+  glob_constr_and_expr,
   EConstr.t) Genarg.genarg_type
 
 val wit_casted_constr :
   (constr_expr,
-  Tacexpr.glob_constr_and_expr,
+  glob_constr_and_expr,
   EConstr.t) Genarg.genarg_type
 
 val glob : constr_expr Pcoq.Entry.t
@@ -64,8 +65,9 @@ val wit_by_arg_tac :
   glob_tactic_expr option,
   Geninterp.Val.t option) Genarg.genarg_type
 
-val pr_by_arg_tac : 
-  (int * Notation_gram.parenRelation -> raw_tactic_expr -> Pp.t) ->
+val pr_by_arg_tac :
+  Environ.env -> Evd.evar_map ->
+  (Environ.env -> Evd.evar_map -> int * Notation_gram.parenRelation -> raw_tactic_expr -> Pp.t) ->
   raw_tactic_expr option -> Pp.t
 
 val test_lpar_id_colon : unit Pcoq.Entry.t

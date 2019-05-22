@@ -31,7 +31,7 @@ Arguments JMeq_refl {A x} , [A] x.
 Register JMeq as core.JMeq.type.
 Register JMeq_refl as core.JMeq.refl.
 
-Hint Resolve JMeq_refl.
+Hint Resolve JMeq_refl : core.
 
 Definition JMeq_hom {A : Type} (x y : A) := JMeq x y.
 
@@ -42,7 +42,7 @@ Proof.
 intros; destruct H; trivial.
 Qed.
 
-Hint Immediate JMeq_sym.
+Hint Immediate JMeq_sym : core.
 
 Register JMeq_sym as core.JMeq.sym.
 
@@ -135,10 +135,10 @@ Proof.
 exists bool. exists (fun _ => True). exists true. exists false.
 exists I. exists I.
 split.
-trivial.
-intro H.
-assert (true=false) by (destruct H; reflexivity).
-discriminate.
+- trivial.
+- intro H.
+  assert (true=false) by (destruct H; reflexivity).
+  discriminate.
 Qed.
 
 (** However, when the dependencies are equal, [JMeq (P p) x (P q) y]

@@ -36,9 +36,8 @@ type internal_flag =
 (** Declaration of constants and parameters *)
 
 type constant_obj = {
-  cst_decl : global_declaration option;
-  (** [None] when the declaration is a side-effect and has already been defined
-      in the global environment. *)
+  cst_decl : Cooking.recipe option;
+  (** Non-empty only when rebuilding a constant after a section *)
   cst_kind : logical_kind;
   cst_locl : bool;
 }
@@ -56,37 +55,30 @@ let load_constant i ((sp,kn), obj) =
 
 (* Opening means making the name without its module qualification available *)
 let open_constant i ((sp,kn), obj) =
-  (** Never open a local definition *)
+  (* Never open a local definition *)
   if obj.cst_locl then ()
   else
     let con = Global.constant_of_delta_kn kn in
-    Nametab.push (Nametab.Exactly i) sp (ConstRef con);
-    match (Global.lookup_constant con).const_body with
-    | (Def _ | Undef _) -> ()
-    | OpaqueDef lc ->
-        match Opaqueproof.get_constraints (Global.opaque_tables ()) lc with
-        | Some f when Future.is_val f ->
-	   Global.push_context_set false (Future.force f)
-        | _ -> ()
+    Nametab.push (Nametab.Exactly i) sp (ConstRef con)
 
 let exists_name id =
   variable_exists id || Global.exists_objlabel (Label.of_id id)
 
-let check_exists sp =
-  let id = basename sp in
+let check_exists id =
   if exists_name id then alreadydeclared (Id.print id ++ str " already exists")
 
 let cache_constant ((sp,kn), obj) =
+  (* Invariant: the constant must exist in the logical environment, except when
+     redefining it when exiting a section. See [discharge_constant]. *)
   let id = basename sp in
   let kn' =
     match obj.cst_decl with
     | None ->
       if Global.exists_objlabel (Label.of_id (basename sp))
       then Constant.make1 kn
-      else CErrors.anomaly Pp.(str"Ex seff not found: " ++ Id.print(basename sp) ++ str".")
-    | Some decl ->
-      let () = check_exists sp in
-      Global.add_constant ~in_section:(Lib.sections_are_opened ()) id decl
+      else CErrors.anomaly Pp.(str"Missing constant " ++ Id.print(basename sp) ++ str".")
+    | Some r ->
+      Global.add_recipe ~in_section:(Lib.sections_are_opened ()) id r
   in
   assert (Constant.equal kn' (Constant.make1 kn));
   Nametab.push (Nametab.Until 1) sp (ConstRef (Constant.make1 kn));
@@ -100,7 +92,9 @@ let discharge_constant ((sp, kn), obj) =
   let modlist = replacement_context () in
   let { abstr_ctx = hyps; abstr_subst = subst; abstr_uctx = uctx } = section_segment_of_constant con in
   let abstract = (named_of_variable_context hyps, subst, uctx) in
-  let new_decl = GlobalRecipe{ from; info = { Opaqueproof.modlist; abstract}} in
+  let new_decl = { from; info = { Opaqueproof.modlist; abstract } } in
+  (* This is a hack: when leaving a section, we lose the constant definition, so
+     we have to store it in the libobject to be able to retrieve it after. *)
   Some { obj with cst_decl = Some new_decl; }
 
 (* Hack to reduce the size of .vo: we keep only what load/open needs *)
@@ -126,31 +120,25 @@ let set_declare_scheme f = declare_scheme := f
 
 let update_tables c =
   declare_constant_implicits c;
-  Heads.declare_head (EvalConstRef c);
   Notation.declare_ref_arguments_scope Evd.empty (ConstRef c)
 
-let register_side_effect (c, role) =
+let register_constant kn kind local =
   let o = inConstant {
     cst_decl = None;
-    cst_kind = IsProof Theorem;
-    cst_locl = false;
+    cst_kind = kind;
+    cst_locl = local;
   } in
-  let id = Label.to_id (Constant.label c) in
-  ignore(add_leaf id o);
-  update_tables c;
+  let id = Label.to_id (Constant.label kn) in
+  let _ = add_leaf id o in
+  update_tables kn
+
+let register_side_effect (c, role) =
+  let () = register_constant c (IsProof Theorem) false in
   match role with
   | Subproof -> ()
   | Schema (ind, kind) -> !declare_scheme kind [|ind,c|]
 
-let declare_constant_common id cst =
-  let o = inConstant cst in
-  let _, kn as oname = add_leaf id o in
-  pull_to_head oname;
-  let c = Global.constant_of_delta_kn kn in
-  update_tables c;
-  c
-
-let default_univ_entry = Monomorphic_const_entry Univ.ContextSet.empty
+let default_univ_entry = Monomorphic_entry Univ.ContextSet.empty
 let definition_entry ?fix_exn ?(opaque=false) ?(inline=false) ?types
     ?(univs=default_univ_entry) ?(eff=Safe_typing.empty_private_constants) body =
   { const_entry_body = Future.from_val ?fix_exn ((body,Univ.ContextSet.empty), eff);
@@ -161,10 +149,11 @@ let definition_entry ?fix_exn ?(opaque=false) ?(inline=false) ?types
     const_entry_feedback = None;
     const_entry_inline_code = inline}
 
-let declare_constant ?(internal = UserIndividualRequest) ?(local = false) id ?(export_seff=false) (cd, kind) =
+let define_constant ?role ?(export_seff=false) id cd =
+  (* Logically define the constant and its subproofs, no libobject tampering *)
   let is_poly de = match de.const_entry_universes with
-  | Monomorphic_const_entry _ -> false
-  | Polymorphic_const_entry _ -> true
+  | Monomorphic_entry _ -> false
+  | Polymorphic_entry _ -> true
   in
   let in_section = Lib.sections_are_opened () in
   let export, decl = (* We deal with side effects *)
@@ -173,20 +162,27 @@ let declare_constant ?(internal = UserIndividualRequest) ?(local = false) id ?(e
         export_seff ||
         not de.const_entry_opaque ||
         is_poly de ->
-      (** This globally defines the side-effects in the environment. We mark
-          exported constants as being side-effect not to redeclare them at
-          caching time. *)
+      (* This globally defines the side-effects in the environment. *)
       let de, export = Global.export_private_constants ~in_section de in
       export, ConstantEntry (PureEntry, DefinitionEntry de)
     | _ -> [], ConstantEntry (EffectEntry, cd)
   in
+  let kn, eff = Global.add_constant ?role ~in_section id decl in
+  kn, eff, export
+
+let declare_constant ?(internal = UserIndividualRequest) ?(local = false) id ?(export_seff=false) (cd, kind) =
+  let () = check_exists id in
+  let kn, _eff, export = define_constant ~export_seff id cd in
+  (* Register the libobjects attached to the constants and its subproofs *)
   let () = List.iter register_side_effect export in
-  let cst = {
-    cst_decl = Some decl;
-    cst_kind = kind;
-    cst_locl = local;
-  } in
-  declare_constant_common id cst
+  let () = register_constant kn kind local in
+  kn
+
+let declare_private_constant ~role ?(internal=UserIndividualRequest) ?(local = false) id (cd, kind) =
+  let kn, eff, export = define_constant ~role id cd in
+  let () = assert (List.is_empty export) in
+  let () = register_constant kn kind local in
+  kn, eff
 
 let declare_definition ?(internal=UserIndividualRequest)
   ?(opaque=false) ?(kind=Decl_kinds.Definition) ?(local = false)
@@ -198,7 +194,6 @@ let declare_definition ?(internal=UserIndividualRequest)
       (Entries.DefinitionEntry cb, Decl_kinds.IsDefinition kind)
 
 (** Declaration of section variables and local definitions *)
-
 type section_variable_entry =
   | SectionLocalDef of Safe_typing.private_constants definition_entry
   | SectionLocalAssum of types Univ.in_universe_context_set * polymorphic * bool (** Implicit status *)
@@ -221,16 +216,16 @@ let cache_variable ((sp,_),o) =
     | SectionLocalDef (de) ->
       let (de, eff) = Global.export_private_constants ~in_section:true de in
       let () = List.iter register_side_effect eff in
-      (** The body should already have been forced upstream because it is a
-          section-local definition, but it's not enforced by typing *)
+      (* The body should already have been forced upstream because it is a
+         section-local definition, but it's not enforced by typing *)
       let (body, uctx), () = Future.force de.const_entry_body in
       let poly, univs = match de.const_entry_universes with
-      | Monomorphic_const_entry uctx -> false, uctx
-      | Polymorphic_const_entry uctx -> true, Univ.ContextSet.of_context uctx
+      | Monomorphic_entry uctx -> false, uctx
+      | Polymorphic_entry (_, uctx) -> true, Univ.ContextSet.of_context uctx
       in
       let univs = Univ.ContextSet.union uctx univs in
-      (** We must declare the universe constraints before type-checking the
-          term. *)
+      (* We must declare the universe constraints before type-checking the
+         term. *)
       let () = Global.push_context_set (not poly) univs in
       let se = {
         secdef_body = body;
@@ -265,11 +260,9 @@ let declare_variable id obj =
   let oname = add_leaf id (inVariable (Inr (id,obj))) in
   declare_var_implicits id;
   Notation.declare_ref_arguments_scope Evd.empty (VarRef id);
-  Heads.declare_head (EvalVarRef id);
   oname
 
 (** Declaration of inductive blocks *)
-
 let declare_inductive_argument_scopes kn mie =
   List.iteri (fun i {mind_entry_consnames=lc} ->
     Notation.declare_ref_arguments_scope Evd.empty (IndRef (kn,i));
@@ -308,7 +301,7 @@ let open_inductive i ((sp,kn),mie) =
 
 let cache_inductive ((sp,kn),mie) =
   let names = inductive_names sp kn mie in
-  List.iter check_exists (List.map fst names);
+  List.iter check_exists (List.map (fun p -> basename (fst p)) names);
   let id = basename sp in
   let kn' = Global.add_mind id mie in
   assert (MutInd.equal kn' (MutInd.make1 kn));
@@ -337,21 +330,15 @@ let dummy_inductive_entry m = {
   mind_entry_record = None;
   mind_entry_finite = Declarations.BiFinite;
   mind_entry_inds = List.map dummy_one_inductive_entry m.mind_entry_inds;
-  mind_entry_universes = Monomorphic_ind_entry Univ.ContextSet.empty;
+  mind_entry_universes = default_univ_entry;
+  mind_entry_variance = None;
   mind_entry_private = None;
 }
 
 (* reinfer subtyping constraints for inductive after section is dischared. *)
-let infer_inductive_subtyping mind_ent =
-  match mind_ent.mind_entry_universes with
-  | Monomorphic_ind_entry _ | Polymorphic_ind_entry _ ->
-    mind_ent
-  | Cumulative_ind_entry cumi ->
-    begin
-      let env = Global.env () in
-      (* let (env'', typed_params) = Typeops.infer_local_decls env' (mind_ent.mind_entry_params) in *)
-        InferCumulativity.infer_inductive env mind_ent
-    end
+let rebuild_inductive mind_ent =
+  let env = Global.env () in
+  InferCumulativity.infer_inductive env mind_ent
 
 let inInductive : mutual_inductive_entry -> obj =
   declare_object {(default_object "INDUCTIVE") with
@@ -361,38 +348,50 @@ let inInductive : mutual_inductive_entry -> obj =
     classify_function = (fun a -> Substitute (dummy_inductive_entry a));
     subst_function = ident_subst_function;
     discharge_function = discharge_inductive;
-    rebuild_function = infer_inductive_subtyping }
+    rebuild_function = rebuild_inductive }
+
+let cache_prim (_,(p,c)) = Recordops.register_primitive_projection p c
+
+let load_prim _ p = cache_prim p
+
+let subst_prim (subst,(p,c)) = Mod_subst.subst_proj_repr subst p, Mod_subst.subst_constant subst c
+
+let discharge_prim (_,(p,c)) = Some (Lib.discharge_proj_repr p, c)
+
+let inPrim : (Projection.Repr.t * Constant.t) -> obj =
+  declare_object {
+    (default_object "PRIMPROJS") with
+    cache_function = cache_prim ;
+    load_function = load_prim;
+    subst_function = subst_prim;
+    classify_function = (fun x -> Substitute x);
+    discharge_function = discharge_prim }
+
+let declare_primitive_projection p c = Lib.add_anonymous_leaf (inPrim (p,c))
 
 let declare_one_projection univs (mind,_ as ind) ~proj_npars proj_arg label (term,types) =
   let id = Label.to_id label in
-  let p = Projection.Repr.make ind ~proj_npars ~proj_arg label in
-  Recordops.declare_primitive_projection p;
-  (* ^ needs to happen before declaring the constant, otherwise
-     Heads gets confused. *)
-  let univs = match univs with
-    | Monomorphic_ind_entry _ ->
-      (** Global constraints already defined through the inductive *)
-      Monomorphic_const_entry Univ.ContextSet.empty
-    | Polymorphic_ind_entry ctx ->
-      Polymorphic_const_entry ctx
-    | Cumulative_ind_entry ctx ->
-      Polymorphic_const_entry (Univ.CumulativityInfo.univ_context ctx)
+  let univs, u = match univs with
+    | Monomorphic_entry _ ->
+      (* Global constraints already defined through the inductive *)
+      default_univ_entry, Univ.Instance.empty
+    | Polymorphic_entry (nas, ctx) ->
+      Polymorphic_entry (nas, ctx), Univ.UContext.instance ctx
   in
-  let term, types = match univs with
-    | Monomorphic_const_entry _ -> term, types
-    | Polymorphic_const_entry ctx ->
-      let u = Univ.UContext.instance ctx in
-      Vars.subst_instance_constr u term, Vars.subst_instance_constr u types
-  in
+  let term = Vars.subst_instance_constr u term in
+  let types = Vars.subst_instance_constr u types in
   let entry = definition_entry ~types ~univs term in
-  ignore(declare_constant id (DefinitionEntry entry, IsDefinition StructureComponent))
+  let cst = declare_constant id (DefinitionEntry entry, IsDefinition StructureComponent) in
+  let p = Projection.Repr.make ind ~proj_npars ~proj_arg label in
+  declare_primitive_projection p cst
+
 
 let declare_projections univs mind =
   let env = Global.env () in
   let mib = Environ.lookup_mind mind env in
   match mib.mind_record with
   | PrimRecord info ->
-    let iter_ind i (_, labs, _) =
+    let iter_ind i (_, labs, _, _) =
       let ind = (mind, i) in
       let projs = Inductiveops.compute_projections env ind in
       Array.iter2_i (declare_one_projection univs ind ~proj_npars:mib.mind_nparams) labs projs
@@ -455,11 +454,9 @@ let assumption_message id =
 (** Monomorphic universes need to survive sections. *)
 
 let input_universe_context : Univ.ContextSet.t -> Libobject.obj =
-  declare_object
-    { (default_object "Monomorphic section universes") with
-      cache_function = (fun (na, uctx) -> Global.push_context_set false uctx);
-      discharge_function = (fun (_, x) -> Some x);
-      classify_function = (fun a -> Dispose) }
+  declare_object @@ local_object "Monomorphic section universes"
+    ~cache:(fun (na, uctx) -> Global.push_context_set false uctx)
+    ~discharge:(fun (_, x) -> Some x)
 
 let declare_universe_context poly ctx =
   if poly then
@@ -477,39 +474,36 @@ type universe_source =
   | QualifiedUniv of Id.t (* global universe introduced by some global value *)
   | UnqualifiedUniv (* other global universe *)
 
-type universe_name_decl = universe_source * (Id.t * Nametab.universe_id) list
+type universe_name_decl = universe_source * (Id.t * Univ.Level.UGlobal.t) list
 
 let check_exists sp =
-  let depth = sections_depth () in
-  let sp = Libnames.make_path (pop_dirpath_n depth (dirpath sp)) (basename sp) in
   if Nametab.exists_universe sp then
     alreadydeclared (str "Universe " ++ Id.print (basename sp) ++ str " already exists")
   else ()
 
-let qualify_univ i sp src id =
-  let open Libnames in
+let qualify_univ i dp src id =
   match src with
   | BoundUniv | UnqualifiedUniv ->
-    let sp = dirpath sp in
-    i, make_path sp id
+    i,  Libnames.make_path dp id
   | QualifiedUniv l ->
-    let sp = dirpath sp in
-    let sp = DirPath.repr sp in
-    Nametab.map_visibility succ i, make_path (DirPath.make (l::sp)) id
+    let dp = DirPath.repr dp in
+    Nametab.map_visibility succ i, Libnames.make_path (DirPath.make (l::dp)) id
 
-let do_univ_name ~check i sp src (id,univ) =
-  let i, sp = qualify_univ i sp src id in
+let do_univ_name ~check i dp src (id,univ) =
+  let i, sp = qualify_univ i dp src id in
   if check then check_exists sp;
   Nametab.push_universe i sp univ
 
 let cache_univ_names ((sp, _), (src, univs)) =
-  List.iter (do_univ_name ~check:true (Nametab.Until 1) sp src) univs
+  let depth = sections_depth () in
+  let dp = pop_dirpath_n depth (dirpath sp) in
+  List.iter (do_univ_name ~check:true (Nametab.Until 1) dp src) univs
 
 let load_univ_names i ((sp, _), (src, univs)) =
-  List.iter (do_univ_name ~check:false (Nametab.Until i) sp src) univs
+  List.iter (do_univ_name ~check:false (Nametab.Until i) (dirpath sp) src) univs
 
 let open_univ_names i ((sp, _), (src, univs)) =
-  List.iter (do_univ_name ~check:false (Nametab.Exactly i) sp src) univs
+  List.iter (do_univ_name ~check:false (Nametab.Exactly i) (dirpath sp) src) univs
 
 let discharge_univ_names = function
   | _, (BoundUniv, _) -> None
@@ -522,17 +516,17 @@ let input_univ_names : universe_name_decl -> Libobject.obj =
       load_function = load_univ_names;
       open_function = open_univ_names;
       discharge_function = discharge_univ_names;
-      subst_function = (fun (subst, a) -> (** Actually the name is generated once and for all. *) a);
+      subst_function = (fun (subst, a) -> (* Actually the name is generated once and for all. *) a);
       classify_function = (fun a -> Substitute a) }
 
 let declare_univ_binders gr pl =
   if Global.is_polymorphic gr then
-    UnivNames.register_universe_binders gr pl
+    ()
   else
     let l = match gr with
       | ConstRef c -> Label.to_id @@ Constant.label c
       | IndRef (c, _) -> Label.to_id @@ MutInd.label c
-      | VarRef id -> id
+      | VarRef id -> anomaly ~label:"declare_univ_binders" Pp.(str "declare_univ_binders on variable " ++ Id.print id ++ str".")
       | ConstructRef _ ->
         anomaly ~label:"declare_univ_binders"
           Pp.(str "declare_univ_binders on an constructor reference")
@@ -551,12 +545,8 @@ let do_universe poly l =
       user_err ~hdr:"Constraint"
                    (str"Cannot declare polymorphic universes outside sections")
   in
-  let l =
-    List.map (fun {CAst.v=id} ->
-      let lev = UnivGen.new_univ_id () in
-      (id, lev)) l
-  in
-  let ctx = List.fold_left (fun ctx (_,(dp,i)) -> Univ.LSet.add (Univ.Level.make dp i) ctx)
+  let l = List.map (fun {CAst.v=id} -> (id, UnivGen.new_univ_global ())) l in
+  let ctx = List.fold_left (fun ctx (_,qid) -> Univ.LSet.add (Univ.Level.make qid) ctx)
       Univ.LSet.empty l, Univ.Constraint.empty
   in
   let () = declare_universe_context poly ctx in

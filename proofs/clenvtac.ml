@@ -9,7 +9,6 @@
 (************************************************************************)
 
 open Util
-open Names
 open Constr
 open Termops
 open Evd
@@ -17,7 +16,6 @@ open EConstr
 open Refiner
 open Logic
 open Reduction
-open Tacmach
 open Clenv
 
 (* This function put casts around metavariables whose type could not be
@@ -62,44 +60,29 @@ let clenv_pose_dependent_evars ?(with_evars=false) clenv =
       (RefinerError (env, sigma, UnresolvedBindings (List.map (meta_name clenv.evd) dep_mvs)));
   clenv_pose_metas_as_evars clenv dep_mvs
 
-(** Use our own fast path, more informative than from Typeclasses *)
-let check_tc evd =
-  let has_resolvable = ref false in
-  let check _ evi =
-    let res = Typeclasses.is_resolvable evi in
-    if res then
-      let () = has_resolvable := true in
-      Typeclasses.is_class_evar evd evi
-    else false
-  in
-  let has_typeclass = Evar.Map.exists check (Evd.undefined_map evd) in
-  (has_typeclass, !has_resolvable)
-
 let clenv_refine ?(with_evars=false) ?(with_classes=true) clenv =
-  (** ppedrot: a Goal.enter here breaks things, because the tactic below may
-      solve goals by side effects, while the compatibility layer keeps those
-      useless goals. That deserves a FIXME. *)
+  (* ppedrot: a Goal.enter here breaks things, because the tactic below may
+     solve goals by side effects, while the compatibility layer keeps those
+     useless goals. That deserves a FIXME. *)
   Proofview.V82.tactic begin fun gl ->
-  let clenv = clenv_pose_dependent_evars ~with_evars clenv in
+  let clenv, evars = clenv_pose_dependent_evars ~with_evars clenv in
   let evd' =
     if with_classes then
-      let (has_typeclass, has_resolvable) = check_tc clenv.evd in
       let evd' =
-        if has_typeclass then
-          Typeclasses.resolve_typeclasses ~fast_path:false ~filter:Typeclasses.all_evars
-          ~fail:(not with_evars) ~split:false clenv.env clenv.evd
-        else clenv.evd
+        Typeclasses.resolve_typeclasses ~filter:Typeclasses.all_evars
+          ~fail:(not with_evars) clenv.env clenv.evd
       in
-      if has_resolvable then
-        Typeclasses.mark_unresolvables ~filter:Typeclasses.all_goals evd'
-      else evd'
+      Typeclasses.make_unresolvables (fun x -> List.mem_f Evar.equal x evars) evd'
     else clenv.evd
   in
   let clenv = { clenv with evd = evd' } in
   tclTHEN
     (tclEVARS (Evd.clear_metas evd'))
-    (refine_no_check (clenv_cast_meta clenv (clenv_value clenv))) gl
+    (refiner ~check:false EConstr.Unsafe.(to_constr (clenv_cast_meta clenv (clenv_value clenv)))) gl
   end
+
+let clenv_pose_dependent_evars ?(with_evars=false) clenv =
+  fst (clenv_pose_dependent_evars ~with_evars clenv)
 
 open Unification
 
@@ -117,11 +100,11 @@ let res_pf ?with_evars ?(with_classes=true) ?(flags=dft ()) clenv =
    provenant de w_Unify. (Utilisé seulement dans prolog.ml) *)
 
 let fail_quick_core_unif_flags = {
-  modulo_conv_on_closed_terms = Some full_transparent_state;
+  modulo_conv_on_closed_terms = Some TransparentState.full;
   use_metas_eagerly_in_conv_on_closed_terms = false;
   use_evars_eagerly_in_conv_on_closed_terms = false;
-  modulo_delta = empty_transparent_state;
-  modulo_delta_types = full_transparent_state;
+  modulo_delta = TransparentState.empty;
+  modulo_delta_types = TransparentState.full;
   check_applied_meta_types = false;
   use_pattern_unification = false;
   use_meta_bound_pattern_unification = true; (* ? *)

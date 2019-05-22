@@ -53,8 +53,8 @@ Module Type IsEqOrig (Import E:Eq').
   Axiom eq_refl : forall x : t, x==x.
   Axiom eq_sym : forall x y : t, x==y -> y==x.
   Axiom eq_trans : forall x y z : t, x==y -> y==z -> x==z.
-  Hint Immediate eq_sym.
-  Hint Resolve eq_refl eq_trans.
+  Hint Immediate eq_sym : core.
+  Hint Resolve eq_refl eq_trans : core.
 End IsEqOrig.
 
 (** * Types with decidable equality *)
@@ -128,9 +128,9 @@ Module Type DecidableTypeFull' := DecidableTypeFull <+ EqNotation.
       [EqualityType] and [DecidableType] *)
 
 Module BackportEq (E:Eq)(F:IsEq E) <: IsEqOrig E.
- Definition eq_refl := F.eq_equiv.(@Equivalence_Reflexive _ _). 
- Definition eq_sym := F.eq_equiv.(@Equivalence_Symmetric _ _).
- Definition eq_trans := F.eq_equiv.(@Equivalence_Transitive _ _).
+ Definition eq_refl := @Equivalence_Reflexive _ _ F.eq_equiv.
+ Definition eq_sym := @Equivalence_Symmetric _ _ F.eq_equiv.
+ Definition eq_trans := @Equivalence_Transitive _ _ F.eq_equiv.
 End BackportEq.
 
 Module UpdateEq (E:Eq)(F:IsEqOrig E) <: IsEq E.
@@ -158,8 +158,10 @@ Module HasEqDec2Bool (E:Eq)(F:HasEqDec E) <: HasEqBool E.
  Lemma eqb_eq : forall x y, eqb x y = true <-> E.eq x y.
  Proof.
   intros x y. unfold eqb. destruct F.eq_dec as [EQ|NEQ].
-  auto with *.
-  split. discriminate. intro EQ; elim NEQ; auto.
+  - auto with *.
+  - split.
+    + discriminate.
+    + intro EQ; elim NEQ; auto.
  Qed.
 End HasEqDec2Bool.
 
@@ -168,8 +170,8 @@ Module HasEqBool2Dec (E:Eq)(F:HasEqBool E) <: HasEqDec E.
  Proof.
   intros x y. assert (H:=F.eqb_eq x y).
   destruct (F.eqb x y); [left|right].
-  apply -> H; auto.
-  intro EQ. apply H in EQ. discriminate.
+  - apply -> H; auto.
+  - intro EQ. apply H in EQ. discriminate.
  Defined.
 End HasEqBool2Dec.
 

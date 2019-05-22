@@ -98,6 +98,7 @@ sig
   val split : ('a * 'b) list -> 'a list * 'b list
   val combine : 'a list -> 'b list -> ('a * 'b) list
   val split3 : ('a * 'b * 'c) list -> 'a list * 'b list * 'c list
+  val split4 : ('a * 'b * 'c * 'd) list -> 'a list * 'b list * 'c list * 'd list
   val combine3 : 'a list -> 'b list -> 'c list -> ('a * 'b * 'c) list
   val add_set : 'a eq -> 'a -> 'a list -> 'a list
   val eq_set : 'a eq -> 'a list -> 'a list -> bool
@@ -780,7 +781,7 @@ let share_tails l1 l2 =
 
 (** {6 Association lists} *)
 
-let map_assoc f = List.map (fun (x,a) -> (x,f a))
+let map_assoc f = map (fun (x,a) -> (x,f a))
 
 let rec assoc_f f a = function
   | (x, e) :: xs -> if f a x then e else assoc_f f a xs
@@ -845,6 +846,12 @@ let split3 = function
     let cr = { head = z; tail = [] } in
     split3_loop cp cq cr l;
     (cast cp, cast cq, cast cr)
+
+(** XXX TODO tailrec *)
+let rec split4 = function
+  | [] -> ([], [], [], [])
+  | (a,b,c,d)::l ->
+      let (ra, rb, rc, rd) = split4 l in (a::ra, b::rb, c::rc, d::rd)
 
 let rec combine3_loop p l1 l2 l3 = match l1, l2, l3 with
   | [], [], [] -> ()
@@ -979,7 +986,7 @@ let rec duplicates cmp = function
    and so on if there are more elements in the lists. *)
 
 let cartesian op l1 l2 =
-  map_append (fun x -> List.map (op x) l2) l1
+  map_append (fun x -> map (op x) l2) l1
 
 (* [cartesians] is an n-ary cartesian product: it iterates
    [cartesian] over a list of lists.  *)
@@ -1006,7 +1013,7 @@ let cartesians_filter op init ll =
 let rec factorize_left cmp = function
   | (a,b) :: l ->
       let al,l' = partition (fun (a',_) -> cmp a a') l in
-      (a,(b :: List.map snd al)) :: factorize_left cmp l'
+      (a,(b :: map snd al)) :: factorize_left cmp l'
   | [] -> []
 
 module Smart =

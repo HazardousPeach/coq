@@ -102,9 +102,10 @@ type time
 
 val get_time : unit -> time
 val time_difference : time -> time -> float (** in seconds *)
+
 val fmt_time_difference : time -> time -> Pp.t
 
-val with_time : batch:bool -> ('a -> 'b) -> 'a -> 'b
+val with_time : batch:bool -> header:Pp.t -> ('a -> 'b) -> 'a -> 'b
 
 (** [get_toplevel_path program] builds a complete path to the
    executable denoted by [program]. This involves:

@@ -15,6 +15,33 @@ open Names
 open Libnames
 open Globnames
 
+type object_prefix = {
+  obj_dir : DirPath.t;
+  obj_mp  : ModPath.t;
+  obj_sec : DirPath.t;
+}
+
+let eq_op op1 op2 =
+  DirPath.equal op1.obj_dir op2.obj_dir &&
+  DirPath.equal op1.obj_sec op2.obj_sec &&
+  ModPath.equal op1.obj_mp  op2.obj_mp
+
+(* to this type are mapped DirPath.t's in the nametab *)
+module GlobDirRef = struct
+  type t =
+    | DirOpenModule of object_prefix
+    | DirOpenModtype of object_prefix
+    | DirOpenSection of object_prefix
+    | DirModule of object_prefix
+
+  let equal r1 r2 = match r1, r2 with
+    | DirOpenModule op1, DirOpenModule op2 -> eq_op op1 op2
+    | DirOpenModtype op1, DirOpenModtype op2 -> eq_op op1 op2
+    | DirOpenSection op1, DirOpenSection op2 -> eq_op op1 op2
+    | DirModule op1, DirModule op2 -> eq_op op1 op2
+    | _ -> false
+
+end
 
 exception GlobalizationError of qualid
 
@@ -74,6 +101,9 @@ module type NAMETREE = sig
   val user_name : qualid -> t -> user_name
   val shortest_qualid : ?loc:Loc.t -> Id.Set.t -> user_name -> t -> qualid
   val find_prefixes : qualid -> t -> elt list
+
+  (** Matches a prefix of [qualid], useful for completion *)
+  val match_prefixes : qualid -> t -> elt list
 end
 
 module Make (U : UserName) (E : EqualityType) : NAMETREE
@@ -259,9 +289,19 @@ let find_prefixes qid tab =
     search_prefixes (Id.Map.find id tab) (DirPath.repr dir)
   with Not_found -> []
 
+let match_prefixes =
+  let cprefix x y = CString.(compare x (sub y 0 (min (length x) (length y)))) in
+  fun qid tab ->
+    try
+      let (dir,id) = repr_qualid qid in
+      let id_prefix = cprefix Id.(to_string id) in
+      let matches = Id.Map.filter_range (fun x -> id_prefix Id.(to_string x)) tab in
+      let matches = Id.Map.mapi (fun _key tab -> search_prefixes tab (DirPath.repr dir)) matches in
+      (* Coq's flatten is "magical", so this is not so bad perf-wise *)
+      CList.flatten @@ Id.Map.(fold (fun _ r l -> r :: l) matches [])
+    with Not_found -> []
+
 end
-
-
 
 (* Global name tables *************************************************)
 
@@ -295,25 +335,17 @@ struct
     | id :: l -> (id, l)
 end
 
-module GlobDir =
-struct
-  type t = global_dir_reference
-  let equal = eq_global_dir_reference
-end
-
-module DirTab = Make(DirPath')(GlobDir)
+module DirTab = Make(DirPath')(GlobDirRef)
 
 (* If we have a (closed) module M having a submodule N, than N does not
    have the entry in [the_dirtab]. *)
 type dirtab = DirTab.t
 let the_dirtab = Summary.ref ~name:"dirtab" (DirTab.empty : dirtab)
 
-type universe_id = DirPath.t * int
-
 module UnivIdEqual =
 struct
-  type t = universe_id
-  let equal (d, i) (d', i') = DirPath.equal d d' && Int.equal i i'
+  type t = Univ.Level.UGlobal.t
+  let equal = Univ.Level.UGlobal.equal
 end
 module UnivTab = Make(FullPath)(UnivIdEqual)
 type univtab = UnivTab.t
@@ -336,12 +368,9 @@ let the_modtyperevtab = Summary.ref ~name:"modtyperevtab" (MPmap.empty : mptrevt
 
 module UnivIdOrdered =
 struct
-  type t = universe_id
-  let hash (d, i) = i + DirPath.hash d
-  let compare (d, i) (d', i') =
-    let c = Int.compare i i' in
-    if Int.equal c 0 then DirPath.compare d d'
-    else c
+  type t = Univ.Level.UGlobal.t
+  let hash = Univ.Level.UGlobal.hash
+  let compare = Univ.Level.UGlobal.compare
 end
 
 module UnivIdMap = HMap.Make(UnivIdOrdered)
@@ -390,7 +419,7 @@ let push_modtype vis sp kn =
 let push_dir vis dir dir_ref =
   the_dirtab := DirTab.push vis dir dir_ref !the_dirtab;
   match dir_ref with
-  | DirModule { obj_mp; _ } -> the_modrevtab := MPmap.add obj_mp dir !the_modrevtab
+  | GlobDirRef.DirModule { obj_mp; _ } -> the_modrevtab := MPmap.add obj_mp dir !the_modrevtab
   | _ -> ()
 
 (* This is for global universe names *)
@@ -424,17 +453,17 @@ let locate_dir qid = DirTab.locate qid !the_dirtab
 
 let locate_module qid =
   match locate_dir qid with
-    | DirModule { obj_mp ; _} -> obj_mp
+    | GlobDirRef.DirModule { obj_mp ; _} -> obj_mp
     | _ -> raise Not_found
 
 let full_name_module qid =
   match locate_dir qid with
-    | DirModule { obj_dir ; _} -> obj_dir
+    | GlobDirRef.DirModule { obj_dir ; _} -> obj_dir
     | _ -> raise Not_found
 
 let locate_section qid =
   match locate_dir qid with
-    | DirOpenSection { obj_dir; _ } -> obj_dir
+    | GlobDirRef.DirOpenSection { obj_dir; _ } -> obj_dir
     | _ -> raise Not_found
 
 let locate_all qid =
@@ -446,6 +475,10 @@ let locate_extended_all qid = ExtRefTab.find_prefixes qid !the_ccitab
 let locate_extended_all_dir qid = DirTab.find_prefixes qid !the_dirtab
 
 let locate_extended_all_modtype qid = MPTab.find_prefixes qid !the_modtypetab
+
+(* Completion *)
+let completion_canditates qualid =
+  ExtRefTab.match_prefixes qualid !the_ccitab
 
 (* Derived functions *)
 
@@ -476,10 +509,6 @@ let global qid =
 let exists_cci sp = ExtRefTab.exists sp !the_ccitab
 
 let exists_dir dir = DirTab.exists dir !the_dirtab
-
-let exists_section = exists_dir
-
-let exists_module = exists_dir
 
 let exists_modtype sp = MPTab.exists sp !the_modtypetab
 
@@ -546,10 +575,3 @@ let global_inductive qid =
   | ref ->
       user_err ?loc:qid.CAst.loc ~hdr:"global_inductive"
         (pr_qualid qid ++ spc () ++ str "is not an inductive type")
-
-(********************************************************************)
-
-(* Deprecated synonyms *)
-
-let extended_locate = locate_extended
-let absolute_reference = global_of_path

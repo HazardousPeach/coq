@@ -1,34 +1,27 @@
-(rule (copy %{project_root}/kernel/names.ml names.ml))
-(rule (copy %{project_root}/kernel/names.mli names.mli))
-(rule (copy %{project_root}/kernel/esubst.ml esubst.ml))
-(rule (copy %{project_root}/kernel/esubst.mli esubst.mli))
-
 ; Careful with bug https://github.com/ocaml/odoc/issues/148
 ;
 ; If we don't pack checker we will have a problem here due to
 ; duplicate module names in the whole build.
 (library
- (name checklib)
- (public_name coq.checklib)
+ (name coq_checklib)
  (synopsis "Coq's Standalone Proof Checker")
- (modules :standard \ main votour)
- (modules_without_implementation cic)
+ (modules :standard \ coqchk votour)
  (wrapped true)
- (libraries coq.lib))
+ (libraries coq.kernel))
 
 (executable
- (name main)
+ (name coqchk)
  (public_name coqchk)
  (package coq)
- (modules main)
- (flags :standard -open Checklib)
- (libraries coq.checklib))
+ (modules coqchk)
+ (flags :standard -open Coq_checklib)
+ (libraries coq_checklib))
 
 (executable
  (name votour)
  (public_name votour)
  (package coq)
  (modules votour)
- (flags :standard -open Checklib)
- (libraries coq.checklib))
+ (flags :standard -open Coq_checklib)
+ (libraries coq_checklib))
 

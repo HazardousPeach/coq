@@ -29,7 +29,7 @@ val allocc : ssrocc
 val hyp_id : ssrhyp -> Id.t
 val hyps_ids : ssrhyps -> Id.t list
 val check_hyp_exists : ('a, 'b) Context.Named.pt -> ssrhyp -> unit
-val test_hypname_exists : ('a, 'b) Context.Named.pt -> Id.t -> bool
+val test_hyp_exists : ('a, 'b) Context.Named.pt -> ssrhyp -> bool
 val check_hyps_uniq : Id.t list -> ssrhyps -> unit
 val not_section_id : Id.t -> bool
 val hyp_err : ?loc:Loc.t -> string -> Id.t -> 'a
@@ -146,7 +146,7 @@ val interp_refine :
 
 val interp_open_constr :
   Tacinterp.interp_sign -> Goal.goal Evd.sigma ->
-    Tacexpr.glob_constr_and_expr -> evar_map * (evar_map * EConstr.t)
+    Genintern.glob_constr_and_expr -> evar_map * (evar_map * EConstr.t)
 
 val pf_e_type_of :
   Goal.goal Evd.sigma ->
@@ -155,7 +155,7 @@ val pf_e_type_of :
 val splay_open_constr : 
            Goal.goal Evd.sigma ->
            evar_map * EConstr.t ->
-           (Names.Name.t * EConstr.t) list * EConstr.t
+           (Names.Name.t Context.binder_annot * EConstr.t) list * EConstr.t
 val isAppInd : Environ.env -> Evd.evar_map -> EConstr.types -> bool
 
 val mk_term : ssrtermkind -> constr_expr -> ssrterm
@@ -164,7 +164,7 @@ val mk_lterm : constr_expr -> ssrterm
 val mk_ast_closure_term :
   [ `None | `Parens | `DoubleParens | `At ] ->
   Constrexpr.constr_expr -> ast_closure_term
-val interp_ast_closure_term : Geninterp.interp_sign -> Proof_type.goal
+val interp_ast_closure_term : Geninterp.interp_sign -> Goal.goal
 Evd.sigma -> ast_closure_term -> Evd.evar_map * ast_closure_term
 val subst_ast_closure_term : Mod_subst.substitution -> ast_closure_term -> ast_closure_term
 val glob_ast_closure_term : Genintern.glob_sign -> ast_closure_term -> ast_closure_term
@@ -205,6 +205,9 @@ val pf_type_of :
 val pfe_type_of :
            Goal.goal Evd.sigma ->
            EConstr.t -> Goal.goal Evd.sigma * EConstr.types
+val pfe_type_relevance_of :
+           Goal.goal Evd.sigma ->
+           EConstr.t -> Goal.goal Evd.sigma * EConstr.types * Sorts.relevance
 val pf_abs_prod :
            Name.t ->
            Goal.goal Evd.sigma ->
@@ -212,8 +215,7 @@ val pf_abs_prod :
            EConstr.t -> Goal.goal Evd.sigma * EConstr.types
 
 val mkSsrRRef : string -> Glob_term.glob_constr * 'a option
-val mkSsrRef : string -> GlobRef.t
-val mkSsrConst : 
+val mkSsrConst :
            string ->
            env -> evar_map -> evar_map * EConstr.t
 val pf_mkSsrConst :
@@ -250,7 +252,7 @@ val ssrevaltac :
   Tacinterp.interp_sign -> Tacinterp.Value.t -> unit Proofview.tactic
 
 val convert_concl_no_check : EConstr.t -> unit Proofview.tactic
-val convert_concl : EConstr.t -> unit Proofview.tactic
+val convert_concl : check:bool -> EConstr.t -> unit Proofview.tactic
 
 val red_safe :
   Reductionops.reduction_function ->
@@ -310,6 +312,7 @@ val applyn :
            with_evars:bool ->
            ?beta:bool ->
            ?with_shelve:bool ->
+           ?first_goes_last:bool ->
            int ->
            EConstr.t -> v82tac
 exception NotEnoughProducts
@@ -336,9 +339,17 @@ val refine_with :
            ?beta:bool ->
            ?with_evars:bool ->
            evar_map * EConstr.t -> v82tac
+
+val pf_resolve_typeclasses :
+  where:EConstr.t ->
+  fail:bool -> Goal.goal Evd.sigma -> Goal.goal Evd.sigma
+val resolve_typeclasses :
+  where:EConstr.t ->
+  fail:bool -> Environ.env -> Evd.evar_map -> Evd.evar_map
+
 (*********************** Wrapped Coq  tactics *****************************)
 
-val rewritetac : ssrdir -> EConstr.t -> tactic
+val rewritetac : ?under:bool -> ssrdir -> EConstr.t -> tactic
 
 type name_hint = (int * EConstr.types array) option ref
 
@@ -352,31 +363,17 @@ val genstac :
   Tacmach.tactic
 
 val pf_interp_gen :
-  Goal.goal Evd.sigma ->
   bool ->
   (Ssrast.ssrhyp list option * Ssrmatching.occ) *
     Ssrmatching.cpattern ->
-  EConstr.t * EConstr.t * Ssrast.ssrhyp list *
+  Goal.goal Evd.sigma ->
+  (EConstr.t * EConstr.t * Ssrast.ssrhyp list) *
     Goal.goal Evd.sigma
 
-val pf_interp_gen_aux :
-  Goal.goal Evd.sigma ->
-  bool ->
-  (Ssrast.ssrhyp list option * Ssrmatching.occ) *
-    Ssrmatching.cpattern ->
-  bool * Ssrmatching.pattern * EConstr.t *
-    EConstr.t * Ssrast.ssrhyp list * UState.t *
-      Goal.goal Evd.sigma
-
-val is_name_in_ipats :
-           Id.t -> ssripats -> bool
-
-type profiler = { 
-  profile : 'a 'b. ('a -> 'b) -> 'a -> 'b;
-  reset : unit -> unit;
-  print : unit -> unit }
-
-val mk_profiler : string -> profiler
+(* HACK: use to put old pf_code in the tactic monad *)
+val pfLIFT
+  :  (Goal.goal Evd.sigma -> 'a * Goal.goal Evd.sigma)
+  -> 'a Proofview.tactic
 
 (** Basic tactics *)
 
@@ -431,18 +428,23 @@ val tacREDUCE_TO_QUANTIFIED_IND :
 val tacTYPEOF : EConstr.t -> EConstr.types Proofview.tactic
 
 val tclINTRO_ID : Id.t -> unit Proofview.tactic
-val tclINTRO_ANON : unit Proofview.tactic
+val tclINTRO_ANON : ?seed:string -> unit -> unit Proofview.tactic
 
 (* Lower level API, calls conclusion with the name taken from the prod *)
+type intro_id =
+  | Anon
+  | Id of Id.t
+  | Seed of string
+
 val tclINTRO :
-  id:Id.t option ->
+  id:intro_id ->
   conclusion:(orig_name:Name.t -> new_name:Id.t -> unit Proofview.tactic) ->
   unit Proofview.tactic
 
 val tclRENAME_HD_PROD : Name.t -> unit Proofview.tactic
 
 (* calls the tactic only if there are more than 0 goals *)
-val tcl0G : unit Proofview.tactic -> unit Proofview.tactic
+val tcl0G : default:'a -> 'a Proofview.tactic -> 'a Proofview.tactic
 
 (* like tclFIRST but with 'a tactic *)
 val tclFIRSTa : 'a Proofview.tactic list -> 'a Proofview.tactic
@@ -474,9 +476,14 @@ end
 module MakeState(S : StateType) : sig
 
   val tclGET : (S.state -> unit Proofview.tactic) -> unit Proofview.tactic
+  val tclGET1 : (S.state -> 'a Proofview.tactic) -> 'a Proofview.tactic
   val tclSET : S.state -> unit Proofview.tactic
   val tacUPDATE : (S.state -> S.state Proofview.tactic) -> unit Proofview.tactic
 
   val get : Proofview.Goal.t -> S.state
 
 end
+
+val is_ind_ref : Evd.evar_map -> EConstr.t -> Names.GlobRef.t -> bool
+val is_construct_ref : Evd.evar_map -> EConstr.t -> Names.GlobRef.t -> bool
+val is_const_ref : Evd.evar_map -> EConstr.t -> Names.GlobRef.t -> bool

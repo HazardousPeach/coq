@@ -62,7 +62,7 @@ let basename_noext filename =
 (** ML Files specified on the command line. In the entries:
     - the first string is the basename of the file, without extension nor
       directory part
-    - the second string of [mlAccu] is the extension (either .ml or .ml4)
+    - the second string of [mlAccu] is the extension (either .ml or .mlg)
     - the [dir] part is the directory, with None used as the current directory
 *)
 
@@ -132,7 +132,7 @@ let add_mllib_known, _, search_mllib_known = mkknown ()
 let add_mlpack_known, _, search_mlpack_known = mkknown ()
 
 let vKnown = (Hashtbl.create 19 : (string list, string * bool) Hashtbl.t)
-(** The associated boolean is true if this is a root path. *)
+(* The associated boolean is true if this is a root path. *)
 let coqlibKnown = (Hashtbl.create 19 : (string list, unit) Hashtbl.t)
 
 let get_prefix p l =
@@ -496,9 +496,9 @@ let rec suffixes = function
 
 let add_caml_known phys_dir _ f =
   let basename,suff =
-    get_extension f [".ml";".mli";".ml4";".mllib";".mlpack"] in
+    get_extension f [".ml";".mli";".mlg";".mllib";".mlpack"] in
   match suff with
-    | ".ml"|".ml4" -> add_ml_known basename (Some phys_dir) suff
+    | ".ml"|".mlg" -> add_ml_known basename (Some phys_dir) suff
     | ".mli" -> add_mli_known basename (Some phys_dir) suff
     | ".mllib" -> add_mllib_known basename (Some phys_dir) suff
     | ".mlpack" -> add_mlpack_known basename (Some phys_dir) suff
@@ -584,12 +584,12 @@ let rec treat_file old_dirname old_name =
 	   in
            Array.iter (treat_file (Some newdirname)) (Sys.readdir complete_name))
     | S_REG ->
-	(match get_extension name [".v";".ml";".mli";".ml4";".mllib";".mlpack"] with
+        (match get_extension name [".v";".ml";".mli";".mlg";".mllib";".mlpack"] with
 	   | (base,".v") ->
 	       let name = file_name base dirname
 	       and absname = absolute_file_name base dirname in
 	       addQueue vAccu (name, absname)
-	   | (base,(".ml"|".ml4" as ext)) -> addQueue mlAccu (base,ext,dirname)
+           | (base,(".ml"|".mlg" as ext)) -> addQueue mlAccu (base,ext,dirname)
 	   | (base,".mli") -> addQueue mliAccu (base,dirname)
 	   | (base,".mllib") -> addQueue mllibAccu (base,dirname)
 	   | (base,".mlpack") -> addQueue mlpackAccu (base,dirname)

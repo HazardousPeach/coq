@@ -217,7 +217,7 @@ let declare_delimiters scope key =
     | None -> scope_map := String.Map.add scope newsc !scope_map
     | Some oldkey when String.equal oldkey key -> ()
     | Some oldkey ->
-        (** FIXME: implement multikey scopes? *)
+        (* FIXME: implement multikey scopes? *)
 	Flags.if_verbose Feedback.msg_info
 	  (str "Overwriting previous delimiting key " ++ str oldkey ++ str " in scope " ++ str scope);
 	scope_map := String.Map.add scope newsc !scope_map
@@ -320,7 +320,7 @@ let notation_constr_key = function (* Rem: NApp(NRef ref,[]) stands for @ref *)
 (* Interpreting numbers (not in summary because functional objects)   *)
 
 type required_module = full_path * string list
-type rawnum = Constrexpr.raw_natural_number * Constrexpr.sign
+type rawnum = Constrexpr.sign * Constrexpr.raw_numeral
 
 type prim_token_uid = string
 
@@ -343,15 +343,20 @@ module InnerPrimToken = struct
     | StringInterp f, StringInterp f' -> f == f'
     | _ -> false
 
-  let ofNumeral n s =
-    if s then Bigint.of_string n else Bigint.neg (Bigint.of_string n)
+  let ofNumeral s n =
+    let n = String.(concat "" (split_on_char '_' n)) in
+    match s with
+    | SPlus -> Bigint.of_string n
+    | SMinus -> Bigint.neg (Bigint.of_string n)
 
   let do_interp ?loc interp primtok =
     match primtok, interp with
-    | Numeral (n,s), RawNumInterp interp -> interp ?loc (n,s)
-    | Numeral (n,s), BigNumInterp interp -> interp ?loc (ofNumeral n s)
+    | Numeral (s,n), RawNumInterp interp -> interp ?loc (s,n)
+    | Numeral (s,{ NumTok.int = n; frac = ""; exp = "" }),
+      BigNumInterp interp -> interp ?loc (ofNumeral s n)
     | String s, StringInterp interp -> interp ?loc s
-    | _ -> raise Not_found
+    | (Numeral _ | String _),
+      (RawNumInterp _ | BigNumInterp _ | StringInterp _) -> raise Not_found
 
   type uninterpreter =
     | RawNumUninterp of (any_glob_constr -> rawnum option)
@@ -365,15 +370,17 @@ module InnerPrimToken = struct
     | _ -> false
 
   let mkNumeral n =
-    if Bigint.is_pos_or_zero n then Numeral (Bigint.to_string n, true)
-    else Numeral (Bigint.to_string (Bigint.neg n), false)
+    if Bigint.is_pos_or_zero n then
+      Numeral (SPlus,NumTok.int (Bigint.to_string n))
+    else
+      Numeral (SMinus,NumTok.int (Bigint.to_string (Bigint.neg n)))
 
   let mkString = function
     | None -> None
     | Some s -> if Unicode.is_utf8 s then Some (String s) else None
 
   let do_uninterp uninterp g = match uninterp with
-    | RawNumUninterp u -> Option.map (fun (n,s) -> Numeral (n,s)) (u g)
+    | RawNumUninterp u -> Option.map (fun (s,n) -> Numeral (s,n)) (u g)
     | BigNumUninterp u -> Option.map mkNumeral (u g)
     | StringUninterp u -> mkString (u g)
 
@@ -395,16 +402,16 @@ let prim_token_uninterpreters =
 
 (*******************************************************)
 (* Numeral notation interpretation                     *)
-type numeral_notation_error =
+type prim_token_notation_error =
   | UnexpectedTerm of Constr.t
   | UnexpectedNonOptionTerm of Constr.t
 
-exception NumeralNotationError of Environ.env * Evd.evar_map * numeral_notation_error
+exception PrimTokenNotationError of string * Environ.env * Evd.evar_map * prim_token_notation_error
 
 type numnot_option =
   | Nop
-  | Warning of raw_natural_number
-  | Abstract of raw_natural_number
+  | Warning of string
+  | Abstract of string
 
 type int_ty =
   { uint : Names.inductive;
@@ -414,25 +421,37 @@ type z_pos_ty =
   { z_ty : Names.inductive;
     pos_ty : Names.inductive }
 
+type decimal_ty =
+  { int : int_ty;
+    decimal : Names.inductive }
+
 type target_kind =
   | Int of int_ty (* Coq.Init.Decimal.int + uint *)
   | UInt of Names.inductive (* Coq.Init.Decimal.uint *)
   | Z of z_pos_ty (* Coq.Numbers.BinNums.Z and positive *)
+  | Int63 (* Coq.Numbers.Cyclic.Int63.Int63.int *)
+  | Decimal of decimal_ty (* Coq.Init.Decimal.decimal + uint + int *)
+
+type string_target_kind =
+  | ListByte
+  | Byte
 
 type option_kind = Option | Direct
-type conversion_kind = target_kind * option_kind
+type 'target conversion_kind = 'target * option_kind
 
-type numeral_notation_obj =
-  { to_kind : conversion_kind;
+type ('target, 'warning) prim_token_notation_obj =
+  { to_kind : 'target conversion_kind;
     to_ty : GlobRef.t;
-    of_kind : conversion_kind;
+    of_kind : 'target conversion_kind;
     of_ty : GlobRef.t;
-    num_ty : Libnames.qualid; (* for warnings / error messages *)
-    warning : numnot_option }
+    ty_name : Libnames.qualid; (* for warnings / error messages *)
+    warning : 'warning }
 
-module Numeral = struct
-(** * Numeral notation *)
+type numeral_notation_obj = (target_kind, numnot_option) prim_token_notation_obj
+type string_notation_obj = (string_target_kind, unit) prim_token_notation_obj
 
+module PrimTokenNotation = struct
+(** * Code shared between Numeral notation and String notation *)
 (** Reduction
 
     The constr [c] below isn't necessarily well-typed, since we
@@ -443,25 +462,106 @@ module Numeral = struct
     At least [c] is known to be evar-free, since it comes from
     our own ad-hoc [constr_of_glob] or from conversions such
     as [coqint_of_rawnum].
+
+    It is important to fully normalize the term, *including inductive
+    parameters of constructors*; see
+    https://github.com/coq/coq/issues/9840 for details on what goes
+    wrong if this does not happen, e.g., from using the vm rather than
+    cbv.
 *)
 
-let eval_constr env sigma (c : Constr.t) =
-  let c = EConstr.of_constr c in
-  let sigma,t = Typing.type_of env sigma c in
-  let c' = Vnorm.cbv_vm env sigma c t in
-  EConstr.Unsafe.to_constr c'
-
-(* For testing with "compute" instead of "vm_compute" :
 let eval_constr env sigma (c : Constr.t) =
   let c = EConstr.of_constr c in
   let c' = Tacred.compute env sigma c in
   EConstr.Unsafe.to_constr c'
-*)
 
 let eval_constr_app env sigma c1 c2 =
   eval_constr env sigma (mkApp (c1,[| c2 |]))
 
-exception NotANumber
+exception NotAValidPrimToken
+
+(** The uninterp function below work at the level of [glob_constr]
+    which is too low for us here. So here's a crude conversion back
+    to [constr] for the subset that concerns us.
+
+    Note that if you update [constr_of_glob], you should update the
+    corresponding numeral notation *and* string notation doc in
+    doc/sphinx/user-extensions/syntax-extensions.rst that describes
+    what it means for a term to be ground / to be able to be
+    considered for parsing. *)
+
+let rec constr_of_glob env sigma g = match DAst.get g with
+  | Glob_term.GRef (ConstructRef c, _) ->
+      let sigma,c = Evd.fresh_constructor_instance env sigma c in
+      sigma,mkConstructU c
+  | Glob_term.GRef (IndRef c, _) ->
+      let sigma,c = Evd.fresh_inductive_instance env sigma c in
+      sigma,mkIndU c
+  | Glob_term.GApp (gc, gcl) ->
+      let sigma,c = constr_of_glob env sigma gc in
+      let sigma,cl = List.fold_left_map (constr_of_glob env) sigma gcl in
+      sigma,mkApp (c, Array.of_list cl)
+  | Glob_term.GInt i -> sigma, mkInt i
+  | _ ->
+      raise NotAValidPrimToken
+
+let rec glob_of_constr token_kind ?loc env sigma c = match Constr.kind c with
+  | App (c, ca) ->
+      let c = glob_of_constr token_kind ?loc env sigma c in
+      let cel = List.map (glob_of_constr token_kind ?loc env sigma) (Array.to_list ca) in
+      DAst.make ?loc (Glob_term.GApp (c, cel))
+  | Construct (c, _) -> DAst.make ?loc (Glob_term.GRef (ConstructRef c, None))
+  | Const (c, _) -> DAst.make ?loc (Glob_term.GRef (ConstRef c, None))
+  | Ind (ind, _) -> DAst.make ?loc (Glob_term.GRef (IndRef ind, None))
+  | Var id -> DAst.make ?loc (Glob_term.GRef (VarRef id, None))
+  | Int i -> DAst.make ?loc (Glob_term.GInt i)
+  | _ -> Loc.raise ?loc (PrimTokenNotationError(token_kind,env,sigma,UnexpectedTerm c))
+
+let no_such_prim_token uninterpreted_token_kind ?loc ty =
+  CErrors.user_err ?loc
+   (str ("Cannot interpret this "^uninterpreted_token_kind^" as a value of type ") ++
+    pr_qualid ty)
+
+let interp_option uninterpreted_token_kind token_kind ty ?loc env sigma c =
+  match Constr.kind c with
+  | App (_Some, [| _; c |]) -> glob_of_constr token_kind ?loc env sigma c
+  | App (_None, [| _ |]) -> no_such_prim_token uninterpreted_token_kind ?loc ty
+  | x -> Loc.raise ?loc (PrimTokenNotationError(token_kind,env,sigma,UnexpectedNonOptionTerm c))
+
+let uninterp_option c =
+  match Constr.kind c with
+  | App (_Some, [| _; x |]) -> x
+  | _ -> raise NotAValidPrimToken
+
+let uninterp to_raw o (Glob_term.AnyGlobConstr n) =
+  let env = Global.env () in
+  let sigma = Evd.from_env env in
+  let sigma,of_ty = Evd.fresh_global env sigma o.of_ty in
+  let of_ty = EConstr.Unsafe.to_constr of_ty in
+  try
+    let sigma,n = constr_of_glob env sigma n in
+    let c = eval_constr_app env sigma of_ty n in
+    let c = if snd o.of_kind == Direct then c else uninterp_option c in
+    Some (to_raw (fst o.of_kind, c))
+  with
+  | Type_errors.TypeError _ | Pretype_errors.PretypeError _ -> None (* cf. eval_constr_app *)
+  | NotAValidPrimToken -> None (* all other functions except big2raw *)
+
+end
+
+(** Conversion from bigint to int63 *)
+let rec int63_of_pos_bigint i =
+  let open Bigint in
+  if equal i zero then Uint63.of_int 0
+  else
+    let (quo,rem) = div2_with_rest i in
+    if rem then Uint63.add (Uint63.of_int 1)
+      (Uint63.mul (Uint63.of_int 2) (int63_of_pos_bigint quo))
+    else Uint63.mul (Uint63.of_int 2) (int63_of_pos_bigint quo)
+
+module Numeral = struct
+(** * Numeral notation *)
+open PrimTokenNotation
 
 let warn_large_num =
   CWarnings.create ~name:"large-number" ~category:"numbers"
@@ -516,15 +616,29 @@ let coquint_of_rawnum uint str =
   let nil = mkConstruct (uint,1) in
   let rec do_chars s i acc =
     if i < 0 then acc
-    else
+    else if s.[i] == '_' then do_chars s (i-1) acc else
       let dg = mkConstruct (uint, digit_of_char s.[i]) in
       do_chars s (i-1) (mkApp(dg,[|acc|]))
   in
   do_chars str (String.length str - 1) nil
 
-let coqint_of_rawnum inds (str,sign) =
+let coqint_of_rawnum inds sign str =
   let uint = coquint_of_rawnum inds.uint str in
-  mkApp (mkConstruct (inds.int, if sign then 1 else 2), [|uint|])
+  let pos_neg = match sign with SPlus -> 1 | SMinus -> 2 in
+  mkApp (mkConstruct (inds.int, pos_neg), [|uint|])
+
+let coqdecimal_of_rawnum inds sign n =
+  let i, f, e = NumTok.(n.int, n.frac, n.exp) in
+  let i = coqint_of_rawnum inds.int sign i in
+  let f = coquint_of_rawnum inds.int.uint f in
+  if e = "" then mkApp (mkConstruct (inds.decimal, 1), [|i; f|])  (* Decimal *)
+  else
+    let sign, e = match e.[1] with
+      | '-' -> SMinus, String.sub e 2 (String.length e - 2)
+      | '+' -> SPlus, String.sub e 2 (String.length e - 2)
+      | _ -> SPlus, String.sub e 1 (String.length e - 1) in
+    let e = coqint_of_rawnum inds.int sign e in
+    mkApp (mkConstruct (inds.decimal, 2), [|i; f; e|])  (* DecimalExp *)
 
 let rawnum_of_coquint c =
   let rec of_uint_loop c buf =
@@ -535,26 +649,39 @@ let rawnum_of_coquint c =
         | Construct ((_,n), _) (* D0 to D9 *) ->
            let () = Buffer.add_char buf (char_of_digit n) in
            of_uint_loop a buf
-        | _ -> raise NotANumber)
-    | _ -> raise NotANumber
+        | _ -> raise NotAValidPrimToken)
+    | _ -> raise NotAValidPrimToken
   in
   let buf = Buffer.create 64 in
   let () = of_uint_loop c buf in
   if Int.equal (Buffer.length buf) 0 then
     (* To avoid ambiguities between Nil and (D0 Nil), we choose
        to not display Nil alone as "0" *)
-    raise NotANumber
-  else Buffer.contents buf
+    raise NotAValidPrimToken
+  else NumTok.int (Buffer.contents buf)
 
 let rawnum_of_coqint c =
   match Constr.kind c with
   | App (c,[|c'|]) ->
      (match Constr.kind c with
-      | Construct ((_,1), _) (* Pos *) -> (rawnum_of_coquint c', true)
-      | Construct ((_,2), _) (* Neg *) -> (rawnum_of_coquint c', false)
-      | _ -> raise NotANumber)
-  | _ -> raise NotANumber
+      | Construct ((_,1), _) (* Pos *) -> (SPlus, rawnum_of_coquint c')
+      | Construct ((_,2), _) (* Neg *) -> (SMinus, rawnum_of_coquint c')
+      | _ -> raise NotAValidPrimToken)
+  | _ -> raise NotAValidPrimToken
 
+let rawnum_of_decimal c =
+  let of_ife i f e =
+    let sign, n = rawnum_of_coqint i in
+    let f =
+      try (rawnum_of_coquint f).NumTok.int with NotAValidPrimToken -> "" in
+    let e = match e with None -> "" | Some e -> match rawnum_of_coqint e with
+      | SPlus, e -> "e+" ^ e.NumTok.int
+      | SMinus, e -> "e-" ^ e.NumTok.int in
+    sign,{ n with NumTok.frac = f; exp = e } in
+  match Constr.kind c with
+  | App (_,[|i; f|]) -> of_ife i f None
+  | App (_,[|i; f; e|]) -> of_ife i f (Some e)
+  | _ -> raise NotAValidPrimToken
 
 (***********************************************************************)
 
@@ -583,9 +710,9 @@ let rec bigint_of_pos c = match Constr.kind c with
           | 2 -> (* xO *) Bigint.mult_2 (bigint_of_pos d)
           | n -> assert false (* no other constructor of type positive *)
           end
-      | x -> raise NotANumber
+      | x -> raise NotAValidPrimToken
       end
-  | x -> raise NotANumber
+  | x -> raise NotAValidPrimToken
 
 (** Now, [Z] from/to bigint *)
 
@@ -610,101 +737,189 @@ let bigint_of_z z = match Constr.kind z with
           | 3 -> (* Zneg *) Bigint.neg (bigint_of_pos d)
           | n -> assert false (* no other constructor of type Z *)
           end
-      | _ -> raise NotANumber
+      | _ -> raise NotAValidPrimToken
       end
-  | _ -> raise NotANumber
+  | _ -> raise NotAValidPrimToken
 
-(** The uninterp function below work at the level of [glob_constr]
-    which is too low for us here. So here's a crude conversion back
-    to [constr] for the subset that concerns us. *)
+(** Now, [Int63] from/to bigint *)
 
-let rec constr_of_glob env sigma g = match DAst.get g with
-  | Glob_term.GRef (ConstructRef c, _) ->
-      let sigma,c = Evd.fresh_constructor_instance env sigma c in
-      sigma,mkConstructU c
-  | Glob_term.GApp (gc, gcl) ->
-      let sigma,c = constr_of_glob env sigma gc in
-      let sigma,cl = List.fold_left_map (constr_of_glob env) sigma gcl in
-      sigma,mkApp (c, Array.of_list cl)
-  | _ ->
-      raise NotANumber
+let int63_of_pos_bigint ?loc n =
+  let i = int63_of_pos_bigint n in
+  mkInt i
 
-let rec glob_of_constr ?loc env sigma c = match Constr.kind c with
-  | App (c, ca) ->
-      let c = glob_of_constr ?loc env sigma c in
-      let cel = List.map (glob_of_constr ?loc env sigma) (Array.to_list ca) in
-      DAst.make ?loc (Glob_term.GApp (c, cel))
-  | Construct (c, _) -> DAst.make ?loc (Glob_term.GRef (ConstructRef c, None))
-  | Const (c, _) -> DAst.make ?loc (Glob_term.GRef (ConstRef c, None))
-  | Ind (ind, _) -> DAst.make ?loc (Glob_term.GRef (IndRef ind, None))
-  | Var id -> DAst.make ?loc (Glob_term.GRef (VarRef id, None))
-  | _ -> Loc.raise ?loc (NumeralNotationError(env,sigma,UnexpectedTerm c))
+let error_negative ?loc =
+  CErrors.user_err ?loc ~hdr:"interp_int63" (Pp.str "int63 are only non-negative numbers.")
 
-let no_such_number ?loc ty =
-  CErrors.user_err ?loc
-   (str "Cannot interpret this number as a value of type " ++
-    pr_qualid ty)
+let error_overflow ?loc n =
+  CErrors.user_err ?loc ~hdr:"interp_int63" Pp.(str "overflow in int63 literal: " ++ str (Bigint.to_string n))
 
-let interp_option ty ?loc env sigma c =
+let interp_int63 ?loc n =
+  let open Bigint in
+  if is_pos_or_zero n
+  then
+    if less_than n (pow two 63)
+    then int63_of_pos_bigint ?loc n
+    else error_overflow ?loc n
+  else error_negative ?loc
+
+let bigint_of_int63 c =
   match Constr.kind c with
-  | App (_Some, [| _; c |]) -> glob_of_constr ?loc env sigma c
-  | App (_None, [| _ |]) -> no_such_number ?loc ty
-  | x -> Loc.raise ?loc (NumeralNotationError(env,sigma,UnexpectedNonOptionTerm c))
-
-let uninterp_option c =
-  match Constr.kind c with
-  | App (_Some, [| _; x |]) -> x
-  | _ -> raise NotANumber
+  | Int i -> Bigint.of_string (Uint63.to_string i)
+  | _ -> raise NotAValidPrimToken
 
 let big2raw n =
-  if Bigint.is_pos_or_zero n then (Bigint.to_string n, true)
-  else (Bigint.to_string (Bigint.neg n), false)
+  if Bigint.is_pos_or_zero n then
+    (SPlus, NumTok.int (Bigint.to_string n))
+  else
+    (SMinus, NumTok.int (Bigint.to_string (Bigint.neg n)))
 
-let raw2big (n,s) =
-  if s then Bigint.of_string n else Bigint.neg (Bigint.of_string n)
+let raw2big s n = match s with
+  | SPlus -> Bigint.of_string n
+  | SMinus -> Bigint.neg (Bigint.of_string n)
 
 let interp o ?loc n =
-  begin match o.warning with
-  | Warning threshold when snd n && rawnum_compare (fst n) threshold >= 0 ->
-     warn_large_num o.num_ty
+  begin match o.warning, n with
+  | Warning threshold, (SPlus, { NumTok.int = n; frac = ""; exp = "" })
+       when rawnum_compare n threshold >= 0 ->
+     warn_large_num o.ty_name
   | _ -> ()
   end;
-  let c = match fst o.to_kind with
-    | Int int_ty -> coqint_of_rawnum int_ty n
-    | UInt uint_ty when snd n -> coquint_of_rawnum uint_ty (fst n)
-    | UInt _ (* n <= 0 *) -> no_such_number ?loc o.num_ty
-    | Z z_pos_ty -> z_of_bigint z_pos_ty (raw2big n)
+  let c = match fst o.to_kind, n with
+    | Int int_ty, (s, { NumTok.int = n; frac = ""; exp = "" }) ->
+       coqint_of_rawnum int_ty s n
+    | UInt uint_ty, (SPlus, { NumTok.int = n; frac = ""; exp = "" }) ->
+       coquint_of_rawnum uint_ty n
+    | Z z_pos_ty, (s, { NumTok.int = n; frac = ""; exp = "" }) ->
+       z_of_bigint z_pos_ty (raw2big s n)
+    | Int63, (s, { NumTok.int = n; frac = ""; exp = "" }) ->
+       interp_int63 ?loc (raw2big s n)
+    | (Int _ | UInt _ | Z _ | Int63), _ ->
+       no_such_prim_token "number" ?loc o.ty_name
+    | Decimal decimal_ty, (s,n) -> coqdecimal_of_rawnum decimal_ty s n
   in
   let env = Global.env () in
   let sigma = Evd.from_env env in
   let sigma,to_ty = Evd.fresh_global env sigma o.to_ty in
   let to_ty = EConstr.Unsafe.to_constr to_ty in
   match o.warning, snd o.to_kind with
-  | Abstract threshold, Direct when rawnum_compare (fst n) threshold >= 0 ->
-     warn_abstract_large_num (o.num_ty,o.to_ty);
-     glob_of_constr ?loc env sigma (mkApp (to_ty,[|c|]))
+  | Abstract threshold, Direct
+       when rawnum_compare (snd n).NumTok.int threshold >= 0 ->
+     warn_abstract_large_num (o.ty_name,o.to_ty);
+     glob_of_constr "numeral" ?loc env sigma (mkApp (to_ty,[|c|]))
   | _ ->
      let res = eval_constr_app env sigma to_ty c in
      match snd o.to_kind with
-     | Direct -> glob_of_constr ?loc env sigma res
-     | Option -> interp_option o.num_ty ?loc env sigma res
+     | Direct -> glob_of_constr "numeral" ?loc env sigma res
+     | Option -> interp_option "number" "numeral" o.ty_name ?loc env sigma res
 
-let uninterp o (Glob_term.AnyGlobConstr n) =
+let uninterp o n =
+  PrimTokenNotation.uninterp
+    begin function
+      | (Int _, c) -> rawnum_of_coqint c
+      | (UInt _, c) -> (SPlus, rawnum_of_coquint c)
+      | (Z _, c) -> big2raw (bigint_of_z c)
+      | (Int63, c) -> big2raw (bigint_of_int63 c)
+      | (Decimal _, c) -> rawnum_of_decimal c
+    end o n
+end
+
+module Strings = struct
+(** * String notation *)
+open PrimTokenNotation
+
+let qualid_of_ref n =
+  n |> Coqlib.lib_ref |> Nametab.shortest_qualid_of_global Id.Set.empty
+
+let q_list () = qualid_of_ref "core.list.type"
+let q_byte () = qualid_of_ref "core.byte.type"
+
+let unsafe_locate_ind q =
+  match Nametab.locate q with
+  | IndRef i -> i
+  | _ -> raise Not_found
+
+let locate_list () = unsafe_locate_ind (q_list ())
+let locate_byte () = unsafe_locate_ind (q_byte ())
+
+(***********************************************************************)
+
+(** ** Conversion between Coq [list Byte.byte] and internal raw string *)
+
+let coqbyte_of_char_code byte c =
+  mkConstruct (byte, 1 + c)
+
+let coqbyte_of_string ?loc byte s =
+  let p =
+    if Int.equal (String.length s) 1 then int_of_char s.[0]
+    else
+      if Int.equal (String.length s) 3 && is_digit s.[0] && is_digit s.[1] && is_digit s.[2]
+      then int_of_string s
+      else
+       user_err ?loc ~hdr:"coqbyte_of_string"
+         (str "Expects a single character or a three-digits ascii code.") in
+  coqbyte_of_char_code byte p
+
+let coqbyte_of_char byte c = coqbyte_of_char_code byte (Char.code c)
+
+let make_ascii_string n =
+  if n>=32 && n<=126 then String.make 1 (char_of_int n)
+  else Printf.sprintf "%03d" n
+
+let char_code_of_coqbyte c =
+  match Constr.kind c with
+  | Construct ((_,c), _) -> c - 1
+  | _ -> raise NotAValidPrimToken
+
+let string_of_coqbyte c = make_ascii_string (char_code_of_coqbyte c)
+
+let coqlist_byte_of_string byte_ty list_ty str =
+  let cbyte = mkInd byte_ty in
+  let nil = mkApp (mkConstruct (list_ty, 1), [|cbyte|]) in
+  let cons x xs = mkApp (mkConstruct (list_ty, 2), [|cbyte; x; xs|]) in
+  let rec do_chars s i acc =
+    if i < 0 then acc
+    else
+      let b = coqbyte_of_char byte_ty s.[i] in
+      do_chars s (i-1) (cons b acc)
+  in
+  do_chars str (String.length str - 1) nil
+
+(* N.B. We rely on the fact that [nil] is the first constructor and [cons] is the second constructor, for [list] *)
+let string_of_coqlist_byte c =
+  let rec of_coqlist_byte_loop c buf =
+    match Constr.kind c with
+    | App (_nil, [|_ty|]) -> ()
+    | App (_cons, [|_ty;b;c|]) ->
+      let () = Buffer.add_char buf (Char.chr (char_code_of_coqbyte b)) in
+      of_coqlist_byte_loop c buf
+    | _ -> raise NotAValidPrimToken
+  in
+  let buf = Buffer.create 64 in
+  let () = of_coqlist_byte_loop c buf in
+  Buffer.contents buf
+
+let interp o ?loc n =
+  let byte_ty = locate_byte () in
+  let list_ty = locate_list () in
+  let c = match fst o.to_kind with
+    | ListByte -> coqlist_byte_of_string byte_ty list_ty n
+    | Byte -> coqbyte_of_string ?loc byte_ty n
+  in
   let env = Global.env () in
   let sigma = Evd.from_env env in
-  let sigma,of_ty = Evd.fresh_global env sigma o.of_ty in
-  let of_ty = EConstr.Unsafe.to_constr of_ty in
-  try
-    let sigma,n = constr_of_glob env sigma n in
-    let c = eval_constr_app env sigma of_ty n in
-    let c = if snd o.of_kind == Direct then c else uninterp_option c in
-    match fst o.of_kind with
-    | Int _ -> Some (rawnum_of_coqint c)
-    | UInt _ -> Some (rawnum_of_coquint c, true)
-    | Z _ -> Some (big2raw (bigint_of_z c))
-  with
-  | Type_errors.TypeError _ | Pretype_errors.PretypeError _ -> None (* cf. eval_constr_app *)
-  | NotANumber -> None (* all other functions except big2raw *)
+  let sigma,to_ty = Evd.fresh_global env sigma o.to_ty in
+  let to_ty = EConstr.Unsafe.to_constr to_ty in
+  let res = eval_constr_app env sigma to_ty c in
+  match snd o.to_kind with
+  | Direct -> glob_of_constr "string" ?loc env sigma res
+  | Option -> interp_option "string" "string" o.ty_name ?loc env sigma res
+
+let uninterp o n =
+  PrimTokenNotation.uninterp
+    begin function
+      | (ListByte, c) -> string_of_coqlist_byte c
+      | (Byte, c) -> string_of_coqbyte c
+    end o n
 end
 
 (* A [prim_token_infos], which is synchronized with the document
@@ -718,6 +933,7 @@ end
 type prim_token_interp_info =
     Uid of prim_token_uid
   | NumeralNotation of numeral_notation_obj
+  | StringNotation of string_notation_obj
 
 type prim_token_infos = {
   pt_local : bool; (** Is this interpretation local? *)
@@ -843,29 +1059,29 @@ let find_with_delimiters = function
   | None -> None
   | Some scope ->
       match (String.Map.find scope !scope_map).delimiters with
-	| Some key -> Some (Some scope, Some key)
-	| None -> None
+        | Some key -> Some (Some scope, Some key)
+        | None -> None
 
 let rec find_without_delimiters find (ntn_scope,ntn) = function
   | Scope scope :: scopes ->
       (* Is the expected ntn/numpr attached to the most recently open scope? *)
       begin match ntn_scope with
       | Some scope' when String.equal scope scope' ->
-	Some (None,None)
+        Some (None,None)
       | _ ->
 	(* If the most recently open scope has a notation/numeral printer
     	   but not the expected one then we need delimiters *)
 	if find scope then
-	  find_with_delimiters ntn_scope
+          find_with_delimiters ntn_scope
 	else
-	  find_without_delimiters find (ntn_scope,ntn) scopes
+          find_without_delimiters find (ntn_scope,ntn) scopes
       end
   | SingleNotation ntn' :: scopes ->
       begin match ntn_scope, ntn with
       | None, Some ntn when notation_eq ntn ntn' ->
-	Some (None, None)
+        Some (None, None)
       | _ ->
-	find_without_delimiters find (ntn_scope,ntn) scopes
+        find_without_delimiters find (ntn_scope,ntn) scopes
       end
   | [] ->
       (* Can we switch to [scope]? Yes if it has defined delimiters *)
@@ -924,8 +1140,8 @@ let find_notation ntn sc =
   (n.not_interp, n.not_location)
 
 let notation_of_prim_token = function
-  | Numeral (n,true) -> InConstrEntrySomeLevel, n
-  | Numeral (n,false) -> InConstrEntrySomeLevel, "- "^n
+  | Numeral (SPlus,n) -> InConstrEntrySomeLevel, NumTok.to_string n
+  | Numeral (SMinus,n) -> InConstrEntrySomeLevel, "- "^NumTok.to_string n
   | String _ -> raise Not_found
 
 let find_prim_token check_allowed ?loc p sc =
@@ -942,6 +1158,7 @@ let find_prim_token check_allowed ?loc p sc =
   let interp = match info with
     | Uid uid -> Hashtbl.find prim_token_interpreters uid
     | NumeralNotation o -> InnerPrimToken.RawNumInterp (Numeral.interp o)
+    | StringNotation o -> InnerPrimToken.StringInterp (Strings.interp o)
   in
   let pat = InnerPrimToken.do_interp ?loc interp p in
   check_allowed pat;
@@ -1122,6 +1339,7 @@ let uninterp_prim_token c =
        let uninterp = match info with
          | Uid uid -> Hashtbl.find prim_token_uninterpreters uid
          | NumeralNotation o -> InnerPrimToken.RawNumUninterp (Numeral.uninterp o)
+         | StringNotation o -> InnerPrimToken.StringUninterp (Strings.uninterp o)
        in
        match InnerPrimToken.do_uninterp uninterp (AnyGlobConstr c) with
        | None -> raise Notation_ops.No_match
@@ -1129,7 +1347,7 @@ let uninterp_prim_token c =
      with Not_found -> raise Notation_ops.No_match
 
 let uninterp_prim_token_cases_pattern c =
-  match glob_constr_of_closed_cases_pattern c with
+  match glob_constr_of_closed_cases_pattern (Global.env()) c with
   | exception Not_found -> raise Notation_ops.No_match
   | na,c -> let (sc,n) = uninterp_prim_token c in (na,sc,n)
 
@@ -1141,6 +1359,8 @@ let availability_of_prim_token n printer_scope local_scopes =
       match n, uid with
       | Numeral _, NumeralNotation _ -> true
       | _, NumeralNotation _ -> false
+      | String _, StringNotation _ -> true
+      | _, StringNotation _ -> false
       | _, Uid uid ->
         let interp = Hashtbl.find prim_token_interpreters uid in
         match n, interp with
@@ -1314,7 +1534,7 @@ let rebuild_arguments_scope sigma (req,r,n,l,_) =
     | ArgsScopeNoDischarge -> assert false
     | ArgsScopeAuto ->
       let env = Global.env () in (*FIXME?*)
-      let typ = EConstr.of_constr @@ fst (Global.type_of_global_in_context env r) in
+      let typ = EConstr.of_constr @@ fst (Typeops.type_of_global_in_context env r) in
       let scs,cls = compute_arguments_scope_full sigma typ in
       (req,r,List.length scs,scs,cls)
     | ArgsScopeManual ->
@@ -1322,7 +1542,7 @@ let rebuild_arguments_scope sigma (req,r,n,l,_) =
          for the extra parameters of the section. Discard the classes
          of the manually given scopes to avoid further re-computations. *)
       let env = Global.env () in (*FIXME?*)
-      let typ = EConstr.of_constr @@ fst (Global.type_of_global_in_context env r) in
+      let typ = EConstr.of_constr @@ fst (Typeops.type_of_global_in_context env r) in
       let l',cls = compute_arguments_scope_full sigma typ in
       let l1 = List.firstn n l' in
       let cls1 = List.firstn n cls in
@@ -1369,7 +1589,7 @@ let find_arguments_scope r =
 
 let declare_ref_arguments_scope sigma ref =
   let env = Global.env () in (* FIXME? *)
-  let typ = EConstr.of_constr @@ fst @@ Global.type_of_global_in_context env ref in
+  let typ = EConstr.of_constr @@ fst @@ Typeops.type_of_global_in_context env ref in
   let (scs,cls as o) = compute_arguments_scope_full sigma typ in
   declare_arguments_scope_gen ArgsScopeAuto ref (List.length scs) o
 
@@ -1666,7 +1886,7 @@ let pr_visibility prglob = function
 (**********************************************************************)
 (* Synchronisation with reset *)
 
-let freeze _ =
+let freeze ~marshallable =
  (!scope_map, !scope_stack, !arguments_scope,
   !delimiters_map, !notations_key_table, !scope_class_map,
   !prim_token_interp_infos, !prim_token_uninterp_infos,
@@ -1701,7 +1921,7 @@ let _ =
       Summary.init_function = init }
 
 let with_notation_protection f x =
-  let fs = freeze false in
+  let fs = freeze ~marshallable:false in
   try let a = f x in unfreeze fs; a
   with reraise ->
     let reraise = CErrors.push reraise in

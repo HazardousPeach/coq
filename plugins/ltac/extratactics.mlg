@@ -12,6 +12,7 @@
 
 open Pp
 open Constr
+open Context
 open Genarg
 open Stdarg
 open Tacarg
@@ -30,7 +31,8 @@ open Namegen
 open Tactypes
 open Tactics
 open Proofview.Notations
-open Vernacinterp
+open Attributes
+open Vernacextend
 
 let wit_hyp = wit_var
 
@@ -48,9 +50,10 @@ let with_delayed_uconstr ist c tac =
   let flags = {
     Pretyping.use_typeclasses = false;
     solve_unification_constraints = true;
-    use_hook = Pfedit.solve_by_implicit_tactic ();
     fail_evar = false;
-    expand_evars = true
+    expand_evars = true;
+    program_mode = false;
+    polymorphic = false;
  } in
   let c = Tacinterp.type_uconstr ~flags ist c in
   Tacticals.New.tclDELAYEDWITHHOLES false c tac
@@ -306,8 +309,8 @@ let add_rewrite_hint ~poly bases ort t lcsr =
     let ctx =
       let ctx = UState.context_set ctx in
         if poly then ctx
-	else (** This is a global universe context that shouldn't be
-	       refreshed at every use of the hint, declare it globally. *)
+	else (* This is a global universe context that shouldn't be
+	        refreshed at every use of the hint, declare it globally. *)
 	  (Declare.declare_universe_context false ctx;
            Univ.ContextSet.empty)
     in
@@ -316,20 +319,20 @@ let add_rewrite_hint ~poly bases ort t lcsr =
   let add_hints base = add_rew_rules base eqs in
   List.iter add_hints bases
 
-let classify_hint _ = Vernacexpr.VtSideff [], Vernacexpr.VtLater
+let classify_hint _ = VtSideff [], VtLater
 
 }
 
 VERNAC COMMAND EXTEND HintRewrite CLASSIFIED BY { classify_hint }
-| [ "Hint" "Rewrite" orient(o) ne_constr_list(l) ":" preident_list(bl) ] ->
-  { add_rewrite_hint ~poly:atts.polymorphic bl o None l }
-| [ "Hint" "Rewrite" orient(o) ne_constr_list(l) "using" tactic(t)
+| #[ polymorphic; ] [ "Hint" "Rewrite" orient(o) ne_constr_list(l) ":" preident_list(bl) ] ->
+  { add_rewrite_hint ~poly:polymorphic bl o None l }
+| #[ polymorphic; ] [ "Hint" "Rewrite" orient(o) ne_constr_list(l) "using" tactic(t)
     ":" preident_list(bl) ] ->
-  { add_rewrite_hint ~poly:atts.polymorphic bl o (Some t) l }
-| [ "Hint" "Rewrite" orient(o) ne_constr_list(l) ] ->
-  { add_rewrite_hint ~poly:atts.polymorphic ["core"] o None l }
-| [ "Hint" "Rewrite" orient(o) ne_constr_list(l) "using" tactic(t) ] ->
-  { add_rewrite_hint ~poly:atts.polymorphic ["core"] o (Some t) l }
+  { add_rewrite_hint ~poly:polymorphic bl o (Some t) l }
+| #[ polymorphic; ] [ "Hint" "Rewrite" orient(o) ne_constr_list(l) ] ->
+  { add_rewrite_hint ~poly:polymorphic ["core"] o None l }
+| #[ polymorphic; ] [ "Hint" "Rewrite" orient(o) ne_constr_list(l) "using" tactic(t) ] ->
+  { add_rewrite_hint ~poly:polymorphic ["core"] o (Some t) l }
 END
 
 (**********************************************************************)
@@ -343,9 +346,11 @@ open Vars
 let constr_flags () = {
   Pretyping.use_typeclasses = true;
   Pretyping.solve_unification_constraints = Pfedit.use_unification_heuristics ();
-  Pretyping.use_hook = Pfedit.solve_by_implicit_tactic ();
   Pretyping.fail_evar = false;
-  Pretyping.expand_evars = true }
+  Pretyping.expand_evars = true;
+  Pretyping.program_mode = false;
+  Pretyping.polymorphic = false;
+}
 
 let refine_tac ist simple with_classes c =
   Proofview.Goal.enter begin fun gl ->
@@ -400,7 +405,7 @@ END
 open Inv
 open Leminv
 
-let seff id = Vernacexpr.VtSideff [id], Vernacexpr.VtLater
+let seff id = VtSideff [id], VtLater
 
 }
 
@@ -411,45 +416,39 @@ let seff id = Vernacexpr.VtSideff [id], Vernacexpr.VtLater
 END*)
 
 VERNAC COMMAND EXTEND DeriveInversionClear
-| [ "Derive" "Inversion_clear" ident(na) "with" constr(c) "Sort" sort_family(s) ]
+| #[ polymorphic; ] [ "Derive" "Inversion_clear" ident(na) "with" constr(c) "Sort" sort_family(s) ]
   => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c s false inv_clear_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c s false inv_clear_tac }
 
-| [ "Derive" "Inversion_clear" ident(na) "with" constr(c) ] => { seff na }
+| #[ polymorphic; ] [ "Derive" "Inversion_clear" ident(na) "with" constr(c) ] => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c Sorts.InProp false inv_clear_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c Sorts.InProp false inv_clear_tac }
 END
 
 VERNAC COMMAND EXTEND DeriveInversion
-| [ "Derive" "Inversion" ident(na) "with" constr(c) "Sort" sort_family(s) ]
+| #[ polymorphic; ] [ "Derive" "Inversion" ident(na) "with" constr(c) "Sort" sort_family(s) ]
   => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c s false inv_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c s false inv_tac }
 
-| [ "Derive" "Inversion" ident(na) "with" constr(c) ] => { seff na }
+| #[ polymorphic; ] [ "Derive" "Inversion" ident(na) "with" constr(c) ] => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c Sorts.InProp false inv_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c Sorts.InProp false inv_tac }
 END
 
 VERNAC COMMAND EXTEND DeriveDependentInversion
-| [ "Derive" "Dependent" "Inversion" ident(na) "with" constr(c) "Sort" sort_family(s) ]
+| #[ polymorphic; ] [ "Derive" "Dependent" "Inversion" ident(na) "with" constr(c) "Sort" sort_family(s) ]
   => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c s true dinv_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c s true dinv_tac }
 END
 
 VERNAC COMMAND EXTEND DeriveDependentInversionClear
-| [ "Derive" "Dependent" "Inversion_clear" ident(na) "with" constr(c) "Sort" sort_family(s) ]
+| #[ polymorphic; ] [ "Derive" "Dependent" "Inversion_clear" ident(na) "with" constr(c) "Sort" sort_family(s) ]
   => { seff na }
   -> {
-      let open Vernacinterp in
-      add_inversion_lemma_exn ~poly:atts.polymorphic na c s true dinv_clear_tac }
+      add_inversion_lemma_exn ~poly:polymorphic na c s true dinv_clear_tac }
 END
 
 (**********************************************************************)
@@ -538,11 +537,9 @@ let cache_transitivity_lemma (_,(left,lem)) =
 let subst_transitivity_lemma (subst,(b,ref)) = (b,subst_mps subst ref)
 
 let inTransitivity : bool * Constr.t -> obj =
-  declare_object {(default_object "TRANSITIVITY-STEPS") with
-    cache_function = cache_transitivity_lemma;
-    open_function = (fun i o -> if Int.equal i 1 then cache_transitivity_lemma o);
-    subst_function = subst_transitivity_lemma;
-    classify_function = (fun o -> Substitute o) }
+  declare_object @@ global_object_nodischarge "TRANSITIVITY-STEPS"
+    ~cache:cache_transitivity_lemma
+    ~subst:(Some subst_transitivity_lemma)
 
 (* Main entry points *)
 
@@ -576,44 +573,6 @@ VERNAC COMMAND EXTEND AddStepr CLASSIFIED AS SIDEFF
 | [ "Declare" "Right" "Step" constr(t) ] ->
     { add_transitivity_lemma false t }
 END
-
-{
-
-let cache_implicit_tactic (_,tac) = match tac with
-  | Some tac -> Pfedit.declare_implicit_tactic (Tacinterp.eval_tactic tac)
-  | None -> Pfedit.clear_implicit_tactic ()
-
-let subst_implicit_tactic (subst,tac) =
-  Option.map (Tacsubst.subst_tactic subst) tac
-
-let inImplicitTactic : glob_tactic_expr option -> obj =
-  declare_object {(default_object "IMPLICIT-TACTIC") with
-       open_function = (fun i o -> if Int.equal i 1 then cache_implicit_tactic o);
-       cache_function = cache_implicit_tactic;
-       subst_function = subst_implicit_tactic;
-       classify_function = (fun o -> Dispose)}
-
-let warn_deprecated_implicit_tactic =
-  CWarnings.create ~name:"deprecated-implicit-tactic" ~category:"deprecated"
-    (fun () -> strbrk "Implicit tactics are deprecated")
-
-let declare_implicit_tactic tac =
-  let () = warn_deprecated_implicit_tactic () in
-  Lib.add_anonymous_leaf (inImplicitTactic (Some (Tacintern.glob_tactic tac)))
-
-let clear_implicit_tactic () =
-  let () = warn_deprecated_implicit_tactic () in
-  Lib.add_anonymous_leaf (inImplicitTactic None)
-
-}
-
-VERNAC COMMAND EXTEND ImplicitTactic CLASSIFIED AS SIDEFF
-| [ "Declare" "Implicit" "Tactic" tactic(tac) ] -> { declare_implicit_tactic tac }
-| [ "Clear" "Implicit" "Tactic" ] -> { clear_implicit_tactic () }
-END
-
-
-
 
 (**********************************************************************)
 (* sozeau: abs/gen for induction on instantiated dependent inductives, using "Ford" induction as
@@ -718,7 +677,7 @@ let hResolve id c occ t =
   let sigma = Evd.merge_universe_context sigma ctx in
   let t_constr_type = Retyping.get_type_of env sigma t_constr in
   Proofview.tclTHEN (Proofview.Unsafe.tclEVARS sigma)
-    (change_concl (mkLetIn (Name.Anonymous,t_constr,t_constr_type,concl)))
+    (change_concl (mkLetIn (make_annot Name.Anonymous Sorts.Relevant,t_constr,t_constr_type,concl)))
   end
 
 let hResolve_auto id c t =
@@ -783,7 +742,8 @@ let  mkCaseEq a  : unit Proofview.tactic =
           Proofview.Goal.enter begin fun gl ->
             let concl = Proofview.Goal.concl gl in
             let env = Proofview.Goal.env gl in
-            (** FIXME: this looks really wrong. Does anybody really use this tactic? *)
+            (* FIXME: this looks really wrong. Does anybody really use
+               this tactic? *)
             let (_, c) = Tacred.pattern_occs [Locus.OnlyOccurrences [1], a] env (Evd.from_env env) concl in
 	    change_concl c
           end;
@@ -813,7 +773,7 @@ let case_eq_intros_rewrite x =
 let rec find_a_destructable_match sigma t =
   let cl = induction_arg_of_quantified_hyp (NamedHyp (Id.of_string "x")) in
   let cl = [cl, (None, None), None], None in
-  let dest = TacAtom (Loc.tag @@ TacInductionDestruct(false, false, cl)) in
+  let dest = TacAtom (CAst.make @@ TacInductionDestruct(false, false, cl)) in
   match EConstr.kind sigma t with
     | Case (_,_,x,_) when closed0 sigma x ->
 	if isVar sigma x then
@@ -855,9 +815,9 @@ END
 
 TACTIC EXTEND transparent_abstract
 | [ "transparent_abstract" tactic3(t) ] -> { Proofview.Goal.enter begin fun gl ->
-      Tactics.tclABSTRACT ~opaque:false None (Tacinterp.tactic_of_value ist t) end }
+    Abstract.tclABSTRACT ~opaque:false None (Tacinterp.tactic_of_value ist t) end; }
 | [ "transparent_abstract" tactic3(t) "using" ident(id) ] -> { Proofview.Goal.enter begin fun gl ->
-      Tactics.tclABSTRACT ~opaque:false (Some id) (Tacinterp.tactic_of_value ist t) end }
+    Abstract.tclABSTRACT ~opaque:false (Some id) (Tacinterp.tactic_of_value ist t) end; }
 END
 
 (* ********************************************************************* *)
@@ -955,9 +915,9 @@ END
    the semantics of the LCF-style tactics, hence with the classic tactic
    mode. *)
 VERNAC COMMAND EXTEND GrabEvars
-| [ "Grab" "Existential" "Variables" ]
-  => { Vernac_classifier.classify_as_proofstep }
-  -> { Proof_global.simple_with_current_proof (fun _ p  -> Proof.V82.grab_evars p) }
+| ![ proof ] [ "Grab" "Existential" "Variables" ]
+  => { classify_as_proofstep }
+  -> { fun ~pstate -> Option.map (Proof_global.simple_with_current_proof (fun _ p  -> Proof.V82.grab_evars p)) pstate }
 END
 
 (* Shelves all the goals under focus. *)
@@ -987,9 +947,9 @@ END
 
 (* Command to add every unshelved variables to the focus *)
 VERNAC COMMAND EXTEND Unshelve
-| [ "Unshelve" ]
-  => { Vernac_classifier.classify_as_proofstep }
-  -> { Proof_global.simple_with_current_proof (fun _ p  -> Proof.unshelve p) }
+| ![ proof ] [ "Unshelve" ]
+  => { classify_as_proofstep }
+  -> { fun ~pstate -> Option.map (Proof_global.simple_with_current_proof (fun _ p  -> Proof.unshelve p)) pstate  }
 END
 
 (* Gives up on the goals under focus: the goals are considered solved,
@@ -1140,9 +1100,9 @@ END
 
 
 VERNAC COMMAND EXTEND OptimizeProof
-| [ "Optimize" "Proof" ] => { Vernac_classifier.classify_as_proofstep } ->
-  { Proof_global.compact_the_proof () }
-| [ "Optimize" "Heap" ] => { Vernac_classifier.classify_as_proofstep } ->
+| ![ proof ] [ "Optimize" "Proof" ] => { classify_as_proofstep } ->
+  { fun ~pstate -> Option.map Proof_global.compact_the_proof pstate }
+| [ "Optimize" "Heap" ] => { classify_as_proofstep } ->
   { Gc.compact () }
 END
 

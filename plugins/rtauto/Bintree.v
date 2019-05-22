@@ -81,10 +81,12 @@ Section Store.
 
 Variable A:Type.
 
+#[universes(template)]
 Inductive Poption : Type:=
   PSome : A -> Poption
 | PNone : Poption.
 
+#[universes(template)]
 Inductive Tree : Type :=
    Tempty : Tree
  | Branch0 : Tree -> Tree -> Tree
@@ -177,6 +179,7 @@ generalize i;clear i;induction j;destruct T;simpl in H|-*;
 destruct i;simpl;try rewrite (IHj _ H);try (destruct i;simpl;congruence);reflexivity|| congruence.
 Qed.
 
+#[universes(template)]
 Record Store : Type :=
 mkStore  {index:positive;contents:Tree}.
 
@@ -191,6 +194,7 @@ Lemma get_empty : forall i, get i empty = PNone.
 intro i; case i; unfold empty,get; simpl;reflexivity.
 Qed.
 
+#[universes(template)]
 Inductive Full : Store -> Type:=
     F_empty : Full empty
   | F_push : forall a S, Full S -> Full (push a S).
@@ -290,10 +294,10 @@ Qed.
 
 End Store.
 
-Arguments PNone [A].
+Arguments PNone {A}.
 Arguments PSome [A] _.
 
-Arguments Tempty [A].
+Arguments Tempty {A}.
 Arguments Branch0 [A] _ _.
 Arguments Branch1 [A] _ _ _.
 
@@ -307,7 +311,7 @@ Arguments mkStore [A] index contents.
 Arguments index [A] s.
 Arguments contents [A] s.
 
-Arguments empty [A].
+Arguments empty {A}.
 Arguments get [A] i S.
 Arguments push [A] a S.
 
@@ -315,7 +319,7 @@ Arguments get_empty [A] i.
 Arguments get_push_Full [A] i a S _.
 
 Arguments Full [A] _.
-Arguments F_empty [A].
+Arguments F_empty {A}.
 Arguments F_push [A] a S _.
 Arguments In [A] x S F.
 

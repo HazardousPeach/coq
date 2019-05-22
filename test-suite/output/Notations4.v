@@ -9,6 +9,11 @@ Notation "x + y" := (Nat.add x y) (in custom myconstr at level 5).
 Notation "x * y" := (Nat.mul x y) (in custom myconstr at level 4).
 Notation "< x >" := x (in custom myconstr at level 3, x constr at level 10).
 Check [ < 0 > + < 1 > * < 2 >].
+Print Custom Grammar myconstr.
+
+Axiom a : nat.
+Notation b := a.
+Check [ < b > + < a > * < 2 >].
 
 Declare Custom Entry anotherconstr.
 
@@ -66,3 +71,65 @@ Notation "( x )" := x (in custom expr at level 0, x at level 2).
 Check [1 + 1].
 
 End C.
+
+(* An example of interaction between coercion and notations from
+   Robbert Krebbers. *)
+
+Require Import String.
+
+Module D.
+
+Inductive expr :=
+  | Var : string -> expr
+  | Lam : string -> expr -> expr
+  | App : expr -> expr -> expr.
+
+Notation Let x e1 e2 := (App (Lam x e2) e1).
+
+Parameter e1 e2 : expr.
+
+Check (Let "x" e1 e2).
+
+Coercion App : expr >-> Funclass.
+
+Check (Let "x" e1 e2).
+
+End D.
+
+(* Fixing bugs reported by G. Gonthier in #9207 *)
+
+Module I.
+
+Definition myAnd A B := A /\ B.
+Notation myAnd1 A := (myAnd A).
+Check myAnd1 True True.
+
+Set Warnings "-auto-template".
+
+Record Pnat := {inPnat :> nat -> Prop}.
+Axiom r : nat -> Pnat.
+Check r 2 3.
+
+End I.
+
+Require Import Coq.Numbers.Cyclic.Int63.Int63.
+Module NumeralNotations.
+  Module Test17.
+    (** Test int63 *)
+    Declare Scope test17_scope.
+    Delimit Scope test17_scope with test17.
+    Local Set Primitive Projections.
+    Record myint63 := of_int { to_int : int }.
+    Numeral Notation myint63 of_int to_int : test17_scope.
+    Check let v := 0%test17 in v : myint63.
+  End Test17.
+End NumeralNotations.
+
+Module K.
+
+Notation "# x |-> t & u" := ((fun x => (x,t)),(fun x => (x,u)))
+  (at level 0, x pattern, t, u at level 39).
+Check fun y : nat => # (x,z) |-> y & y.
+Check fun y : nat => # (x,z) |-> (x + y) & (y + z).
+
+End K.

@@ -21,6 +21,7 @@ open Util
 open Names
 open Term
 open Constr
+open Context
 open Environ
 open EConstr
 open Vars
@@ -33,16 +34,12 @@ open Evd
 open Termops
 open Globnames
 
-let use_typeclasses_for_conversion = ref true
-
-let _ =
-  Goptions.(declare_bool_option
-    { optdepr  = false;
-      optname  = "use typeclass resolution during conversion";
-      optkey   = ["Typeclass"; "Resolution"; "For"; "Conversion"];
-      optread  = (fun () -> !use_typeclasses_for_conversion);
-      optwrite = (fun b -> use_typeclasses_for_conversion := b) }
-    )
+let get_use_typeclasses_for_conversion =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"use typeclass resolution during conversion"
+    ~key:["Typeclass"; "Resolution"; "For"; "Conversion"]
+    ~value:true
 
 (* Typing operations dealing with coercions *)
 exception NoCoercion
@@ -68,9 +65,9 @@ let apply_coercion_args env sigma check isproj argl funj =
       | Prod (_,c1,c2) ->
         let sigma =
           if check then
-            begin match cumul env sigma (Retyping.get_type_of env sigma h) c1 with
-              | None -> raise NoCoercion
-              | Some sigma -> sigma
+            begin match Evarconv.unify_leq_delay env sigma (Retyping.get_type_of env sigma h) c1 with
+              | exception Evarconv.UnableToUnify _ -> raise NoCoercion
+              | sigma -> sigma
             end
           else sigma
         in
@@ -104,6 +101,7 @@ let make_existential ?loc ?(opaque = not (get_proofs_transparency ())) na env ev
       Evar_kinds.qm_name=na;
   }) in
   let evd, v = Evarutil.new_evar env !evdref ~src c in
+  let evd = Evd.set_obligation_evar evd (fst (destEvar evd v)) in
   evdref := evd;
   v
 
@@ -160,7 +158,7 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
   let rec coerce_unify env x y =
     let x = hnf env !evdref x and y = hnf env !evdref y in
       try
-	evdref := the_conv_x_leq env x y !evdref;
+        evdref := Evarconv.unify_leq_delay env !evdref x y;
 	None
       with UnableToUnify _ -> coerce' env x y
   and coerce' env x y : (EConstr.constr -> EConstr.constr) option =
@@ -175,26 +173,26 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
       let rec aux tele typ typ' i co =
 	if i < len then
 	  let hdx = l.(i) and hdy = l'.(i) in
-	    try evdref := the_conv_x_leq env hdx hdy !evdref;
+            try evdref := unify_leq_delay env !evdref hdx hdy;
 	      let (n, eqT), restT = dest_prod typ in
 	      let (n', eqT'), restT' = dest_prod typ' in
-		aux (hdx :: tele) (subst1 hdx restT) (subst1 hdy restT') (succ i) co
+                aux (hdx :: tele) (subst1 hdx restT) (subst1 hdy restT') (succ i) co
 	    with UnableToUnify _ ->
-	      let (n, eqT), restT = dest_prod typ in
+              let (n, eqT), restT = dest_prod typ in
 	      let (n', eqT'), restT' = dest_prod typ' in
-	      let _ =
-		try evdref := the_conv_x_leq env eqT eqT' !evdref
-		with UnableToUnify _ -> raise NoSubtacCoercion
-	      in
+              let () =
+                try evdref := unify_leq_delay env !evdref eqT eqT'
+                with UnableToUnify _ -> raise NoSubtacCoercion
+              in
 		(* Disallow equalities on arities *)
 		if Reductionops.is_arity env !evdref eqT then raise NoSubtacCoercion;
 		let restargs = lift_args 1
 		  (List.rev (Array.to_list (Array.sub l (succ i) (len - (succ i)))))
 		in
 		let args = List.rev (restargs @ mkRel 1 :: List.map (lift 1) tele) in
-		let pred = mkLambda (n, eqT, applist (lift 1 c, args)) in
+                let pred = mkLambda (n, eqT, applist (lift 1 c, args)) in
 		let eq = papp evdref coq_eq_ind [| eqT; hdx; hdy |] in
-		let evar = make_existential ?loc n env evdref eq in
+                let evar = make_existential ?loc n.binder_name env evdref eq in
 		let eq_app x = papp evdref coq_eq_rect
 		  [| eqT; hdx; pred; x; hdy; evar|] 
 		in
@@ -219,9 +217,12 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
 	| _ -> subco ())
       | Prod (name, a, b), Prod (name', a', b') ->
 	  let name' = 
-	    Name (Namegen.next_ident_away Namegen.default_dependent_ident (Termops.vars_of_env env))
-	  in
-	  let env' = push_rel (LocalAssum (name', a')) env in
+            {name' with
+             binder_name =
+               Name (Namegen.next_ident_away
+                       Namegen.default_dependent_ident (Termops.vars_of_env env))}
+          in
+          let env' = push_rel (LocalAssum (name', a')) env in
 	  let c1 = coerce_unify env' (lift 1 a') (lift 1 a) in
 	    (* env, x : a' |- c1 : lift 1 a' > lift 1 a *)
 	  let coec1 = app_opt env' evdref c1 (mkRel 1) in
@@ -233,7 +234,7 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
 	     | _, _ ->
 		 Some
 		   (fun f ->
-		      mkLambda (name', a',
+                      mkLambda (name', a',
 				app_opt env' evdref c2
 				  (mkApp (lift 1 f, [| coec1 |])))))
 
@@ -256,11 +257,11 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
 		     let c1 = coerce_unify env a a' in
 		     let remove_head a c =
 		       match EConstr.kind !evdref c with
-		       | Lambda (n, t, t') -> c, t'
+                       | Lambda (n, t, t') -> c, t'
 		       | Evar (k, args) ->
 			   let (evs, t) = Evardefine.define_evar_as_lambda env !evdref (k,args) in
 			     evdref := evs;
-			     let (n, dom, rng) = destLambda !evdref t in
+                             let (n, dom, rng) = destLambda !evdref t in
 			       if isEvar !evdref dom then
 				 let (domk, args) = destEvar !evdref dom in
                                    evdref := define domk a !evdref;
@@ -268,8 +269,12 @@ and coerce ?loc env evdref (x : EConstr.constr) (y : EConstr.constr)
 			       t, rng
 		       | _ -> raise NoSubtacCoercion
 		     in
-		     let (pb, b), (pb', b') = remove_head a pb, remove_head a' pb' in
-		     let env' = push_rel (LocalAssum (Name Namegen.default_dependent_ident, a)) env in
+                     let (pb, b), (pb', b') = remove_head a pb, remove_head a' pb' in
+                     let ra = Retyping.relevance_of_type env !evdref a in
+                     let env' = push_rel
+                         (LocalAssum (make_annot (Name Namegen.default_dependent_ident) ra, a))
+                         env
+                     in
 		     let c2 = coerce_unify env' b b' in
 		       match c1, c2 with
 		       | None, None -> None
@@ -363,20 +368,12 @@ let saturate_evd env evd =
   Typeclasses.resolve_typeclasses
     ~filter:Typeclasses.no_goals ~split:true ~fail:false env evd
 
-let warn_coercion_not_in_scope =
-  CWarnings.create ~name:"coercion-not-in-scope" ~category:"deprecated"
-    Pp.(fun r -> str "Coercion used but not in scope: " ++
-              Nametab.pr_global_env Id.Set.empty r ++ str ". If you want to use "
-              ++ str "this coercion, please Import the module that contains it.")
-
 (* Apply coercion path from p to hj; raise NoCoercion if not applicable *)
 let apply_coercion env sigma p hj typ_cl =
   try
     let j,t,evd = 
       List.fold_left
         (fun (ja,typ_cl,sigma) i ->
-           if not (is_coercion_in_scope i.coe_value) then
-             warn_coercion_not_in_scope i.coe_value;
            let isid = i.coe_is_identity in
            let isproj = i.coe_is_projection in
            let sigma, c = new_global sigma i.coe_value in
@@ -396,36 +393,36 @@ let apply_coercion env sigma p hj typ_cl =
   with NoCoercion as e -> raise e
 
 (* Try to coerce to a funclass; raise NoCoercion if not possible *)
-let inh_app_fun_core env evd j =
+let inh_app_fun_core ~program_mode env evd j =
   let t = whd_all env evd j.uj_type in
     match EConstr.kind evd t with
-    | Prod (_,_,_) -> (evd,j)
+    | Prod _ -> (evd,j)
     | Evar ev ->
-	let (evd',t) = Evardefine.define_evar_as_product evd ev in
+        let (evd',t) = Evardefine.define_evar_as_product env evd ev in
 	  (evd',{ uj_val = j.uj_val; uj_type = t })
     | _ ->
       	try let t,p =
 	  lookup_path_to_fun_from env evd j.uj_type in
 	    apply_coercion env evd p j t
-	with Not_found | NoCoercion ->
-          if Flags.is_program_mode () then
-	  try
-	    let evdref = ref evd in
-	    let coercef, t = mu env evdref t in
-	    let res = { uj_val = app_opt env evdref coercef j.uj_val; uj_type = t } in
-	      (!evdref, res)
-	  with NoSubtacCoercion | NoCoercion ->
-	    (evd,j)
-          else raise NoCoercion
+       with Not_found | NoCoercion ->
+         if program_mode then
+           try
+             let evdref = ref evd in
+             let coercef, t = mu env evdref t in
+             let res = { uj_val = app_opt env evdref coercef j.uj_val; uj_type = t } in
+             (!evdref, res)
+           with NoSubtacCoercion | NoCoercion ->
+             (evd,j)
+         else raise NoCoercion
 
 (* Try to coerce to a funclass; returns [j] if no coercion is applicable *)
-let inh_app_fun resolve_tc env evd j =
-  try inh_app_fun_core env evd j
+let inh_app_fun ~program_mode resolve_tc env evd j =
+  try inh_app_fun_core ~program_mode env evd j
   with
   | NoCoercion when not resolve_tc
-    || not !use_typeclasses_for_conversion -> (evd, j)
+    || not (get_use_typeclasses_for_conversion ()) -> (evd, j)
   | NoCoercion ->
-    try inh_app_fun_core env (saturate_evd env evd) j
+    try inh_app_fun_core ~program_mode env (saturate_evd env evd) j
     with NoCoercion -> (evd, j)
 
 let type_judgment env sigma j =
@@ -437,7 +434,7 @@ let inh_tosort_force ?loc env evd j =
   try
     let t,p = lookup_path_to_sort_from env evd j.uj_type in
     let evd,j1 = apply_coercion env evd p j t in
-    let j2 = on_judgment_type (whd_evar evd) j1 in
+    let j2 = Environ.on_judgment_type (whd_evar evd) j1 in
       (evd,type_judgment env evd j2)
   with Not_found | NoCoercion ->
     error_not_a_type ?loc env evd j
@@ -452,8 +449,8 @@ let inh_coerce_to_sort ?loc env evd j =
     | _ ->
 	inh_tosort_force ?loc env evd j
 
-let inh_coerce_to_base ?loc env evd j =
-  if Flags.is_program_mode () then
+let inh_coerce_to_base ?loc ~program_mode env evd j =
+  if program_mode then
     let evdref = ref evd in
     let ct, typ' = mu env evdref j.uj_type in
     let res =
@@ -462,14 +459,14 @@ let inh_coerce_to_base ?loc env evd j =
     in !evdref, res
   else (evd, j)
 
-let inh_coerce_to_prod ?loc env evd t =
-  if Flags.is_program_mode () then
+let inh_coerce_to_prod ?loc ~program_mode env evd t =
+  if program_mode then
     let evdref = ref evd in
     let _, typ' = mu env evdref t in
       !evdref, typ'
   else (evd, t)
 
-let inh_coerce_to_fail env evd rigidonly v t c1 =
+let inh_coerce_to_fail flags env evd rigidonly v t c1 =
   if rigidonly && not (Heads.is_rigid env (EConstr.Unsafe.to_constr c1) && Heads.is_rigid env (EConstr.Unsafe.to_constr t))
   then
     raise NoCoercion
@@ -486,13 +483,16 @@ let inh_coerce_to_fail env evd rigidonly v t c1 =
 	  | None -> evd, None, t
       with Not_found -> raise NoCoercion
     in
-      try (the_conv_x_leq env t' c1 evd, v')
+      try (unify_leq_delay ~flags env evd t' c1, v')
       with UnableToUnify _ -> raise NoCoercion
 
-let rec inh_conv_coerce_to_fail ?loc env evd rigidonly v t c1 =
-  try (the_conv_x_leq env t c1 evd, v)
+let default_flags_of env =
+  default_flags_of TransparentState.full
+
+let rec inh_conv_coerce_to_fail ?loc env evd ?(flags=default_flags_of env) rigidonly v t c1 =
+  try (unify_leq_delay ~flags env evd t c1, v)
   with UnableToUnify (best_failed_evd,e) ->
-    try inh_coerce_to_fail env evd rigidonly v t c1
+    try inh_coerce_to_fail flags env evd rigidonly v t c1
     with NoCoercion ->
       match
       EConstr.kind evd (whd_all env evd t),
@@ -505,11 +505,11 @@ let rec inh_conv_coerce_to_fail ?loc env evd rigidonly v t c1 =
 	  (* has type forall (x:u1), u2 (with v' recursively obtained) *)
           (* Note: we retype the term because template polymorphism may have *)
           (* weakened its type *)
-	  let name = match name with
+          let name = map_annot (function
 	    | Anonymous -> Name Namegen.default_dependent_ident
-	    | _ -> name in
+            | na -> na) name in
 	  let open Context.Rel.Declaration in
-	  let env1 = push_rel (LocalAssum (name,u1)) env in
+          let env1 = push_rel (LocalAssum (name,u1)) env in
 	  let (evd', v1) =
 	    inh_conv_coerce_to_fail ?loc env1 evd rigidonly
               (Some (mkRel 1)) (lift 1 u1) (lift 1 t1) in
@@ -519,21 +519,21 @@ let rec inh_conv_coerce_to_fail ?loc env evd rigidonly v t c1 =
 	    | None -> subst_term evd' v1 t2
 	    | Some v2 -> Retyping.get_type_of env1 evd' v2 in
 	  let (evd'',v2') = inh_conv_coerce_to_fail ?loc env1 evd' rigidonly v2 t2 u2 in
-	    (evd'', Option.map (fun v2' -> mkLambda (name, u1, v2')) v2')
+            (evd'', Option.map (fun v2' -> mkLambda (name, u1, v2')) v2')
       | _ -> raise (NoCoercionNoUnifier (best_failed_evd,e))
 
 (* Look for cj' obtained from cj by inserting coercions, s.t. cj'.typ = t *)
-let inh_conv_coerce_to_gen ?loc resolve_tc rigidonly env evd cj t =
+let inh_conv_coerce_to_gen ?loc ~program_mode resolve_tc rigidonly flags env evd cj t =
   let (evd', val') =
     try
-      inh_conv_coerce_to_fail ?loc env evd rigidonly (Some cj.uj_val) cj.uj_type t
+      inh_conv_coerce_to_fail ?loc env evd ~flags rigidonly (Some cj.uj_val) cj.uj_type t
     with NoCoercionNoUnifier (best_failed_evd,e) ->
       try
-	if Flags.is_program_mode () then
+        if program_mode then
 	  coerce_itf ?loc env evd (Some cj.uj_val) cj.uj_type t
 	else raise NoSubtacCoercion
       with
-      | NoSubtacCoercion when not resolve_tc || not !use_typeclasses_for_conversion ->
+      | NoSubtacCoercion when not resolve_tc || not (get_use_typeclasses_for_conversion ()) ->
 	  error_actual_type ?loc env best_failed_evd cj t e
       | NoSubtacCoercion ->
 	let evd' = saturate_evd env evd in
@@ -548,13 +548,14 @@ let inh_conv_coerce_to_gen ?loc resolve_tc rigidonly env evd cj t =
   let val' = match val' with Some v -> v | None -> assert(false) in
     (evd',{ uj_val = val'; uj_type = t })
 
-let inh_conv_coerce_to ?loc resolve_tc = inh_conv_coerce_to_gen ?loc resolve_tc false
+let inh_conv_coerce_to ?loc ~program_mode resolve_tc env evd ?(flags=default_flags_of env) =
+  inh_conv_coerce_to_gen ?loc ~program_mode resolve_tc false flags env evd
+let inh_conv_coerce_rigid_to ?loc ~program_mode resolve_tc env evd ?(flags=default_flags_of env) =
+  inh_conv_coerce_to_gen ?loc ~program_mode resolve_tc true flags env evd
 
-let inh_conv_coerce_rigid_to ?loc resolve_tc = inh_conv_coerce_to_gen resolve_tc ?loc true
-
-let inh_conv_coerces_to ?loc env evd t t' =
+let inh_conv_coerces_to ?loc env evd ?(flags=default_flags_of env) t t' =
   try
-    fst (inh_conv_coerce_to_fail ?loc env evd true None t t')
+    fst (inh_conv_coerce_to_fail ?loc env evd ~flags true None t t')
   with NoCoercion ->
     evd (* Maybe not enough information to unify *)
       

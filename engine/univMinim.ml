@@ -12,17 +12,12 @@ open Univ
 open UnivSubst
 
 (* To disallow minimization to Set *)
-let set_minimization = ref true
-let is_set_minimization () = !set_minimization
-
-let _ =
-  Goptions.(declare_bool_option
-          { optdepr  = false;
-            optname  = "minimization to Set";
-            optkey   = ["Universe";"Minimization";"ToSet"];
-            optread  = is_set_minimization;
-            optwrite = (:=) set_minimization })
-
+let get_set_minimization =
+  Goptions.declare_bool_option_and_ref
+    ~depr:false
+    ~name:"minimization to Set"
+    ~key:["Universe";"Minimization";"ToSet"]
+    ~value:true
 
 (** Simplification *)
 
@@ -37,15 +32,15 @@ let add_list_map u t map =
 let choose_canonical ctx flexible algs s =
   let global = LSet.diff s ctx in
   let flexible, rigid = LSet.partition flexible (LSet.inter s ctx) in
-    (** If there is a global universe in the set, choose it *)
+    (* If there is a global universe in the set, choose it *)
     if not (LSet.is_empty global) then
       let canon = LSet.choose global in
         canon, (LSet.remove canon global, rigid, flexible)
-    else (** No global in the equivalence class, choose a rigid one *)
+    else (* No global in the equivalence class, choose a rigid one *)
         if not (LSet.is_empty rigid) then
           let canon = LSet.choose rigid in
             canon, (global, LSet.remove canon rigid, flexible)
-        else (** There are only flexible universes in the equivalence
+        else (* There are only flexible universes in the equivalence
                  class, choose a non-algebraic. *)
           let algs, nonalgs = LSet.partition (fun x -> LSet.mem x algs) flexible in
             if not (LSet.is_empty nonalgs) then
@@ -99,8 +94,8 @@ let find_inst insts v =
   with Found (f,l) -> (f,l)
 
 let compute_lbound left =
- (** The universe variable was not fixed yet.
-     Compute its level using its lower bound. *)
+ (* The universe variable was not fixed yet.
+    Compute its level using its lower bound. *)
   let sup l lbound =
     match lbound with
     | None -> Some l
@@ -159,9 +154,10 @@ let not_lower lower (d,l) =
           * constraints we must keep it. *)
          compare_constraint_type d d' > 0
        with Not_found ->
-         (** No constraint existing on l *) true) l
+         (* No constraint existing on l *) true) l
 
 exception UpperBoundedAlg
+
 (** [enforce_uppers upper lbound cstrs] interprets [upper] as upper
    constraints to [lbound], adding them to [cstrs].
 
@@ -207,7 +203,7 @@ let minimize_univ_variables ctx us algs left right cstrs =
           (acc, [], LMap.empty, LMap.empty) l
         in
         let left = CList.uniquize (List.filter (not_lower lower) left) in
-        (acc, left, LMap.union newlow lower)
+        (acc, left, LMap.lunion newlow lower)
     in
     let instantiate_lbound lbound =
       let alg = LSet.mem u algs in
@@ -272,14 +268,15 @@ let minimize_univ_variables ctx us algs left right cstrs =
 module UPairs = OrderedType.UnorderedPair(Univ.Level)
 module UPairSet = Set.Make (UPairs)
 
+(* TODO check is_small/sprop *)
 let normalize_context_set g ctx us algs weak =
   let (ctx, csts) = ContextSet.levels ctx, ContextSet.constraints ctx in
-  (** Keep the Prop/Set <= i constraints separate for minimization *)
+  (* Keep the Prop/Set <= i constraints separate for minimization *)
   let smallles, csts =
     Constraint.partition (fun (l,d,r) -> d == Le && Level.is_small l) csts
   in
-  let smallles = if is_set_minimization ()
-    then Constraint.filter (fun (l,d,r) -> LSet.mem r ctx) smallles
+  let smallles = if get_set_minimization ()
+    then Constraint.filter (fun (l,d,r) -> LSet.mem r ctx && not (Level.is_sprop l)) smallles
     else Constraint.empty
   in
   let csts, partition =

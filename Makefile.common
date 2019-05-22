@@ -32,6 +32,7 @@ COQWCBYTE:=bin/coqwc.byte$(EXE)
 COQDOC:=bin/coqdoc$(EXE)
 COQDOCBYTE:=bin/coqdoc.byte$(EXE)
 COQC:=bin/coqc$(EXE)
+COQCOPT:=bin/coqc.opt$(EXE)
 COQCBYTE:=bin/coqc.byte$(EXE)
 COQWORKMGR:=bin/coqworkmgr$(EXE)
 COQWORKMGRBYTE:=bin/coqworkmgr.byte$(EXE)
@@ -74,10 +75,12 @@ endif
 # for Declare ML Module files.
 
 ifeq ($(BEST),opt)
+TOPBIN:=$(TOPBINOPT)
 COQTOPBEST:=$(COQTOPEXE)
 DYNOBJ:=.cmxs
 DYNLIB:=.cmxs
 else
+TOPBIN:=$(TOPBYTE)
 COQTOPBEST:=$(COQTOPBYTE)
 DYNOBJ:=.cmo
 DYNLIB:=.cma
@@ -91,7 +94,7 @@ MKDIR:=install -d
 CORESRCDIRS:=\
   coqpp                                                                                 \
   config 	clib 		lib		kernel		kernel/byterun	library \
-  engine 	pretyping	interp	proofs	parsing 	printing \
+  engine 	pretyping	interp	proofs	gramlib/.pack 	parsing 	printing \
   tactics 	vernac		stm		toplevel
 
 PLUGINDIRS:=\
@@ -101,10 +104,14 @@ PLUGINDIRS:=\
   rtauto 	nsatz           syntax          btauto \
   ssrmatching	ltac		ssr
 
+USERCONTRIBDIRS:=\
+	Ltac2
+
 SRCDIRS:=\
   $(CORESRCDIRS)  \
   tools 	tools/coqdoc	\
-  $(addprefix plugins/, $(PLUGINDIRS))
+  $(addprefix plugins/, $(PLUGINDIRS))  \
+  $(addprefix user-contrib/, $(USERCONTRIBDIRS))
 
 COQRUN := coqrun
 LIBCOQRUN:=kernel/byterun/lib$(COQRUN).a
@@ -117,12 +124,11 @@ BYTERUN:=$(addprefix kernel/byterun/, \
 # respecting this order is useful for developers that want to load or link
 # the libraries directly
 
-CORECMA:=clib/clib.cma lib/lib.cma kernel/kernel.cma library/library.cma \
+CORECMA:=config/config.cma clib/clib.cma lib/lib.cma kernel/kernel.cma library/library.cma \
         engine/engine.cma pretyping/pretyping.cma interp/interp.cma proofs/proofs.cma \
+	gramlib/.pack/gramlib.cma \
         parsing/parsing.cma printing/printing.cma tactics/tactics.cma vernac/vernac.cma \
         stm/stm.cma toplevel/toplevel.cma
-
-GRAMMARCMA:=grammar/grammar.cma
 
 ###########################################################################
 # plugins object files
@@ -140,21 +146,21 @@ BTAUTOCMO:=plugins/btauto/btauto_plugin.cmo
 RTAUTOCMO:=plugins/rtauto/rtauto_plugin.cmo
 SYNTAXCMO:=$(addprefix plugins/syntax/, \
         r_syntax_plugin.cmo \
-	int31_syntax_plugin.cmo \
-	ascii_syntax_plugin.cmo \
-        string_syntax_plugin.cmo \
-	numeral_notation_plugin.cmo)
+	int63_syntax_plugin.cmo \
+	numeral_notation_plugin.cmo \
+	string_notation_plugin.cmo)
 DERIVECMO:=plugins/derive/derive_plugin.cmo
 LTACCMO:=plugins/ltac/ltac_plugin.cmo plugins/ltac/tauto_plugin.cmo
 SSRMATCHINGCMO:=plugins/ssrmatching/ssrmatching_plugin.cmo
 SSRCMO:=plugins/ssr/ssreflect_plugin.cmo
+LTAC2CMO:=user-contrib/Ltac2/ltac2_plugin.cmo
 
 PLUGINSCMO:=$(LTACCMO) $(OMEGACMO) $(MICROMEGACMO) \
         $(RINGCMO) \
         $(EXTRACTIONCMO) \
         $(CCCMO)  $(FOCMO) $(RTAUTOCMO) $(BTAUTOCMO) \
         $(FUNINDCMO) $(NSATZCMO) $(SYNTAXCMO) \
-	$(DERIVECMO) $(SSRMATCHINGCMO) $(SSRCMO)
+	$(DERIVECMO) $(SSRMATCHINGCMO) $(SSRCMO) $(LTAC2CMO)
 
 ifeq ($(HASNATDYNLINK)-$(BEST),false-opt)
  STATICPLUGINS:=$(PLUGINSCMO)
@@ -169,6 +175,8 @@ LINKCMO:=$(CORECMA) $(STATICPLUGINS)
 LINKCMX:=$(CORECMA:.cma=.cmxa) $(STATICPLUGINS:.cmo=.cmx)
 
 ALLSTDLIB := test-suite/misc/universes/all_stdlib
+
+PLUGINTUTO := doc/plugin_tutorial
 
 # For emacs:
 # Local Variables:

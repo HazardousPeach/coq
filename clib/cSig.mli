@@ -68,6 +68,8 @@ sig
     val remove: key -> 'a t -> 'a t
     val merge:
          (key -> 'a option -> 'b option -> 'c option) -> 'a t -> 'b t -> 'c t
+    val union:
+      (key -> 'a -> 'a -> 'a option) -> 'a t -> 'a t -> 'a t
     val compare: ('a -> 'a -> int) -> 'a t -> 'a t -> int
     val equal: ('a -> 'a -> bool) -> 'a t -> 'a t -> bool
     val iter: (key -> 'a -> unit) -> 'a t -> unit
@@ -83,6 +85,7 @@ sig
     val choose: 'a t -> (key * 'a)
     val split: key -> 'a t -> 'a t * 'a option * 'a t
     val find: key -> 'a t -> 'a
+    val find_opt : key -> 'a t -> 'a option
     val map: ('a -> 'b) -> 'a t -> 'b t
     val mapi: (key -> 'a -> 'b) -> 'a t -> 'b t
 end

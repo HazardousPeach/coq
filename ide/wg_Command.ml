@@ -98,12 +98,13 @@ object(self)
 	~packing:(vbox#pack ~fill:true ~expand:true) () in
     let result = Wg_MessageView.message_view () in
     router#register_route route_id result;
-    r_bin#add (result :> GObj.widget);
+    r_bin#add_with_viewport (result :> GObj.widget);
     views <- (frame#coerce, result, combo#entry) :: views;
-    let cb clr = result#misc#modify_base [`NORMAL, `NAME clr] in
-    let _ = background_color#connect#changed ~callback:cb in
-    let _ = result#misc#connect#realize ~callback:(fun () -> cb background_color#get) in
-    let cb ft = result#misc#modify_font (Pango.Font.from_string ft) in
+(* FIXME: handle this using CSS *)
+(*     let cb clr = result#misc#modify_bg [`NORMAL, `NAME clr] in *)
+(*     let _ = background_color#connect#changed ~callback:cb in *)
+(*     let _ = result#misc#connect#realize ~callback:(fun () -> cb background_color#get) in *)
+    let cb ft = result#misc#modify_font (GPango.font_description_from_string ft) in
     stick text_font result cb;
     result#misc#set_can_focus true; (* false causes problems for selection *)
     let callback () =
@@ -152,9 +153,9 @@ object(self)
   method show =
     frame#show;
     let cur_page = notebook#get_nth_page notebook#current_page in
-    let _, _, e =
-      List.find (fun (p,_,_) -> p#get_oid == cur_page#get_oid) views in
-    e#misc#grab_focus ()
+    match List.find (fun (p,_,_) -> p#get_oid == cur_page#get_oid) views with
+    | (_, _, e) -> e#misc#grab_focus ()
+    | exception Not_found -> ()
 
   method hide =
     frame#hide
@@ -163,16 +164,17 @@ object(self)
     frame#visible
 
   method private refresh_color clr =
-    let clr = Tags.color_of_string clr in
-    let iter (_,view,_) = view#misc#modify_base [`NORMAL, `COLOR clr] in
+    let clr = Gdk.Color.color_parse clr in
+    let iter (_,view,_) = view#misc#modify_bg [`NORMAL, `COLOR clr] in
     List.iter iter views
 
   initializer
     self#new_page_maker;
     self#new_query_aux ~grab_now:false ();
     frame#misc#hide ();
-    let _ = background_color#connect#changed ~callback:self#refresh_color in
-    self#refresh_color background_color#get;
+(* FIXME: handle this using CSS *)
+(*     let _ = background_color#connect#changed ~callback:self#refresh_color in *)
+(*     self#refresh_color background_color#get; *)
     ignore(notebook#event#connect#key_press ~callback:(fun ev ->
       if GdkEvent.Key.keyval ev = GdkKeysyms._Escape then (self#hide; true)
       else false

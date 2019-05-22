@@ -105,22 +105,26 @@ let done_cond ?(loose_end=false) k = CondDone (loose_end,k)
 
 (* Subpart of the type of proofs. It contains the parts of the proof which
    are under control of the undo mechanism *)
-type t = {
-  (* Current focused proofview *)
-  proofview: Proofview.proofview;
-  (* Entry for the proofview *)
-  entry : Proofview.entry;
-  (* History of the focusings, provides information on how
-     to unfocus the proof and the extra information stored while focusing.
-     The list is empty when the proof is fully unfocused. *)
-  focus_stack: (_focus_condition*focus_info*Proofview.focus_context) list;
-  (* List of goals that have been shelved. *)
-  shelf : Goal.goal list;
-  (* List of goals that have been given up *)
-  given_up : Goal.goal list;
-  (* The initial universe context (for the statement) *)
-  initial_euctx : UState.t
-}
+type t =
+  { proofview: Proofview.proofview
+  (** Current focused proofview *)
+  ; entry : Proofview.entry
+  (** Entry for the proofview *)
+  ; focus_stack: (_focus_condition*focus_info*Proofview.focus_context) list
+  (** History of the focusings, provides information on how to unfocus
+     the proof and the extra information stored while focusing.  The
+     list is empty when the proof is fully unfocused. *)
+  ; shelf : Goal.goal list
+  (** List of goals that have been shelved. *)
+  ; given_up : Goal.goal list
+  (** List of goals that have been given up *)
+  ; initial_euctx : UState.t
+  (** The initial universe context (for the statement) *)
+  ; name : Names.Id.t
+  (** the name of the theorem whose proof is being constructed *)
+  ; poly : bool
+  (** Locality, polymorphism, and "kind" [Coercion, Definition, etc...] *)
+  }
 
 (*** General proof functions ***)
 
@@ -139,33 +143,6 @@ let proof p =
   let shelf = p.shelf in
   let given_up = p.given_up in
   (goals,stack,shelf,given_up,sigma)
-
-type 'a pre_goals = {
-    fg_goals : 'a list;
-  (** List of the focussed goals *)
-  bg_goals : ('a list * 'a list) list;
-  (** Zipper representing the unfocussed background goals *)
-  shelved_goals : 'a list;
-  (** List of the goals on the shelf. *)
-  given_up_goals : 'a list;
-  (** List of the goals that have been given up *)
-}
-
-let map_structured_proof pfts process_goal: 'a pre_goals =
-  let (goals, zipper, shelf, given_up, sigma) = proof pfts in
-  let fg = List.map (process_goal sigma) goals in
-  let map_zip (lg, rg) =
-    let lg = List.map (process_goal sigma) lg in
-    let rg = List.map (process_goal sigma) rg in
-    (lg, rg)
-  in
-  let bg = List.map map_zip zipper in
-  let shelf = List.map (process_goal sigma) shelf in
-  let given_up = List.map (process_goal sigma) given_up in
-    { fg_goals = fg;
-      bg_goals = bg;
-      shelved_goals = shelf;
-      given_up_goals = given_up; }
 
 let rec unroll_focus pv = function
   | (_,_,ctx)::stk -> unroll_focus (Proofview.unfocus ctx pv) stk
@@ -311,7 +288,7 @@ let end_of_stack = CondEndStack end_of_stack_kind
 
 let unfocused = is_last_focus end_of_stack_kind
 
-let start sigma goals =
+let start ~name ~poly sigma goals =
   let entry, proofview = Proofview.init sigma goals in
   let pr = {
     proofview;
@@ -320,9 +297,13 @@ let start sigma goals =
     shelf = [] ;
     given_up = [];
     initial_euctx =
-      Evd.evar_universe_context (snd (Proofview.proofview proofview)) } in
+      Evd.evar_universe_context (snd (Proofview.proofview proofview))
+    ; name
+    ; poly
+  } in
   _focus end_of_stack (Obj.repr ()) 1 (List.length goals) pr
-let dependent_start goals =
+
+let dependent_start ~name ~poly goals =
   let entry, proofview = Proofview.dependent_init goals in
   let pr = {
     proofview;
@@ -331,38 +312,52 @@ let dependent_start goals =
     shelf = [] ;
     given_up = [];
     initial_euctx =
-      Evd.evar_universe_context (snd (Proofview.proofview proofview)) } in
+      Evd.evar_universe_context (snd (Proofview.proofview proofview))
+    ; name
+    ; poly
+  } in
   let number_of_goals = List.length (Proofview.initial_goals pr.entry) in
   _focus end_of_stack (Obj.repr ()) 1 number_of_goals pr
 
-exception UnfinishedProof
-exception HasShelvedGoals
-exception HasGivenUpGoals
-exception HasUnresolvedEvar
-let _ = CErrors.register_handler begin function
-  | UnfinishedProof -> CErrors.user_err Pp.(str "Some goals have not been solved.")
-  | HasShelvedGoals -> CErrors.user_err Pp.(str "Some goals have been left on the shelf.")
-  | HasGivenUpGoals -> CErrors.user_err Pp.(str "Some goals have been given up.")
-  | HasUnresolvedEvar -> CErrors.user_err Pp.(str "Some existential variables are uninstantiated.")
-  | _ -> raise CErrors.Unhandled
-end
+type open_error_reason =
+  | UnfinishedProof
+  | HasGivenUpGoals
 
-let return p =
+let print_open_error_reason er = let open Pp in match er with
+  | UnfinishedProof ->
+    str "Attempt to save an incomplete proof"
+  | HasGivenUpGoals ->
+    strbrk "Attempt to save a proof with given up goals. If this is really what you want to do, use Admitted in place of Qed."
+
+exception OpenProof of Names.Id.t option * open_error_reason
+
+let _ = CErrors.register_handler begin function
+    | OpenProof (pid, reason) ->
+      let open Pp in
+      Option.cata (fun pid ->
+          str " (in proof " ++ Names.Id.print pid ++ str "): ") (mt()) pid ++ print_open_error_reason reason
+    | _ -> raise CErrors.Unhandled
+  end
+
+let warn_remaining_shelved_goals =
+  CWarnings.create ~name:"remaining-shelved-goals" ~category:"tactics"
+    (fun () -> Pp.str"The proof has remaining shelved goals")
+
+let warn_remaining_unresolved_evars =
+  CWarnings.create ~name:"remaining-unresolved-evars" ~category:"tactics"
+    (fun () -> Pp.str"The proof has unresolved variables")
+
+let return ?pid (p : t) =
   if not (is_done p) then
-    raise UnfinishedProof
-  else if has_shelved_goals p then
-    raise HasShelvedGoals
+    raise (OpenProof(pid, UnfinishedProof))
   else if has_given_up_goals p then
-    raise HasGivenUpGoals
-  else if has_unresolved_evar p then
-    (* spiwack: for compatibility with <= 8.3 proof engine *)
-    raise HasUnresolvedEvar
-  else
+    raise (OpenProof(pid, HasGivenUpGoals))
+  else begin
+    if has_shelved_goals p then warn_remaining_shelved_goals ()
+    else if has_unresolved_evar p then warn_remaining_unresolved_evars ();
     let p = unfocus end_of_stack_kind p () in
     Proofview.return p.proofview
-
-let initial_goals p = Proofview.initial_goals p.entry
-let initial_euctx p = p.initial_euctx
+  end
 
 let compact p =
   let entry, proofview = Proofview.compact p.entry p.proofview in
@@ -377,7 +372,7 @@ let run_tactic env tac pr =
   let sp = pr.proofview in
   let undef sigma l = List.filter (fun g -> Evd.is_undefined sigma g) l in
   let tac =
-    tac >>= fun () ->
+    tac >>= fun result ->
     Proofview.tclEVARMAP >>= fun sigma ->
     (* Already solved goals are not to be counted as shelved. Nor are
       they to be marked as unresolvable. *)
@@ -386,12 +381,13 @@ let run_tactic env tac pr =
     (* Check that retrieved given up is empty *)
     if not (List.is_empty retrieved_given_up) then
       CErrors.anomaly Pp.(str "Evars generated outside of proof engine (e.g. V82, clear, ...) are not supposed to be explicitly given up.");
-    let sigma = List.fold_left Proofview.Unsafe.mark_as_goal sigma retrieved in
+    let sigma = Proofview.Unsafe.mark_as_goals sigma retrieved in
     Proofview.Unsafe.tclEVARS sigma >>= fun () ->
-    Proofview.tclUNIT retrieved
+    Proofview.tclUNIT (result,retrieved)
   in
-  let (retrieved,proofview,(status,to_shelve,give_up),info_trace) =
-    Proofview.apply env tac sp
+  let { name; poly } = pr in
+  let ((result,retrieved),proofview,(status,to_shelve,give_up),info_trace) =
+    Proofview.apply ~name ~poly env tac sp
   in
   let sigma = Proofview.return proofview in
   let to_shelve = undef sigma to_shelve in
@@ -404,7 +400,7 @@ let run_tactic env tac pr =
   in
   let given_up = pr.given_up@give_up in
   let proofview = Proofview.Unsafe.reset_future_goals proofview in
-  { pr with proofview ; shelf ; given_up },(status,info_trace)
+  { pr with proofview ; shelf ; given_up },(status,info_trace),result
 
 (*** Commands ***)
 
@@ -414,22 +410,6 @@ let in_proof p k = k (Proofview.return p.proofview)
    focused goals. *)
 let unshelve p =
   { p with proofview = Proofview.unshelve (p.shelf) (p.proofview) ; shelf = [] }
-
-let pr_proof p =
-  let p = map_structured_proof p (fun _sigma g -> g) in
-  Pp.(
-    let pr_goal_list = prlist_with_sep spc Goal.pr_goal in
-    let rec aux acc = function
-      | [] -> acc
-      | (before,after)::stack ->
-         aux (pr_goal_list before ++ spc () ++ str "{" ++ acc ++ str "}" ++ spc () ++
-              pr_goal_list after) stack in
-    str "[" ++ str "focus structure: " ++
-               aux (pr_goal_list p.fg_goals) p.bg_goals ++ str ";" ++ spc () ++
-    str "shelved: " ++ pr_goal_list p.shelved_goals ++ str ";" ++ spc () ++
-    str "given up: " ++ pr_goal_list p.given_up_goals ++
-    str "]"
-  )
 
 (*** Compatibility layer with <=v8.2 ***)
 module V82 = struct
@@ -445,17 +425,16 @@ module V82 = struct
     { Evd.it=List.hd gls ; sigma=sigma; }
 
   let top_evars p =
-    Proofview.V82.top_evars p.entry
+    Proofview.V82.top_evars p.entry p.proofview
 
   let grab_evars p =
     if not (is_done p) then
-      raise UnfinishedProof
+      raise (OpenProof(None, UnfinishedProof))
     else
       { p with proofview = Proofview.V82.grab p.proofview }
 
-
   (* Main component of vernac command Existential *)
-  let instantiate_evar n com pr =
+  let instantiate_evar env n intern pr =
     let tac =
       Proofview.tclBIND Proofview.tclEVARMAP begin fun sigma ->
       let (evk, evi) =
@@ -469,12 +448,13 @@ module V82 = struct
           CList.nth evl (n-1)
       in
       let env = Evd.evar_filtered_env evi in
-      let rawc = Constrintern.intern_constr env sigma com in
+      let rawc = intern env sigma in
       let ltac_vars = Glob_ops.empty_lvar in
       let sigma = Evar_refiner.w_refine (evk, evi) (ltac_vars, rawc) sigma in
       Proofview.Unsafe.tclEVARS sigma
     end in
-    let ((), proofview, _, _) = Proofview.apply (Global.env ()) tac pr.proofview in
+    let { name; poly } = pr in
+    let ((), proofview, _, _) = Proofview.apply ~name ~poly env tac pr.proofview in
     let shelf =
       List.filter begin fun g ->
         Evd.is_undefined (Proofview.return proofview) g
@@ -491,4 +471,56 @@ let all_goals p =
     let set = add goals Goal.Set.empty in
     let set = List.fold_left (fun s gs -> let (g1, g2) = gs in add g1 (add g2 set)) set stack in
     let set = add shelf set in
-    add given_up set
+    let set = add given_up set in
+    let { Evd.it = bgoals ; sigma = bsigma } = V82.background_subgoals p in
+    add bgoals set
+
+type data =
+  { sigma : Evd.evar_map
+  (** A representation of the evar_map [EJGA wouldn't it better to just return the proofview?] *)
+  ; goals : Evar.t list
+  (** Focused goals *)
+  ; entry : Proofview.entry
+  (** Entry for the proofview *)
+  ; stack : (Evar.t list * Evar.t list) list
+  (** A representation of the focus stack *)
+  ; shelf : Evar.t list
+  (** A representation of the shelf  *)
+  ; given_up : Evar.t list
+  (** A representation of the given up goals  *)
+  ; initial_euctx : UState.t
+  (** The initial universe context (for the statement) *)
+  ; name : Names.Id.t
+  (** The name of the theorem whose proof is being constructed *)
+  ; poly : bool
+  (** Locality, polymorphism, and "kind" [Coercion, Definition, etc...] *)
+  }
+
+let data { proofview; focus_stack; entry; shelf; given_up; initial_euctx; name; poly } =
+  let goals, sigma = Proofview.proofview proofview in
+  (* spiwack: beware, the bottom of the stack is used by [Proof]
+     internally, and should not be exposed. *)
+  let rec map_minus_one f = function
+    | [] -> assert false
+    | [_] -> []
+    | a::l -> f a :: (map_minus_one f l)
+  in
+  let stack =
+    map_minus_one (fun (_,_,c) -> Proofview.focus_context c) focus_stack in
+  { sigma; goals; entry; stack; shelf; given_up; initial_euctx; name; poly }
+
+let pr_proof p =
+  let { goals=fg_goals; stack=bg_goals; shelf; given_up; _ } = data p in
+  Pp.(
+    let pr_goal_list = prlist_with_sep spc Goal.pr_goal in
+    let rec aux acc = function
+      | [] -> acc
+      | (before,after)::stack ->
+         aux (pr_goal_list before ++ spc () ++ str "{" ++ acc ++ str "}" ++ spc () ++
+              pr_goal_list after) stack in
+    str "[" ++ str "focus structure: " ++
+               aux (pr_goal_list fg_goals) bg_goals ++ str ";" ++ spc () ++
+    str "shelved: " ++ pr_goal_list shelf ++ str ";" ++ spc () ++
+    str "given up: " ++ pr_goal_list given_up ++
+    str "]"
+  )

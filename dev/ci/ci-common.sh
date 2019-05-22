@@ -46,8 +46,11 @@ for overlay in "${ci_dir}"/user-overlays/*.sh; do
     # shellcheck source=/dev/null
     . "${overlay}"
 done
+
+set +x
 # shellcheck source=ci-basic-overlay.sh
 . "${ci_dir}/ci-basic-overlay.sh"
+set -x
 
 # [git_download project] will download [project] and unpack it
 # in [$CI_BUILD_DIR/project] if the folder does not exist already;
@@ -59,27 +62,30 @@ git_download()
 {
   local PROJECT=$1
   local DEST="$CI_BUILD_DIR/$PROJECT"
+  local GITURL_VAR="${PROJECT}_CI_GITURL"
+  local GITURL="${!GITURL_VAR}"
+  local REF_VAR="${PROJECT}_CI_REF"
+  local REF="${!REF_VAR}"
 
   if [ -d "$DEST" ]; then
     echo "Warning: download and unpacking of $PROJECT skipped because $DEST already exists."
   elif [ "$FORCE_GIT" = "1" ] || [ "$CI" = "" ]; then
-    local GITURL_VAR="${PROJECT}_CI_GITURL"
-    local GITURL="${!GITURL_VAR}"
-    local REF_VAR="${PROJECT}_CI_REF"
-    local REF="${!REF_VAR}"
     git clone "$GITURL" "$DEST"
     cd "$DEST"
     git checkout "$REF"
   else # When possible, we download tarballs to reduce bandwidth and latency
     local ARCHIVEURL_VAR="${PROJECT}_CI_ARCHIVEURL"
     local ARCHIVEURL="${!ARCHIVEURL_VAR}"
-    local REF_VAR="${PROJECT}_CI_REF"
-    local REF="${!REF_VAR}"
     mkdir -p "$DEST"
     cd "$DEST"
-    wget "$ARCHIVEURL/$REF.tar.gz"
-    tar xvfz "$REF.tar.gz" --strip-components=1
-    rm -f "$REF.tar.gz"
+    local COMMIT=$(git ls-remote "$GITURL" "refs/heads/$REF" | cut -f 1)
+    if [[ "$COMMIT" == "" ]]; then
+      # $REF must have been a tag or hash, not a branch
+      COMMIT="$REF"
+    fi
+    wget "$ARCHIVEURL/$COMMIT.tar.gz"
+    tar xvfz "$COMMIT.tar.gz" --strip-components=1
+    rm -f "$COMMIT.tar.gz"
   fi
 }
 
@@ -102,10 +108,9 @@ install_ssreflect()
 
   git_download mathcomp
 
-  ( cd "${CI_BUILD_DIR}/mathcomp/mathcomp" && \
-    make Makefile.coq && \
-    make -f Makefile.coq ssreflect/all_ssreflect.vo && \
-    make -f Makefile.coq install )
+  ( cd "${CI_BUILD_DIR}/mathcomp/mathcomp/ssreflect" && \
+    make && \
+    make install )
 
 }
 
@@ -117,8 +122,11 @@ install_ssralg()
   git_download mathcomp
 
   ( cd "${CI_BUILD_DIR}/mathcomp/mathcomp" && \
-    make Makefile.coq && \
-    make -f Makefile.coq algebra/all_algebra.vo && \
-    make -f Makefile.coq install )
+    make -C ssreflect && \
+    make -C ssreflect install && \
+    make -C fingroup && \
+    make -C fingroup install && \
+    make -C algebra && \
+    make -C algebra install )
 
 }

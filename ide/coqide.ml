@@ -89,21 +89,30 @@ let make_coqtop_args fname =
     | Ignore_args -> !sup_args
     | Append_args -> !sup_args
     | Subst_args -> [] in
-  if read_project#get = Ignore_args then "", base_args
-  else
-    match !custom_project_file, fname with
-    | Some (d,proj), _ -> d, coqtop_args_from_project proj @ base_args
-    | None, None -> "", base_args
-    | None, Some the_file ->
-       match
-         CoqProject_file.find_project_file
-           ~from:(Filename.dirname the_file)
-           ~projfile_name:project_file_name#get
-       with
-       | None -> "", base_args
-       | Some proj -> 
-           proj, coqtop_args_from_project (read_project_file proj) @ base_args
-;;
+  let proj, args =
+    if read_project#get = Ignore_args then "", base_args
+    else
+      match !custom_project_file, fname with
+      | Some (d,proj), _ -> d, coqtop_args_from_project proj @ base_args
+      | None, None -> "", base_args
+      | None, Some the_file ->
+        match
+          CoqProject_file.find_project_file
+            ~from:(Filename.dirname the_file)
+            ~projfile_name:project_file_name#get
+        with
+        | None -> "", base_args
+        | Some proj ->
+          let warning_fn x = Feedback.msg_warning Pp.(str x) in
+          proj, coqtop_args_from_project (read_project_file ~warning_fn proj) @ base_args
+  in
+  let args = match fname with
+    | None -> args
+    | Some fname ->
+      if List.exists (String.equal "-top") args then args
+      else "-topfile"::fname::args
+  in
+  proj, args
 
 (** Setting drag & drop on widgets *)
 
@@ -181,10 +190,10 @@ let load_file ?(maycreate=false) f =
 let confirm_save ok =
   if ok then flash_info "Saved" else warning "Save Failed"
 
-let select_and_save ~saveas ?filename sn =
-  let do_save = if saveas then sn.fileops#saveas else sn.fileops#save in
+let select_and_save ?parent ~saveas ?filename sn =
+  let do_save = if saveas then sn.fileops#saveas ?parent else sn.fileops#save in
   let title = if saveas then "Save file as" else "Save file" in
-  match select_file_for_save ~title ?filename () with
+  match select_file_for_save ~title ?parent ?filename () with
     |None -> false
     |Some f ->
       let ok = do_save f in
@@ -192,9 +201,9 @@ let select_and_save ~saveas ?filename sn =
       if ok then sn.tab_label#set_text (Filename.basename f);
       ok
 
-let check_save ~saveas sn =
+let check_save ?parent ~saveas sn =
   try match sn.fileops#filename with
-    |None -> select_and_save ~saveas sn
+    |None -> select_and_save ?parent ~saveas sn
     |Some f ->
       let ok = sn.fileops#save f in
       confirm_save ok;
@@ -203,16 +212,18 @@ let check_save ~saveas sn =
 
 exception DontQuit
 
-let check_quit saveall =
-  (try save_pref () with _ -> flash_info "Cannot save preferences");
+let check_quit ?parent saveall =
+  (try save_pref ()
+   with e -> flash_info ("Cannot save preferences (" ^ Printexc.to_string e ^ ")"));
   let is_modified sn = sn.buffer#modified in
   if List.exists is_modified notebook#pages then begin
-    let answ = GToolbox.question_box ~title:"Quit"
+    let answ = Configwin_ihm.question_box ~title:"Quit"
       ~buttons:["Save Named Buffers and Quit";
                 "Quit without Saving";
                 "Don't Quit"]
       ~default:0
       ~icon:(warn_image ())#coerce
+      ?parent
       "There are unsaved buffers"
     in
     match answ with
@@ -261,23 +272,23 @@ let newfile _ =
   let index = notebook#append_term session in
   notebook#goto_page index
 
-let load _ =
+let load ?parent _ =
   let filename =
     try notebook#current_term.fileops#filename
     with Invalid_argument _ -> None in
-  match select_file_for_open ~title:"Load file" ?filename () with
+  match select_file_for_open ~title:"Load file" ?parent ?filename () with
     | None -> ()
     | Some f -> FileAux.load_file f
 
-let save _ = on_current_term (FileAux.check_save ~saveas:false)
+let save ?parent _ = on_current_term (FileAux.check_save ?parent ~saveas:false)
 
-let saveas sn =
+let saveas ?parent sn =
   try
     let filename = sn.fileops#filename in
-    ignore (FileAux.select_and_save ~saveas:true ?filename sn)
+    ignore (FileAux.select_and_save ?parent ~saveas:true ?filename sn)
   with _ -> warning "Save Failed"
 
-let saveas = cb_on_current_term saveas
+let saveas ?parent = cb_on_current_term (saveas ?parent)
 
 let saveall _ =
   List.iter
@@ -288,33 +299,34 @@ let saveall _ =
 
 let () = Coq.save_all := saveall
 
-let revert_all _ =
+let revert_all ?parent _ =
   List.iter
-    (fun sn -> if sn.fileops#changed_on_disk then sn.fileops#revert)
+    (fun sn -> if sn.fileops#changed_on_disk then sn.fileops#revert ?parent ())
     notebook#pages
 
-let quit _ =
-  try FileAux.check_quit saveall; exit 0
+let quit ?parent _ =
+  try FileAux.check_quit ?parent saveall; exit 0
   with FileAux.DontQuit -> ()
 
-let close_buffer sn =
+let close_buffer ?parent sn =
   let do_remove () = notebook#remove_page notebook#current_page in
   if not sn.buffer#modified then do_remove ()
   else
-    let answ = GToolbox.question_box ~title:"Close"
+    let answ = Configwin_ihm.question_box ~title:"Close"
       ~buttons:["Save Buffer and Close";
                 "Close without Saving";
                 "Don't Close"]
       ~default:0
       ~icon:(warn_image ())#coerce
+      ?parent
       "This buffer has unsaved modifications"
     in
     match answ with
-      | 1 when FileAux.check_save ~saveas:true sn -> do_remove ()
+      | 1 when FileAux.check_save ?parent ~saveas:true sn -> do_remove ()
       | 2 -> do_remove ()
       | _ -> ()
 
-let close_buffer = cb_on_current_term close_buffer
+let close_buffer ?parent = cb_on_current_term (close_buffer ?parent)
 
 let export kind sn =
   match sn.fileops#filename with
@@ -348,7 +360,7 @@ let print sn =
         Filename.quote (Filename.basename f_name) ^ " | " ^ cmd_print#get
       in
       let w = GWindow.window ~title:"Print" ~modal:true
-        ~position:`CENTER ~wm_class:"CoqIDE" ~wm_name: "CoqIDE" ()
+        ~position:`CENTER ~wmclass:("CoqIDE","CoqIDE") ()
       in
       let v = GPack.vbox ~spacing:10 ~border_width:10 ~packing:w#add ()
       in
@@ -425,16 +437,16 @@ let coq_makefile sn =
 
 let coq_makefile = cb_on_current_term coq_makefile
 
-let editor sn =
+let editor ?parent sn =
   match sn.fileops#filename with
     |None -> warning "Call to external editor available only on named files"
     |Some f ->
       File.save ();
       let f = Filename.quote f in
       let cmd = Util.subst_command_placeholder cmd_editor#get f in
-      run_command ignore (fun _ -> sn.fileops#revert) cmd
+      run_command ignore (fun _ -> sn.fileops#revert ?parent ()) cmd
 
-let editor = cb_on_current_term editor
+let editor ?parent = cb_on_current_term (editor ?parent)
 
 let compile sn =
   File.save ();
@@ -442,7 +454,7 @@ let compile sn =
     |None -> flash_info "Active buffer has no name"
     |Some f ->
       let args = Coq.get_arguments sn.coqtop in
-      let cmd = cmd_coqc#get 
+      let cmd = cmd_coqc#get
 	^ " " ^ String.concat " " args
 	^ " " ^ (Filename.quote f) ^ " 2>&1"
       in
@@ -549,13 +561,13 @@ let update_status sn =
       | None -> ""
       | Some n -> ", proving " ^ n
     in
-    display ("Ready"^ (if nanoPG#get then ", [μPG]" else "") ^ path ^ name);
+    display ("Ready"^ (if microPG#get then ", [μPG]" else "") ^ path ^ name);
     Coq.return ()
   in
   Coq.bind (Coq.status false) next
 
 let find_next_occurrence ~backward sn =
-  (** go to the next occurrence of the current word, forward or backward *)
+  (* go to the next occurrence of the current word, forward or backward *)
   let b = sn.buffer in
   let start = find_word_start (b#get_iter_at_mark `INSERT) in
   let stop = find_word_end start in
@@ -602,11 +614,11 @@ let printopts_callback opts v =
 (** Templates menu *)
 
 let get_current_word term =
-  (** First look to find if autocompleting *)
+  (* First look to find if autocompleting *)
   match term.script#complete_popup#proposal with
   | Some p -> p
   | None ->
-  (** Then look at the current selected word *)
+  (* Then look at the current selected word *)
   let buf1 = term.script#buffer in
   let buf2 = term.proof#buffer in
   if buf1#has_selection then
@@ -617,7 +629,7 @@ let get_current_word term =
     buf2#get_text ~slice:true ~start ~stop ()
   else if term.messages#has_selection then
     term.messages#get_selected_text
-  (** Otherwise try to find the word around the cursor *)
+  (* Otherwise try to find the word around the cursor *)
   else
     let it = term.script#buffer#get_iter_at_mark `INSERT in
     let start = find_word_start it in
@@ -755,17 +767,21 @@ let about _ =
   dialog#set_authors authors;
   dialog#show ()
 
+let apply_unicode_binding =
+  cb_on_current_term (fun t ->
+    t.script#apply_unicode_binding())
+
 let comment = cb_on_current_term (fun t -> t.script#comment ())
 let uncomment = cb_on_current_term (fun t -> t.script#uncomment ())
 
 let coqtop_arguments sn =
   let dialog = GWindow.dialog ~title:"Coqtop arguments" () in
   let coqtop = sn.coqtop in
-  (** Text entry *)
+  (* Text entry *)
   let args = Coq.get_arguments coqtop in
   let text = String.concat " " args in
   let entry = GEdit.entry ~text ~packing:dialog#vbox#add () in
-  (** Buttons *)
+  (* Buttons *)
   let box = dialog#action_area in
   let ok = GButton.button ~stock:`OK ~packing:box#add () in
   let ok_cb () =
@@ -801,7 +817,7 @@ let zoom_fit sn =
   let space = script#misc#allocation.Gtk.width in
   let cols = script#right_margin_position in
   let pango_ctx = script#misc#pango_context in
-  let layout = pango_ctx#create_layout in
+  let layout = pango_ctx#create_layout#as_layout in
   let fsize = Pango.Font.get_size (Pango.Font.from_string text_font#get) in
   Pango.Layout.set_text layout (String.make cols 'X');
   let tlen = fst (Pango.Layout.get_pixel_size layout) in
@@ -928,7 +944,7 @@ let emit_to_focus window sgn =
 
 let build_ui () =
   let w = GWindow.window
-    ~wm_class:"CoqIde" ~wm_name:"CoqIde"
+    ~wmclass:("CoqIde","CoqIde")
     ~width:window_width#get ~height:window_height#get
     ~title:"CoqIde" ()
   in
@@ -936,7 +952,7 @@ let build_ui () =
     try w#set_icon (Some (GdkPixbuf.from_file (MiscMenu.coq_icon ())))
     with _ -> ()
   in
-  let _ = w#event#connect#delete ~callback:(fun _ -> File.quit (); true) in
+  let _ = w#event#connect#delete ~callback:(fun _ -> File.quit ~parent:w (); true) in
   let _ = set_drag w#drag in
 
   let vbox = GPack.vbox ~homogeneous:false ~packing:w#add () in
@@ -961,19 +977,19 @@ let build_ui () =
   menu file_menu [
     item "File" ~label:"_File";
     item "New" ~callback:File.newfile ~stock:`NEW;
-    item "Open" ~callback:File.load ~stock:`OPEN;
-    item "Save" ~callback:File.save ~stock:`SAVE ~tooltip:"Save current buffer";
-    item "Save as" ~label:"S_ave as" ~stock:`SAVE_AS ~callback:File.saveas;
+    item "Open" ~callback:(File.load ~parent:w) ~stock:`OPEN;
+    item "Save" ~callback:(File.save ~parent:w) ~stock:`SAVE ~tooltip:"Save current buffer";
+    item "Save as" ~label:"S_ave as" ~stock:`SAVE_AS ~callback:(File.saveas ~parent:w);
     item "Save all" ~label:"Sa_ve all" ~callback:File.saveall;
     item "Revert all buffers" ~label:"_Revert all buffers"
-      ~callback:File.revert_all ~stock:`REVERT_TO_SAVED;
+      ~callback:(File.revert_all ~parent:w) ~stock:`REVERT_TO_SAVED;
     item "Close buffer" ~label:"_Close buffer" ~stock:`CLOSE
-      ~callback:File.close_buffer ~tooltip:"Close current buffer";
+      ~callback:(File.close_buffer ~parent:w) ~tooltip:"Close current buffer";
     item "Print..." ~label:"_Print..."
       ~callback:File.print ~stock:`PRINT ~accel:"<Ctrl>p";
     item "Rehighlight" ~label:"Reh_ighlight" ~accel:"<Ctrl>l"
       ~callback:File.highlight ~stock:`REFRESH;
-    item "Quit" ~stock:`QUIT ~callback:File.quit;
+    item "Quit" ~stock:`QUIT ~callback:(File.quit ~parent:w);
   ];
 
   menu export_menu [
@@ -1004,15 +1020,14 @@ let build_ui () =
     item "Find Previous" ~label:"Find _Previous" ~stock:`GO_UP
       ~accel:"<Shift>F3"
       ~callback:(cb_on_current_term (fun t -> t.finder#find_backward ()));
-    item "Complete Word" ~label:"Complete Word" ~accel:"<Ctrl>slash"
-      ~callback:(fun _ -> ());
     item "External editor" ~label:"External editor" ~stock:`EDIT
-      ~callback:External.editor;
+      ~callback:(External.editor ~parent:w);
     item "Preferences" ~accel:"<Ctrl>comma" ~stock:`PREFERENCES
       ~callback:(fun _ ->
         begin
-	  try Preferences.configure ~apply:refresh_notebook_pos ()
-	  with _ -> flash_info "Cannot save preferences"
+	  try Preferences.configure ~apply:refresh_notebook_pos w
+          with e ->
+            flash_info ("Editing preferences failed (" ^ Printexc.to_string e ^ ")")
         end;
         reset_revert_timer ());
   ];
@@ -1152,6 +1167,8 @@ let build_ui () =
       ~callback:MiscMenu.uncomment;
     item "Coqtop arguments" ~label:"Coqtop _arguments"
       ~callback:MiscMenu.coqtop_arguments;
+    item "LaTeX-to-unicode" ~label:"_LaTeX-to-unicode" ~accel:"<Shift>space"
+      ~callback:MiscMenu.apply_unicode_binding;
   ];
 
   menu compile_menu [
@@ -1173,17 +1190,17 @@ let build_ui () =
     item "Help" ~label:"_Help";
     item "Browse Coq Manual" ~label:"Browse Coq _Manual"
       ~callback:(fun _ ->
-        browse notebook#current_term.messages#default_route#add_string (doc_url ()));
+        browse notebook#current_term.messages#default_route#add_string Coq_config.wwwrefman);
     item "Browse Coq Library" ~label:"Browse Coq _Library"
       ~callback:(fun _ ->
-        browse notebook#current_term.messages#default_route#add_string library_url#get);
+        browse notebook#current_term.messages#default_route#add_string Coq_config.wwwstdlib);
     item "Help for keyword" ~label:"Help for _keyword" ~stock:`HELP
       ~callback:(fun _ -> on_current_term (fun sn ->
         browse_keyword sn.messages#default_route#add_string (get_current_word sn)));
     item "Help for μPG mode" ~label:"Help for μPG mode"
       ~callback:(fun _ -> on_current_term (fun sn ->
          sn.messages#default_route#clear;
-         sn.messages#default_route#add_string (NanoPG.get_documentation ())));
+         sn.messages#default_route#add_string (MicroPG.get_documentation ())));
     item "About Coq" ~label:"_About" ~stock:`ABOUT
       ~callback:MiscMenu.about
   ];
@@ -1211,13 +1228,13 @@ let build_ui () =
       ((Coqide_ui.ui_m#get_widget "/CoqIde ToolBar")#as_widget)
   in
   let () = GtkButton.Toolbar.set
-    ~orientation:`HORIZONTAL ~style:`ICONS ~tooltips:true tbar
+    ~orientation:`HORIZONTAL ~style:`ICONS tbar
   in
-  let toolbar = new GObj.widget tbar in
-  let () = vbox#pack toolbar in
+  let toolbar = new GButton.toolbar tbar in
+  let () = vbox#pack toolbar#coerce in
 
   (* Emacs/PG mode *)
-  NanoPG.init w notebook all_menus;
+  MicroPG.init w notebook all_menus;
 
   (* On tab switch, reset, update location *)
   let _ = notebook#connect#switch_page ~callback:(fun n ->
@@ -1234,7 +1251,7 @@ let build_ui () =
   let () = refresh_notebook_pos () in
   let lower_hbox = GPack.hbox ~homogeneous:false ~packing:vbox#pack () in
   let () = lower_hbox#pack ~expand:true status#coerce in
-  let () = push_info ("Ready"^ if nanoPG#get then ", [μPG]" else "")  in
+  let () = push_info ("Ready"^ if microPG#get then ", [μPG]" else "")  in
 
   (* Location display *)
   let l = GMisc.label
@@ -1294,14 +1311,9 @@ let build_ui () =
   let _ = source_style#connect#changed ~callback:refresh_style in
   let _ = source_language#connect#changed ~callback:refresh_language in
 
-  (* Color configuration *)
-  Tags.Script.incomplete#set_property
-    (`BACKGROUND_STIPPLE
-      (Gdk.Bitmap.create_from_data ~width:2 ~height:2 "\x01\x02"));
-
   (* Showtime ! *)
-  w#show ()
-
+  w#show ();
+  w
 
 
 (** {2 Coqide main function } *)
@@ -1316,7 +1328,7 @@ let make_scratch_buffer () =
   ()
 
 let main files =
-  build_ui ();
+  let w = build_ui () in
   reset_revert_timer ();
   reset_autosave_timer ();
   (match files with
@@ -1325,8 +1337,8 @@ let main files =
   notebook#goto_page 0;
   MiscMenu.initial_about ();
   on_current_term (fun t -> t.script#misc#grab_focus ());
-  Minilib.log "End of Coqide.main"
-
+  Minilib.log "End of Coqide.main";
+  w
 
 (** {2 Argument parsing } *)
 
@@ -1338,16 +1350,20 @@ let main files =
     this default coqtop path *)
 
 let read_coqide_args argv =
-  let rec filter_coqtop coqtop project_files out = function
+  let rec filter_coqtop coqtop project_files bindings_files out = function
+    |"-unicode-bindings" :: sfilenames :: args ->
+      let filenames = Str.split (Str.regexp ",") sfilenames in
+      filter_coqtop coqtop project_files (filenames @ bindings_files) out args
     |"-coqtop" :: prog :: args ->
-      if coqtop = None then filter_coqtop (Some prog) project_files out args
+      if coqtop = None then filter_coqtop (Some prog) project_files bindings_files out args
       else (output_string stderr "Error: multiple -coqtop options"; exit 1)
     |"-f" :: file :: args ->
       if project_files <> None then
         (output_string stderr "Error: multiple -f options"; exit 1);
       let d = CUnix.canonical_path_name (Filename.dirname file) in
-      let p = CoqProject_file.read_project_file file in
-      filter_coqtop coqtop (Some (d,p)) out args
+      let warning_fn x = Format.eprintf "%s@\n%!" x in
+      let p = CoqProject_file.read_project_file ~warning_fn file in
+      filter_coqtop coqtop (Some (d,p)) out bindings_files args
     |"-f" :: [] ->
       output_string stderr "Error: missing project file name"; exit 1
     |"-coqtop" :: [] ->
@@ -1356,19 +1372,20 @@ let read_coqide_args argv =
       Minilib.debug := true;
       Flags.debug := true;
       Backtrace.record_backtrace true;
-      filter_coqtop coqtop project_files ("-debug"::out) args
+      filter_coqtop coqtop project_files bindings_files ("-debug"::out) args
     |"-coqtop-flags" :: flags :: args->
       Coq.ideslave_coqtop_flags := Some flags;
-      filter_coqtop coqtop project_files out args
+      filter_coqtop coqtop project_files bindings_files out args
     |arg::args when out = [] && Minilib.is_prefix_of "-psn_" arg ->
       (* argument added by MacOS during .app launch *)
-      filter_coqtop coqtop project_files out args
-    |arg::args -> filter_coqtop coqtop project_files (arg::out) args
-    |[] -> (coqtop,project_files,List.rev out)
+      filter_coqtop coqtop project_files bindings_files out args
+    |arg::args -> filter_coqtop coqtop project_files bindings_files (arg::out) args
+    |[] -> (coqtop,project_files,bindings_files,List.rev out)
   in
-  let coqtop,project_files,argv = filter_coqtop None None [] argv in
+  let coqtop,project_files,bindings_files,argv = filter_coqtop None None [] [] argv in
   Ideutils.custom_coqtop := coqtop;
   custom_project_file := project_files;
+  Unicode_bindings.load_files bindings_files;
   argv
 
 
@@ -1382,9 +1399,9 @@ let signals_to_crash =
   [Sys.sigabrt; Sys.sigalrm; Sys.sigfpe; Sys.sighup;
    Sys.sigill; Sys.sigpipe; Sys.sigquit; Sys.sigusr1; Sys.sigusr2]
 
-let set_signal_handlers () =
+let set_signal_handlers ?parent () =
   try
-    Sys.set_signal Sys.sigint (Sys.Signal_handle File.quit);
+    Sys.set_signal Sys.sigint (Sys.Signal_handle (File.quit ?parent));
     List.iter
       (fun i -> Sys.set_signal i (Sys.Signal_handle FileAux.crash_save))
       signals_to_crash

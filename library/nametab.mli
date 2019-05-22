@@ -57,6 +57,37 @@ open Globnames
 
 *)
 
+(** Object prefix morally contains the "prefix" naming of an object to
+   be stored by [library], where [obj_dir] is the "absolute" path,
+   [obj_mp] is the current "module" prefix and [obj_sec] is the
+   "section" prefix.
+
+    Thus, for an object living inside [Module A. Section B.] the
+   prefix would be:
+
+    [ { obj_dir = "A.B"; obj_mp = "A"; obj_sec = "B" } ]
+
+    Note that both [obj_dir] and [obj_sec] are "paths" that is to say,
+   as opposed to [obj_mp] which is a single module name.
+
+ *)
+type object_prefix = {
+  obj_dir : DirPath.t;
+  obj_mp  : ModPath.t;
+  obj_sec : DirPath.t;
+}
+
+val eq_op : object_prefix -> object_prefix -> bool
+
+(** to this type are mapped [DirPath.t]'s in the nametab *)
+module GlobDirRef : sig
+  type t =
+    | DirOpenModule of object_prefix
+    | DirOpenModtype of object_prefix
+    | DirOpenSection of object_prefix
+    | DirModule of object_prefix
+  val equal : t -> t -> bool
+end
 
 exception GlobalizationError of qualid
 
@@ -79,14 +110,12 @@ val map_visibility : (int -> int) -> visibility -> visibility
 
 val push : visibility -> full_path -> GlobRef.t -> unit
 val push_modtype : visibility -> full_path -> ModPath.t -> unit
-val push_dir : visibility -> DirPath.t -> global_dir_reference -> unit
+val push_dir : visibility -> DirPath.t -> GlobDirRef.t -> unit
 val push_syndef : visibility -> full_path -> syndef_name -> unit
 
-type universe_id = DirPath.t * int
+module UnivIdMap : CMap.ExtS with type key = Univ.Level.UGlobal.t
 
-module UnivIdMap : CMap.ExtS with type key = universe_id
-
-val push_universe : visibility -> full_path -> universe_id -> unit
+val push_universe : visibility -> full_path -> Univ.Level.UGlobal.t -> unit
 
 (** {6 The following functions perform globalization of qualified names } *)
 
@@ -98,10 +127,10 @@ val locate_extended : qualid -> extended_global_reference
 val locate_constant : qualid -> Constant.t
 val locate_syndef : qualid -> syndef_name
 val locate_modtype : qualid -> ModPath.t
-val locate_dir : qualid -> global_dir_reference
+val locate_dir : qualid -> GlobDirRef.t
 val locate_module : qualid -> ModPath.t
 val locate_section : qualid -> DirPath.t
-val locate_universe : qualid -> universe_id
+val locate_universe : qualid -> Univ.Level.UGlobal.t
 
 (** These functions globalize user-level references into global
    references, like [locate] and co, but raise a nice error message
@@ -115,8 +144,14 @@ val global_inductive : qualid -> inductive
 
 val locate_all : qualid -> GlobRef.t list
 val locate_extended_all : qualid -> extended_global_reference list
-val locate_extended_all_dir : qualid -> global_dir_reference list
+val locate_extended_all_dir : qualid -> GlobDirRef.t list
 val locate_extended_all_modtype : qualid -> ModPath.t list
+
+(** Experimental completion support, API is _unstable_ *)
+val completion_canditates : qualid -> extended_global_reference list
+(** [completion_canditates qualid] will return the list of global
+    references that have [qualid] as a prefix. UI usually will want to
+    compose this with [shortest_qualid_of_global] *)
 
 (** Mapping a full path to a global reference *)
 
@@ -128,8 +163,6 @@ val extended_global_of_path : full_path -> extended_global_reference
 val exists_cci : full_path -> bool
 val exists_modtype : full_path -> bool
 val exists_dir : DirPath.t -> bool
-val exists_section : DirPath.t -> bool (** deprecated synonym of [exists_dir] *)
-val exists_module : DirPath.t -> bool (** deprecated synonym of [exists_dir] *)
 val exists_universe : full_path -> bool
 
 (** {6 These functions locate qualids into full user names } *)
@@ -152,7 +185,7 @@ val path_of_modtype : ModPath.t -> full_path
 
 (** A universe_id might not be registered with a corresponding user name.
     @raise Not_found if the universe was not introduced by the user. *)
-val path_of_universe : universe_id -> full_path
+val path_of_universe : Univ.Level.UGlobal.t -> full_path
 
 (** Returns in particular the dirpath or the basename of the full path
    associated to global reference *)
@@ -174,12 +207,7 @@ val shortest_qualid_of_global : ?loc:Loc.t -> Id.Set.t -> GlobRef.t -> qualid
 val shortest_qualid_of_syndef : ?loc:Loc.t -> Id.Set.t -> syndef_name -> qualid
 val shortest_qualid_of_modtype : ?loc:Loc.t -> ModPath.t -> qualid
 val shortest_qualid_of_module : ?loc:Loc.t -> ModPath.t -> qualid
-val shortest_qualid_of_universe : ?loc:Loc.t -> universe_id -> qualid
-
-(** Deprecated synonyms *)
-
-val extended_locate : qualid -> extended_global_reference (*= locate_extended *)
-val absolute_reference : full_path -> GlobRef.t (** = global_of_path *)
+val shortest_qualid_of_universe : ?loc:Loc.t -> Univ.Level.UGlobal.t -> qualid
 
 (** {5 Generic name handling} *)
 
@@ -211,6 +239,7 @@ module type NAMETREE = sig
   val user_name : qualid -> t -> user_name
   val shortest_qualid : ?loc:Loc.t -> Id.Set.t -> user_name -> t -> qualid
   val find_prefixes : qualid -> t -> elt list
+  val match_prefixes : qualid -> t -> elt list
 end
 
 module Make (U : UserName) (E : EqualityType) :

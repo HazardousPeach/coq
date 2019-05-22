@@ -31,7 +31,7 @@ let ldots_var = Id.of_string ".."
 let constr_kw =
   [ "forall"; "fun"; "match"; "fix"; "cofix"; "with"; "in"; "for";
     "end"; "as"; "let"; "if"; "then"; "else"; "return";
-    "Prop"; "Set"; "Type"; ".("; "_"; "..";
+    "SProp"; "Prop"; "Set"; "Type"; ".("; "_"; "..";
     "`{"; "`("; "{|"; "|}" ]
 
 let _ = List.iter CLexer.add_keyword constr_kw
@@ -56,10 +56,10 @@ let mk_fixb (id,bl,ann,body,(loc,tyc)) : fix_expr =
   (id,ann,bl,ty,body)
 
 let mk_cofixb (id,bl,ann,body,(loc,tyc)) : cofix_expr =
-  let _ = Option.map (fun { CAst.loc = aloc } ->
+  Option.iter (fun { CAst.loc = aloc } ->
     CErrors.user_err ?loc:aloc
       ~hdr:"Constr:mk_cofixb"
-      (Pp.str"Annotation forbidden in cofix expression.")) (fst ann) in
+      (Pp.str"Annotation forbidden in cofix expression.")) ann;
   let ty = match tyc with
       Some ty -> ty
     | None -> CAst.make @@ CHole (None, IntroAnonymous, None) in
@@ -81,7 +81,7 @@ let err () = raise Stream.Failure
 (* Hack to parse "(x:=t)" as an explicit argument without conflicts with the *)
 (* admissible notation "(x t)" *)
 let lpar_id_coloneq =
-  Gram.Entry.of_parser "test_lpar_id_coloneq"
+  Pcoq.Entry.of_parser "test_lpar_id_coloneq"
     (fun strm ->
       match stream_nth 0 strm with
         | KEYWORD "(" ->
@@ -96,7 +96,7 @@ let lpar_id_coloneq =
         | _ -> err ())
 
 let impl_ident_head =
-  Gram.Entry.of_parser "impl_ident_head"
+  Pcoq.Entry.of_parser "impl_ident_head"
     (fun strm ->
       match stream_nth 0 strm with
 	| KEYWORD "{" ->
@@ -109,7 +109,7 @@ let impl_ident_head =
 	| _ -> err ())
 
 let name_colon =
-  Gram.Entry.of_parser "name_colon"
+  Pcoq.Entry.of_parser "name_colon"
     (fun strm ->
       match stream_nth 0 strm with
 	| IDENT s ->
@@ -153,6 +153,7 @@ GRAMMAR EXTEND Gram
   sort:
     [ [ "Set"  -> { GSet }
       | "Prop" -> { GProp }
+      | "SProp" -> { GSProp }
       | "Type" -> { GType [] }
       | "Type"; "@{"; u = universe; "}" -> { GType u }
       ] ]
@@ -160,6 +161,7 @@ GRAMMAR EXTEND Gram
   sort_family:
     [ [ "Set"  -> { Sorts.InSet }
       | "Prop" -> { Sorts.InProp }
+      | "SProp" -> { Sorts.InSProp }
       | "Type" -> { Sorts.InType }
       ] ]
   ;
@@ -224,7 +226,7 @@ GRAMMAR EXTEND Gram
       | c=match_constr -> { c }
       | "("; c = operconstr LEVEL "200"; ")" ->
         { (match c.CAst.v with
-            | CPrim (Numeral (n,true)) ->
+            | CPrim (Numeral (SPlus,n)) ->
                 CAst.make ~loc @@ CNotation((InConstrEntrySomeLevel,"( _ )"),([c],[],[],[]))
             | _ -> c) }
       | "{|"; c = record_declaration; "|}" -> { c }
@@ -303,7 +305,7 @@ GRAMMAR EXTEND Gram
   atomic_constr:
     [ [ g=global; i=instance -> { CAst.make ~loc @@ CRef (g,i) }
       | s=sort   -> { CAst.make ~loc @@  CSort s }
-      | n=INT    -> { CAst.make ~loc @@ CPrim (Numeral (n,true)) }
+      | n=NUMERAL-> { CAst.make ~loc @@ CPrim (Numeral (SPlus,n)) }
       | s=string -> { CAst.make ~loc @@ CPrim (String s) }
       | "_"      -> { CAst.make ~loc @@ CHole (None, IntroAnonymous, None) }
       | "?"; "["; id=ident; "]"  -> { CAst.make ~loc @@  CHole (None, IntroIdentifier id, None) }
@@ -323,6 +325,7 @@ GRAMMAR EXTEND Gram
   ;
   universe_level:
     [ [ "Set" -> { GSet }
+      (* no parsing SProp as a level *)
       | "Prop" -> { GProp }
       | "Type" -> { GType UUnknown }
       | "_" -> { GType UAnonymous }
@@ -410,18 +413,18 @@ GRAMMAR EXTEND Gram
       | "_" -> { CAst.make ~loc @@ CPatAtom None }
       | "("; p = pattern LEVEL "200"; ")" ->
           { (match p.CAst.v with
-            | CPatPrim (Numeral (n,true)) ->
+            | CPatPrim (Numeral (SPlus,n)) ->
                  CAst.make ~loc @@ CPatNotation((InConstrEntrySomeLevel,"( _ )"),([p],[]),[])
             | _ -> p) }
       | "("; p = pattern LEVEL "200"; ":"; ty = lconstr; ")" ->
           { let p =
             match p with
-            | { CAst.v = CPatPrim (Numeral (n,true)) } ->
+            | { CAst.v = CPatPrim (Numeral (SPlus,n)) } ->
                  CAst.make ~loc @@ CPatNotation((InConstrEntrySomeLevel,"( _ )"),([p],[]),[])
             | _ -> p
           in
 	  CAst.make ~loc @@ CPatCast (p, ty) }
-      | n = INT    -> { CAst.make ~loc @@ CPatPrim (Numeral (n,true)) }
+      | n = NUMERAL-> { CAst.make ~loc @@ CPatPrim (Numeral (SPlus,n)) }
       | s = string -> { CAst.make ~loc @@ CPatPrim (String s) } ] ]
   ;
   impl_ident_tail:
@@ -437,10 +440,10 @@ GRAMMAR EXTEND Gram
     ] ]
   ;
   fixannot:
-    [ [ "{"; IDENT "struct"; id=identref; "}" -> { (Some id, CStructRec) }
-    | "{"; IDENT "wf"; rel=constr; id=OPT identref; "}" -> { (id, CWfRec rel) }
+    [ [ "{"; IDENT "struct"; id=identref; "}" -> { CAst.make ~loc @@ CStructRec id }
+    | "{"; IDENT "wf"; rel=constr; id=identref; "}" -> { CAst.make ~loc @@ CWfRec(id,rel) }
     | "{"; IDENT "measure"; m=constr; id=OPT identref;
-	rel=OPT constr; "}" -> { (id, CMeasureRec (m,rel)) }
+        rel=OPT constr; "}" -> { CAst.make ~loc @@ CMeasureRec (id,m,rel) }
     ] ]
   ;
   impl_name_head:
@@ -449,9 +452,9 @@ GRAMMAR EXTEND Gram
   binders_fixannot:
     [ [ na = impl_name_head; assum = impl_ident_tail; bl = binders_fixannot ->
           { (assum na :: fst bl), snd bl }
-      | f = fixannot -> { [], f }
+      | f = fixannot -> { [], Some f }
       | b = binder; bl = binders_fixannot -> { b @ fst bl, snd bl }
-      | -> { [], (None, CStructRec) }
+      | -> { [], None }
     ] ]
   ;
   open_binders:

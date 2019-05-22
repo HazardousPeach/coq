@@ -13,11 +13,15 @@ open Environ
 open EConstr
 open Constrexpr
 open Evd
+open Genintern
 open Tactypes
 open Tacexpr
 open Tacinterp
 
 (** TODO: document and clean me! *)
+
+type rewrite_attributes
+val rewrite_attributes : rewrite_attributes Attributes.attribute
 
 type unary_strategy = 
     Subterms | Subterm | Innermost | Outermost
@@ -77,18 +81,18 @@ val cl_rewrite_clause :
 val is_applied_rewrite_relation :
   env -> evar_map -> rel_context -> constr -> types option
 
-val declare_relation : ?locality:bool ->
+val declare_relation : pstate:Proof_global.t option -> rewrite_attributes ->
   ?binders:local_binder_expr list -> constr_expr -> constr_expr -> Id.t ->
-  constr_expr option -> constr_expr option -> constr_expr option -> unit
+  constr_expr option -> constr_expr option -> constr_expr option -> Proof_global.t option
 
-val add_setoid :
-  bool -> local_binder_expr list -> constr_expr -> constr_expr -> constr_expr ->
-  Id.t -> unit
+val add_setoid : pstate:Proof_global.t option ->
+  rewrite_attributes -> local_binder_expr list -> constr_expr -> constr_expr -> constr_expr ->
+  Id.t -> Proof_global.t option
 
-val add_morphism_infer : bool -> constr_expr -> Id.t -> unit
+val add_morphism_infer : pstate:Proof_global.t option -> rewrite_attributes -> constr_expr -> Id.t -> Proof_global.t option
 
-val add_morphism :
-  bool -> local_binder_expr list -> constr_expr -> constr_expr -> Id.t -> unit
+val add_morphism : pstate:Proof_global.t option ->
+  rewrite_attributes -> local_binder_expr list -> constr_expr -> constr_expr -> Id.t -> Proof_global.t option
 
 val get_reflexive_proof : env -> evar_map -> constr -> constr -> evar_map * constr
 

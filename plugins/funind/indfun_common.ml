@@ -27,10 +27,6 @@ let array_get_start a =
     (Array.length a - 1)
     (fun i -> a.(i))
 
-let id_of_name = function
-    Name id -> id
-  | _ -> raise Not_found
-
 let locate qid = Nametab.locate qid
 
 let locate_ind ref =
@@ -105,18 +101,9 @@ let const_of_id id =
     CErrors.user_err ~hdr:"IndFun.const_of_id"
       (str "cannot find " ++ Id.print id)
 
-let def_of_const t =
-   match Constr.kind t with
-    Const sp ->
-      (try (match Environ.constant_opt_value_in (Global.env()) sp with
-             | Some c -> c
-	     | _ -> assert false)
-       with Not_found -> assert false)
-    |_ -> assert false
-
 [@@@ocaml.warning "-3"]
 let coq_constant s =
-  UnivGen.constr_of_global @@
+  UnivGen.constr_of_monomorphic_global @@
   Coqlib.gen_reference_in_modules "RecursiveDefinition"
     Coqlib.init_modules s;;
 
@@ -142,7 +129,7 @@ let get_locality = function
 | Local -> true
 | Global -> false
 
-let save with_clean id const (locality,_,kind) hook =
+let save id const ?hook uctx (locality,_,kind) =
   let fix_exn = Future.fix_exn_of const.const_entry_body in
   let l,r = match locality with
     | Discharge when Lib.sections_are_opened () ->
@@ -156,20 +143,8 @@ let save with_clean id const (locality,_,kind) hook =
         let kn = declare_constant id ~local (DefinitionEntry const, k) in
 	(locality, ConstRef kn)
   in
-  if with_clean then Proof_global.discard_current ();
-  CEphemeron.iter_opt hook (fun f -> Lemmas.call_hook fix_exn f l r);
+  Lemmas.call_hook ?hook ~fix_exn uctx [] l r;
   definition_message id
-
-
-
-let cook_proof _ =
-  let (id,(entry,_,strength)) = Pfedit.cook_proof () in
-  (id,(entry,strength))
-
-let get_proof_clean do_reduce =
-  let result = cook_proof do_reduce in
-  Proof_global.discard_current ();
-  result
 
 let with_full_print f a =
   let old_implicit_args = Impargs.is_implicit_args ()
@@ -223,6 +198,7 @@ type function_info =
       rect_lemma : Constant.t option;
       rec_lemma : Constant.t option;
       prop_lemma : Constant.t option;
+      sprop_lemma : Constant.t option;
       is_general : bool; (* Has this function been defined using general recursive definition *)
     }
 
@@ -261,7 +237,6 @@ let cache_Function (_,finfos) =
   from_graph := Indmap.add finfos.graph_ind finfos !from_graph
 
 
-let load_Function _  = cache_Function
 let subst_Function (subst,finfos) =
   let do_subst_con c = Mod_subst.subst_constant subst c
   and do_subst_ind i = Mod_subst.subst_ind subst i
@@ -274,6 +249,7 @@ let subst_Function (subst,finfos) =
   let rect_lemma' = Option.Smart.map do_subst_con finfos.rect_lemma in
   let rec_lemma' = Option.Smart.map do_subst_con finfos.rec_lemma in
   let prop_lemma' =  Option.Smart.map do_subst_con finfos.prop_lemma in
+  let sprop_lemma' = Option.Smart.map do_subst_con finfos.sprop_lemma in
   if function_constant' == finfos.function_constant &&
     graph_ind' == finfos.graph_ind &&
     equation_lemma' == finfos.equation_lemma &&
@@ -281,7 +257,8 @@ let subst_Function (subst,finfos) =
     completeness_lemma' == finfos.completeness_lemma &&
     rect_lemma' == finfos.rect_lemma &&
     rec_lemma' == finfos.rec_lemma &&
-    prop_lemma' == finfos.prop_lemma
+    prop_lemma' == finfos.prop_lemma &&
+    sprop_lemma' == finfos.sprop_lemma
   then finfos
   else
     { function_constant = function_constant';
@@ -292,49 +269,41 @@ let subst_Function (subst,finfos) =
       rect_lemma = rect_lemma' ;
       rec_lemma = rec_lemma';
       prop_lemma = prop_lemma';
+      sprop_lemma = sprop_lemma';
       is_general = finfos.is_general
     }
 
-let classify_Function infos = Libobject.Substitute infos
-
-
 let discharge_Function (_,finfos) = Some finfos
 
-let pr_ocst c =
-  let sigma, env = Pfedit.get_current_context () in
+let pr_ocst env sigma c =
   Option.fold_right (fun v acc -> Printer.pr_lconstr_env env sigma (mkConst v)) c (mt ())
 
-let pr_info f_info =
-  let sigma, env = Pfedit.get_current_context () in
+let pr_info env sigma f_info =
   str "function_constant := " ++
   Printer.pr_lconstr_env env sigma (mkConst f_info.function_constant)++ fnl () ++
   str "function_constant_type := " ++
   (try
      Printer.pr_lconstr_env env sigma
-       (fst (Global.type_of_global_in_context env (ConstRef f_info.function_constant)))
+       (fst (Typeops.type_of_global_in_context env (ConstRef f_info.function_constant)))
    with e when CErrors.noncritical e -> mt ()) ++ fnl () ++
-  str "equation_lemma := " ++ pr_ocst f_info.equation_lemma ++ fnl () ++
-  str "completeness_lemma :=" ++ pr_ocst f_info.completeness_lemma ++ fnl () ++
-  str "correctness_lemma := " ++ pr_ocst f_info.correctness_lemma ++ fnl () ++
-  str "rect_lemma := " ++ pr_ocst f_info.rect_lemma ++ fnl () ++
-  str "rec_lemma := " ++ pr_ocst f_info.rec_lemma ++ fnl () ++
-  str "prop_lemma := " ++ pr_ocst f_info.prop_lemma ++ fnl () ++
+  str "equation_lemma := " ++ pr_ocst env sigma f_info.equation_lemma ++ fnl () ++
+  str "completeness_lemma :=" ++ pr_ocst env sigma f_info.completeness_lemma ++ fnl () ++
+  str "correctness_lemma := " ++ pr_ocst env sigma f_info.correctness_lemma ++ fnl () ++
+  str "rect_lemma := " ++ pr_ocst env sigma f_info.rect_lemma ++ fnl () ++
+  str "rec_lemma := " ++ pr_ocst env sigma f_info.rec_lemma ++ fnl () ++
+  str "prop_lemma := " ++ pr_ocst env sigma f_info.prop_lemma ++ fnl () ++
   str "graph_ind := " ++ Printer.pr_lconstr_env env sigma (mkInd f_info.graph_ind) ++ fnl ()
 
-let pr_table tb =
+let pr_table env sigma tb =
   let l = Cmap_env.fold (fun k v acc -> v::acc) tb [] in
-  Pp.prlist_with_sep fnl pr_info l
+  Pp.prlist_with_sep fnl (pr_info env sigma) l
 
 let in_Function : function_info -> Libobject.obj =
-  Libobject.declare_object
-    {(Libobject.default_object "FUNCTIONS_DB") with
-       Libobject.cache_function = cache_Function;
-       Libobject.load_function  = load_Function;
-       Libobject.classify_function  = classify_Function;
-       Libobject.subst_function = subst_Function;
-       Libobject.discharge_function = discharge_Function
-(*        Libobject.open_function = open_Function; *)
-    }
+  let open Libobject in
+  declare_object @@ superglobal_object "FUNCTIONS_DB"
+    ~cache:cache_Function
+    ~subst:(Some subst_Function)
+    ~discharge:discharge_Function
 
 
 let find_or_none id =
@@ -365,6 +334,7 @@ let add_Function is_general f =
   and rect_lemma = find_or_none (Nameops.add_suffix f_id "_rect")
   and rec_lemma = find_or_none (Nameops.add_suffix f_id "_rec")
   and prop_lemma = find_or_none (Nameops.add_suffix f_id "_ind")
+  and sprop_lemma = find_or_none (Nameops.add_suffix f_id "_sind")
   and graph_ind =
     match Nametab.locate (qualid_of_ident (mk_rel_id f_id))
     with | IndRef ind -> ind | _ -> CErrors.anomaly (Pp.str "Not an inductive.")
@@ -377,6 +347,7 @@ let add_Function is_general f =
       rect_lemma = rect_lemma;
       rec_lemma = rec_lemma;
       prop_lemma = prop_lemma;
+      sprop_lemma = sprop_lemma;
       graph_ind = graph_ind;
       is_general = is_general
 
@@ -384,7 +355,7 @@ let add_Function is_general f =
   in
   update_Function finfos
 
-let pr_table () = pr_table !from_function
+let pr_table env sigma = pr_table env sigma !from_function
 (*********************************)
 (* Debuging *)
 let functional_induction_rewrite_dependent_proofs = ref true
@@ -399,7 +370,7 @@ let functional_induction_rewrite_dependent_proofs_sig =
     optread = (fun () -> !functional_induction_rewrite_dependent_proofs);
     optwrite = (fun b -> functional_induction_rewrite_dependent_proofs := b)
   }
-let _ = declare_bool_option functional_induction_rewrite_dependent_proofs_sig
+let () = declare_bool_option functional_induction_rewrite_dependent_proofs_sig
 
 let do_rewrite_dependent () = !functional_induction_rewrite_dependent_proofs = true
 
@@ -412,7 +383,7 @@ let function_debug_sig =
     optwrite = (fun b -> function_debug := b)
   }
 
-let _ = declare_bool_option function_debug_sig
+let () = declare_bool_option function_debug_sig
 
 
 let do_observe () = !function_debug 
@@ -430,7 +401,7 @@ let strict_tcc_sig =
     optwrite = (fun b -> strict_tcc := b)
   }
 
-let _ = declare_bool_option strict_tcc_sig
+let () = declare_bool_option strict_tcc_sig
 
 
 exception Building_graph of exn
@@ -441,7 +412,7 @@ let jmeq () =
   try
     Coqlib.check_required_library Coqlib.jmeq_module_name;
     EConstr.of_constr @@
-    UnivGen.constr_of_global @@
+    UnivGen.constr_of_monomorphic_global @@
       Coqlib.lib_ref "core.JMeq.type"
   with e when CErrors.noncritical e -> raise (ToShow e)
 
@@ -449,7 +420,7 @@ let jmeq_refl () =
   try
     Coqlib.check_required_library Coqlib.jmeq_module_name;
     EConstr.of_constr @@
-    UnivGen.constr_of_global @@
+    UnivGen.constr_of_monomorphic_global @@
       Coqlib.lib_ref "core.JMeq.refl"
   with e when CErrors.noncritical e -> raise (ToShow e)
 
@@ -463,7 +434,7 @@ let acc_rel = function () -> EConstr.of_constr (coq_constant "Acc")
 let acc_inv_id = function () -> EConstr.of_constr (coq_constant "Acc_inv")
 
 [@@@ocaml.warning "-3"]
-let well_founded_ltof () = EConstr.of_constr @@ UnivGen.constr_of_global @@
+let well_founded_ltof () = EConstr.of_constr @@ UnivGen.constr_of_monomorphic_global @@
     Coqlib.find_reference "IndFun" ["Coq"; "Arith";"Wf_nat"] "well_founded_ltof"
 [@@@ocaml.warning "+3"]
 
@@ -524,7 +495,7 @@ type tcc_lemma_value =
 
 (* We only "purify" on exceptions. XXX: What is this doing here? *)
 let funind_purify f x =
-  let st = Vernacstate.freeze_interp_state `No in
+  let st = Vernacstate.freeze_interp_state ~marshallable:false in
   try f x
   with e ->
     let e = CErrors.push e in

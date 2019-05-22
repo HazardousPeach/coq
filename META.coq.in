@@ -4,19 +4,7 @@ description = "The Coq Proof Assistant Plugin API"
 version = "8.10"
 
 directory = ""
-requires = "camlp5"
-
-package "grammar" (
-
-  description = "Coq Camlp5 Grammar Extensions for Plugins"
-  version     = "8.10"
-
-  requires    = "camlp5.gramlib"
-  directory   = "grammar"
-
-  archive(byte)   = "grammar.cma"
-  archive(native) = "grammar.cmxa"
-)
+requires = ""
 
 package "config" (
 
@@ -25,6 +13,8 @@ package "config" (
 
   directory   = "config"
 
+  archive(byte)    = "config.cma"
+  archive(native)  = "config.cmxa"
 )
 
 package "clib" (
@@ -32,7 +22,7 @@ package "clib" (
   version     = "8.10"
 
   directory   = "clib"
-  requires    = "num, str, unix, threads"
+  requires    = "str, unix, threads"
 
   archive(byte)    = "clib.cma"
   archive(native)  = "clib.cmxa"
@@ -45,7 +35,7 @@ package "lib" (
 
   directory   = "lib"
 
-  requires    = "coq.clib, coq.config"
+  requires    = "coq.clib, coq.config, dynlink"
 
   archive(byte)   = "lib.cma"
   archive(native) = "lib.cmxa"
@@ -78,7 +68,7 @@ package "kernel" (
 
   directory   = "kernel"
 
-  requires    = "dynlink, coq.lib, coq.vm"
+  requires    = "coq.lib, coq.vm"
 
   archive(byte)    = "kernel.cma"
   archive(native)  = "kernel.cmxa"
@@ -151,12 +141,24 @@ package "proofs" (
 
 )
 
+package "gramlib" (
+
+  description = "Coq Grammar Engine"
+  version     = "8.10"
+
+  requires    = "coq.lib"
+  directory   = "gramlib/.pack"
+
+  archive(byte)    = "gramlib.cma"
+  archive(native)  = "gramlib.cmxa"
+)
+
 package "parsing" (
 
   description = "Coq Parsing Engine"
   version     = "8.10"
 
-  requires    = "camlp5.gramlib, coq.proofs"
+  requires    = "coq.gramlib, coq.proofs"
   directory   = "parsing"
 
   archive(byte)    = "parsing.cma"
@@ -221,7 +223,7 @@ package "toplevel" (
   description = "Coq Toplevel"
   version     = "8.10"
 
-  requires    = "coq.stm"
+  requires    = "num, coq.stm"
   directory   = "toplevel"
 
   archive(byte)    = "toplevel.cma"
@@ -313,7 +315,7 @@ package "plugins" (
     archive(native)  = "micromega_plugin.cmx"
   )
 
-  package "newring" (
+  package "setoid_ring" (
 
     description = "Coq newring plugin"
     version     = "8.10"
@@ -349,7 +351,7 @@ package "plugins" (
     archive(native)  = "cc_plugin.cmx"
   )
 
-  package "ground" (
+  package "firstorder" (
 
     description = "Coq ground plugin"
     version     = "8.10"
@@ -385,7 +387,7 @@ package "plugins" (
     archive(native)  = "btauto_plugin.cmx"
   )
 
-  package "recdef" (
+  package "funind" (
 
     description = "Coq recdef plugin"
     version     = "8.10"
@@ -409,30 +411,6 @@ package "plugins" (
     archive(native)  = "nsatz_plugin.cmx"
   )
 
-  package "natsyntax" (
-
-    description = "Coq natsyntax plugin"
-    version     = "8.10"
-
-    requires    = ""
-    directory   = "syntax"
-
-    archive(byte)    = "nat_syntax_plugin.cmo"
-    archive(native)  = "nat_syntax_plugin.cmx"
-  )
-
-  package "zsyntax" (
-
-    description = "Coq zsyntax plugin"
-    version     = "8.10"
-
-    requires    = ""
-    directory   = "syntax"
-
-    archive(byte)    = "z_syntax_plugin.cmo"
-    archive(native)  = "z_syntax_plugin.cmx"
-  )
-
   package "rsyntax" (
 
     description = "Coq rsyntax plugin"
@@ -445,40 +423,28 @@ package "plugins" (
     archive(native)  = "r_syntax_plugin.cmx"
   )
 
-  package "int31syntax" (
+  package "int63syntax" (
 
-    description = "Coq int31syntax plugin"
+    description = "Coq int63syntax plugin"
     version     = "8.10"
 
     requires    = ""
     directory   = "syntax"
 
-    archive(byte)    = "int31_syntax_plugin.cmo"
-    archive(native)  = "int31_syntax_plugin.cmx"
+    archive(byte)    = "int63_syntax_plugin.cmo"
+    archive(native)  = "int63_syntax_plugin.cmx"
   )
 
-  package "asciisyntax" (
+  package "string_notation" (
 
-    description = "Coq asciisyntax plugin"
+    description = "Coq string_notation plugin"
     version     = "8.10"
 
     requires    = ""
     directory   = "syntax"
 
-    archive(byte)    = "ascii_syntax_plugin.cmo"
-    archive(native)  = "ascii_syntax_plugin.cmx"
-  )
-
-  package "stringsyntax" (
-
-    description = "Coq stringsyntax plugin"
-    version     = "8.10"
-
-    requires    = "coq.plugins.asciisyntax"
-    directory   = "syntax"
-
-    archive(byte)    = "string_syntax_plugin.cmo"
-    archive(native)  = "string_syntax_plugin.cmx"
+    archive(byte)    = "string_notation_plugin.cmo"
+    archive(native)  = "string_notation_plugin.cmx"
   )
 
   package "derive" (

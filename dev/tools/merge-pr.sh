@@ -12,7 +12,8 @@ OFFICIAL_REMOTE_HTTPS_URL="github.com/coq/coq"
 
 # Set SLOW_CONF to have the confirmation output wait for a newline
 # E.g. call $ SLOW_CONF= dev/tools/merge-pr.sh /PR number/
-if [ -z ${SLOW_CONF+x} ]; then
+# emacs doesn't send characters until the RET so we can't quick_conf
+if [ -z ${SLOW_CONF+x} ] || [ -n "$INSIDE_EMACS" ]; then
     QUICK_CONF="-n 1"
 else
     QUICK_CONF=""
@@ -143,7 +144,7 @@ fi
 # Sanity check: PR has an outdated version of CI
 
 BASE_COMMIT=$(echo "$PRDATA" | jq -r '.base.sha')
-CI_FILES=(".travis.yml" ".gitlab-ci.yml" "appveyor.yml")
+CI_FILES=(".gitlab-ci.yml" "azure-pipelines.yml")
 
 if ! git diff --quiet "$BASE_COMMIT" "$LOCAL_BRANCH_COMMIT" -- "${CI_FILES[@]}"
 then
@@ -198,13 +199,30 @@ if [ -z "$(git config user.signingkey)" ]; then
   warning "gpg will guess a key out of your git config user.* data"
 fi
 
+# Generate commit message
+
+info "Fetching review data"
+reviews=$(curl -s "$API/pulls/$PR/reviews")
+msg="Merge PR #$PR: $TITLE"
+
+has_state() {
+    [ "$(jq -rc 'map(select(.user.login == "'"$1"'") | .state) | any(. == "'"$2"'")' <<< "$reviews")" = true ]
+}
+
+for reviewer in $(jq -rc 'map(.user.login) | unique | join(" ")' <<< "$reviews" ); do
+    if has_state "$reviewer" APPROVED; then
+        msg=$(printf '%s\n' "$msg" | git interpret-trailers --trailer Reviewed-by="$reviewer")
+    elif has_state "$reviewer" COMMENTED; then
+        msg=$(printf '%s\n' "$msg" | git interpret-trailers --trailer Ack-by="$reviewer")
+    fi
+done
+
 info "merging"
-git merge -v -S --no-ff FETCH_HEAD -m "Merge PR #$PR: $TITLE" -e
+git merge -v -S --no-ff FETCH_HEAD -m "$msg" -e
 
 # TODO: improve this check
-if ! git diff --quiet "$REMOTE/$CURRENT_LOCAL_BRANCH" -- dev/ci/user-overlays; then
-  warning "this PR may have overlays (sorry the check is not perfect)"
-  warning "if it has overlays please check the following:"
+if ! git diff --quiet --diff-filter=A "$REMOTE/$CURRENT_LOCAL_BRANCH" -- dev/ci/user-overlays; then
+  warning "this PR has overlays, please check the following:"
   warning "- each overlay has a corresponding open PR on the upstream repo"
   warning "- after merging please notify the upstream they can merge the PR"
 fi
